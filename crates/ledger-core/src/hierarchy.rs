@@ -78,19 +78,21 @@ pub fn plan_posting(
     let changes = match operation {
         Operation::PostJournal => {
             authorization.require(records[to].controller)?;
-            cavalre_accounting::plan_posting(&from_path, &to_path, amount)?
+            cavalre_ledgers_kernel::plan_posting(&from_path, &to_path, amount)?
         }
         Operation::TransferJournal => {
-            cavalre_accounting::plan_public_transfer(&from_path, &to_path, amount)?
+            cavalre_ledgers_kernel::plan_public_transfer(&from_path, &to_path, amount)?
         }
         Operation::TransferClaims => {
             if from_path[0].kind != Kind::DebitLeaf || to_path[0].kind != Kind::DebitLeaf {
-                return Err(Error::Accounting(cavalre_accounting::Error::InvalidLeaf));
+                return Err(Error::Accounting(
+                    cavalre_ledgers_kernel::Error::InvalidLeaf,
+                ));
             }
             if from_path[0].balances.debit < amount {
                 return Err(Error::InsufficientBalance);
             }
-            cavalre_accounting::plan_posting(&from_path, &to_path, amount)?
+            cavalre_ledgers_kernel::plan_posting(&from_path, &to_path, amount)?
         }
     };
     let endpoint = |path: &[Node]| Endpoint {

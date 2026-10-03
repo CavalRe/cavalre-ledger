@@ -23,7 +23,7 @@ malformed ancestry, cycles, inconsistent shared snapshots, overdrafts and
 overflow. Internal self-postings are no-ops after validation; public-style
 transfers also check the sender's funds before accepting a self-transfer.
 
-`cavalre-accounting` supplies arithmetic only. `cavalre-ledger-core` adds the
+`cavalre-ledgers-kernel` supplies arithmetic only. `cavalre-ledgers-core` adds the
 controller and root-type rules. Complete paths are loaded from authenticated
 host state. Groups are not spending endpoints; namespace and parent controllers
 cannot spend another controller's leaves. Journal postings require both endpoint

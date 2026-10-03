@@ -1,4 +1,4 @@
-use cavalre_ledger_core::*;
+use cavalre_ledgers_core::*;
 use serde_json::Value;
 use std::collections::BTreeSet;
 

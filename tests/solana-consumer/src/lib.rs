@@ -21,7 +21,7 @@ pub fn process(id: &Pubkey, accounts: &[AccountInfo], data: &[u8]) -> ProgramRes
         let [user, program, remaining @ ..] = accounts else {
             return Err(ProgramError::NotEnoughAccountKeys);
         };
-        if !user.is_signer || *program.key != cavalre_ledger_solana::ID {
+        if !user.is_signer || *program.key != cavalre_ledgers_solana::ID {
             return Err(ProgramError::MissingRequiredSignature);
         }
         let (controller, bump) =

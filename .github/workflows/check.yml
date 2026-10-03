@@ -19,7 +19,7 @@ jobs:
         run: rustup toolchain install 1.98.1 --profile minimal --component rustfmt --component clippy
       - name: Check the portable crates without Solana tooling
         run: |
-          cargo clippy -p cavalre-accounting -p cavalre-ledger-core --all-targets --locked -- -D warnings
+          cargo clippy -p cavalre-ledgers-kernel -p cavalre-ledgers-core --all-targets --locked -- -D warnings
           cargo test --locked
   solana:
     runs-on: ubuntu-24.04

@@ -1,4 +1,4 @@
-use cavalre_accounting::{
+use cavalre_ledgers_kernel::{
     plan_posting, plan_public_transfer, Balances, Error, Id, Kind, Node, MAX_PATH_NODES,
 };
 use std::collections::BTreeSet;

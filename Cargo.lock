@@ -826,37 +826,30 @@ dependencies = [
 ]
 
 [[package]]
-name = "cavalre-accounting"
-version = "0.1.0"
-dependencies = [
- "serde_json",
-]
-
-[[package]]
-name = "cavalre-ledger-consumer-test"
+name = "cavalre-ledgers-consumer-test"
 version = "0.1.0"
 dependencies = [
  "anchor-lang",
- "cavalre-ledger-solana",
+ "cavalre-ledgers-solana",
  "spl-token-2022-interface 3.1.2",
  "spl-transfer-hook-interface",
 ]
 
 [[package]]
-name = "cavalre-ledger-core"
+name = "cavalre-ledgers-core"
 version = "0.1.0"
 dependencies = [
- "cavalre-accounting",
+ "cavalre-ledgers-kernel",
  "serde_json",
 ]
 
 [[package]]
-name = "cavalre-ledger-integration-tests"
+name = "cavalre-ledgers-integration-tests"
 version = "0.1.0"
 dependencies = [
  "anchor-lang",
  "borsh",
- "cavalre-ledger-solana",
+ "cavalre-ledgers-solana",
  "litesvm",
  "serde",
  "serde_json",
@@ -882,12 +875,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "cavalre-ledger-solana"
+name = "cavalre-ledgers-kernel"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
+name = "cavalre-ledgers-solana"
 version = "0.1.0"
 dependencies = [
  "anchor-lang",
  "anchor-spl",
- "cavalre-ledger-core",
+ "cavalre-ledgers-core",
  "spl-token-2022-interface 3.1.2",
  "spl-transfer-hook-interface",
 ]

@@ -5,7 +5,7 @@
 //! credits have no SPL redemption route; both endpoint controllers consent.
 use crate::{Asset, CustodyError as E, Ledger, Position, STATE_VERSION};
 use anchor_lang::prelude::*;
-use cavalre_ledger_core::{self as ledger_core, Authorization, Balances, Change, Kind, Node};
+use cavalre_ledgers_core::{self as ledger_core, Authorization, Balances, Change, Kind, Node};
 
 pub const NODE_VERSION: u8 = 1;
 

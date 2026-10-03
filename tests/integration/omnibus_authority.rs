@@ -31,7 +31,7 @@ fn independent_applications_control_only_their_own_claims_through_cpi() {
     let a = h.asset();
     let bytes = std::fs::read(
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/deploy/cavalre_ledger_consumer_test.so"),
+            .join("../../target/deploy/cavalre_ledgers_consumer_test.so"),
     )
     .unwrap();
     let apps = [h.address(), h.address()];

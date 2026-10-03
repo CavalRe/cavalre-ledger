@@ -1,4 +1,4 @@
-# Working on CavalRe Ledger
+# Working on CavalRe Ledgers
 
 - Work on `main` and push completed, verified changes when authorized.
 - This is the standalone Ledger product: accounting kernel, portable service,

@@ -1,11 +1,11 @@
 [package]
-name = "cavalre-ledger-solana"
+name = "cavalre-ledgers-solana"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 repository.workspace = true
-description = "Solana adapter for the CavalRe Ledger service"
+description = "Solana adapter for the CavalRe Ledgers service"
 
 [lib]
 crate-type = ["cdylib", "lib"]
@@ -19,7 +19,7 @@ no-log-ix-name = []
 idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
 
 [dependencies]
-cavalre-ledger-core = { path = "../ledger-core", version = "0.1.0" }
+cavalre-ledgers-core = { path = "../ledger-core", version = "0.1.0" }
 anchor-lang = "=1.2.0"
 anchor-spl = { version = "=1.2.0", default-features = false, features = ["token", "token_2022"] }
 

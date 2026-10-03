@@ -1,4 +1,4 @@
-use cavalre_ledger_core::*;
+use cavalre_ledgers_core::*;
 
 fn id(n: u8) -> Id {
     [n; 32]

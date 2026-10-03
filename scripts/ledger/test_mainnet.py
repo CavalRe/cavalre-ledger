@@ -91,11 +91,11 @@ class MainnetTests(unittest.TestCase):
             manifest = {"schema_version": 1, "gate": "scripts/check.sh passed", "program_id": self.authority,
                         "commit": "a" * 40, "sha256": ledger.sha256(self.code), "bytes": len(self.code)}
             (directory / "release.json").write_text(json.dumps(manifest))
-            (directory / "cavalre_ledger_solana.so").write_bytes(self.code)
+            (directory / "cavalre_ledgers_solana.so").write_bytes(self.code)
             with patch.object(ledger, "source_id", return_value=self.authority), \
                     patch.object(ledger, "git", side_effect=lambda *args: "a" * 40 if args[0] == "rev-parse" else ""):
                 ledger.load_release(directory)
-                (directory / "cavalre_ledger_solana.so").write_bytes(self.code + b"x")
+                (directory / "cavalre_ledgers_solana.so").write_bytes(self.code + b"x")
                 with self.assertRaisesRegex(ValueError, "size or hash"):
                     ledger.load_release(directory)
             with patch.object(ledger, "source_id", return_value=self.authority), \

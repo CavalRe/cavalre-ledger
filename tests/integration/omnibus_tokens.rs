@@ -221,7 +221,7 @@ fn transfer_hook_executes_only_at_custody_boundary_and_failure_rolls_back() {
     let hook = h.address();
     let bytes = std::fs::read(
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/deploy/cavalre_ledger_consumer_test.so"),
+            .join("../../target/deploy/cavalre_ledgers_consumer_test.so"),
     )
     .unwrap();
     h.svm.add_program(hook, &bytes).unwrap();

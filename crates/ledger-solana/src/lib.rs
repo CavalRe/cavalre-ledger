@@ -1,7 +1,7 @@
 //! Independent omnibus custody and hierarchical double-entry accounting.
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface::{Mint, TokenAccount, TokenInterface};
-use cavalre_ledger_core::{self as ledger_core, Authorization};
+use cavalre_ledgers_core::{self as ledger_core, Authorization};
 
 pub mod hierarchy;
 pub use hierarchy::*;
@@ -12,7 +12,7 @@ declare_id!("DSXaqgjqGtTWfvk89dvXgii4x6EimeALFjhbxnN3mYmy");
 pub const STATE_VERSION: u8 = 1;
 
 #[program]
-pub mod cavalre_ledger {
+pub mod cavalre_ledgers {
     use super::*;
 
     pub fn initialize_journal(ctx: Context<InitializeJournal>, id: u64) -> Result<()> {

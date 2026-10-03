@@ -13,7 +13,7 @@ mod custody;
 mod hierarchy;
 mod lifecycle;
 
-pub use cavalre_accounting::{Balances, Change, Id, Kind, Node, MAX_PATH_NODES};
+pub use cavalre_ledgers_kernel::{Balances, Change, Id, Kind, Node, MAX_PATH_NODES};
 pub use custody::{prepare_deposit, prepare_withdrawal, CustodyPlan, TokenBalances};
 pub use hierarchy::{plan_posting, Endpoint, Operation, Posting, MAX_RECORDS};
 pub use lifecycle::{
@@ -33,15 +33,15 @@ pub enum Error {
     InsufficientBalance,
     Undercollateralized,
     UnexpectedTokenDelta,
-    Accounting(cavalre_accounting::Error),
+    Accounting(cavalre_ledgers_kernel::Error),
 }
 
-impl From<cavalre_accounting::Error> for Error {
-    fn from(error: cavalre_accounting::Error) -> Self {
+impl From<cavalre_ledgers_kernel::Error> for Error {
+    fn from(error: cavalre_ledgers_kernel::Error) -> Self {
         match error {
-            cavalre_accounting::Error::InsufficientBalance => Self::InsufficientBalance,
-            cavalre_accounting::Error::Overflow => Self::Overflow,
-            cavalre_accounting::Error::DepthLimit => Self::DepthLimit,
+            cavalre_ledgers_kernel::Error::InsufficientBalance => Self::InsufficientBalance,
+            cavalre_ledgers_kernel::Error::Overflow => Self::Overflow,
+            cavalre_ledgers_kernel::Error::DepthLimit => Self::DepthLimit,
             other => Self::Accounting(other),
         }
     }

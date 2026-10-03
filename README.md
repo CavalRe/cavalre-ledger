@@ -1,13 +1,13 @@
-# CavalRe Ledger
+# CavalRe Ledgers
 
 Hierarchical double-entry accounting and omnibus custody, with a portable Rust
 service and a Solana adapter.
 
 | Crate | Responsibility |
 | --- | --- |
-| `cavalre-accounting` | Checked posting arithmetic and hierarchy validation; no authorization or storage |
-| `cavalre-ledger-core` | Controller permissions, namespace/account lifecycle, journal and claim transfers, custody accounting |
-| `cavalre-ledger-solana` | Solana program and CPI interface, authenticated accounts, native tokens and atomic execution |
+| `cavalre-ledgers-kernel` | Checked posting arithmetic and hierarchy validation; no authorization or storage |
+| `cavalre-ledgers-core` | Controller permissions, namespace/account lifecycle, journal and claim transfers, custody accounting |
+| `cavalre-ledgers-solana` | Solana program and CPI interface, authenticated accounts, native tokens and atomic execution |
 
 The core depends only on the accounting kernel. Both are `no_std` with `alloc`.
 The Solana adapter depends on the core; portable consumers do not need Anchor
@@ -17,9 +17,9 @@ applications, not Ledger dependencies.
 ## Use the core
 
 ```rust
-use cavalre_ledger_core::{Authorization, RootKind, create_root, initialize_namespace};
+use cavalre_ledgers_core::{Authorization, RootKind, create_root, initialize_namespace};
 
-fn main() -> Result<(), cavalre_ledger_core::Error> {
+fn main() -> Result<(), cavalre_ledgers_core::Error> {
     let creator = [1; 32]; // identity already authenticated by the host
     let signers = [creator];
     let auth = Authorization::from_verified_signers(&signers);
@@ -35,9 +35,9 @@ plans. See [the complete adapter contract](docs/LEDGER_CORE.md) before integrati
 storage or transaction authorization. The arithmetic kernel alone grants no
 spending permissions.
 
-For Solana clients, depend on `cavalre-ledger-solana` with `cpi` for Anchor CPI
+For Solana clients, depend on `cavalre-ledgers-solana` with `cpi` for Anchor CPI
 or `no-entrypoint` for instruction/account types. Its Rust import is
-`cavalre_ledger_solana`; the built program is `cavalre_ledger_solana.so`.
+`cavalre_ledgers_solana`; the built program is `cavalre_ledgers_solana.so`.
 The simulation program ID, instruction discriminators and account layouts are
 unchanged by the extraction and package rename.
 
@@ -48,7 +48,7 @@ crates, so these commands require no Solana toolchain:
 
 ```bash
 cargo test --locked
-cargo clippy -p cavalre-accounting -p cavalre-ledger-core --all-targets --locked -- -D warnings
+cargo clippy -p cavalre-ledgers-kernel -p cavalre-ledgers-core --all-targets --locked -- -D warnings
 ```
 
 To verify the Solana adapter, install pinned Agave **4.3.0** and run the full

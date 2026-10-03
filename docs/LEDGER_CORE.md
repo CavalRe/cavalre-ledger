@@ -1,7 +1,7 @@
 # Portable Ledger core
 
-`crates/ledger-core` (`cavalre-ledger-core`) is the shared Ledger service layer.
-It is `no_std` with `alloc` and depends only on `cavalre-accounting`. The
+`crates/ledger-core` (`cavalre-ledgers-core`) is the shared Ledger service layer.
+It is `no_std` with `alloc` and depends only on `cavalre-ledgers-kernel`. The
 standalone Solana service in `crates/ledger-solana` now uses it for namespace and
 account lifecycle, controller-authorized postings, and native custody accounting.
 It can also be used by a Commonware state machine without Anchor or Solana.
@@ -110,7 +110,7 @@ No Commonware consensus changes are part of this extraction.
 
 ## Verification
 
-Run `cargo test -p cavalre-ledger-core --locked` for core tests. They replay all
+Run `cargo test -p cavalre-ledgers-core --locked` for core tests. They replay all
 162 hierarchy and 138 custody actions from the pinned Solidity fixtures, compare
 every resulting balance and rejection, and independently check group aggregates,
 claim supply, collateral and native-token conservation. Additional cases cover

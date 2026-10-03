@@ -27,7 +27,7 @@ Ledger's program address.
 
 | Address | Purpose |
 | --- | --- |
-| Program ID | Permanent address of CavalRe Ledger. Its keypair signs initial account creation; it does not grant upgrade authority. |
+| Program ID | Permanent address of CavalRe Ledgers. Its keypair signs initial account creation; it does not grant upgrade authority. |
 | Deployment wallet | Holds enough SOL to pay rent and upload transactions. Initially controls the empty deployed program, then hands authority to Squads. |
 | Squads vault address | Final upgrade authority. The Squad's signer approves program management through Squads. |
 
@@ -91,7 +91,7 @@ python3 -B scripts/ledger/test_mainnet.py
 python3 scripts/ledger/mainnet.py prepare --program-id "$LEDGER_PROGRAM_ID"
 ```
 
-`prepare` runs the full repository gate and copies only `cavalre_ledger_solana.so` into
+`prepare` runs the full repository gate and copies only `cavalre_ledgers_solana.so` into
 `target/ledger-release`, alongside a manifest binding its SHA-256, size, program
 ID, source commit, Cargo lockfile and toolchain versions. It refuses a dirty
 checkout, a mismatched ID, or an existing release directory. Keep this exact
@@ -159,7 +159,7 @@ use `--final`, which permanently removes upgrade authority.
 ```bash
 solana --url "${LEDGER_RPC_URL:-https://api.mainnet-beta.solana.com}" \
   --keypair "$LEDGER_DEPLOYER_KEYPAIR" program deploy \
-  target/ledger-release/cavalre_ledger_solana.so \
+  target/ledger-release/cavalre_ledgers_solana.so \
   --program-id "$HOME/.config/cavalre/ledger-mainnet-program-keypair.json" \
   --upgrade-authority "$LEDGER_DEPLOYER_KEYPAIR" \
   --fee-payer "$LEDGER_DEPLOYER_KEYPAIR" \

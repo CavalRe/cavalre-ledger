@@ -17,7 +17,7 @@ import urllib.request
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / "crates/ledger-solana/src/lib.rs"
-BINARY = ROOT / "target/deploy/cavalre_ledger_solana.so"
+BINARY = ROOT / "target/deploy/cavalre_ledgers_solana.so"
 RELEASE = ROOT / "target/ledger-release"
 SIMULATOR_ID = "DSXaqgjqGtTWfvk89dvXgii4x6EimeALFjhbxnN3mYmy"
 MAINNET = "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d"
@@ -162,7 +162,7 @@ def load_release(directory):
     production_id(manifest["program_id"])
     require(git("rev-parse", "HEAD") == manifest["commit"], "Checkout differs from release commit")
     require(not git("status", "--porcelain", "--untracked-files=normal"), "Checkout must be clean")
-    code = binary(directory / "cavalre_ledger_solana.so")
+    code = binary(directory / "cavalre_ledgers_solana.so")
     require(len(code) == manifest["bytes"] and sha256(code) == manifest["sha256"],
             "Release binary size or hash differs from manifest")
     return manifest, code
@@ -194,7 +194,7 @@ def prepare(args):
                 "toolchain": versions, "gate": "scripts/check.sh passed",
                 "cargo_lock_sha256": sha256((ROOT / "Cargo.lock").read_bytes())}
     args.release_dir.mkdir(parents=True)
-    shutil.copyfile(BINARY, args.release_dir / "cavalre_ledger_solana.so")
+    shutil.copyfile(BINARY, args.release_dir / "cavalre_ledgers_solana.so")
     (args.release_dir / "release.json").write_text(json.dumps(manifest, indent=2) + "\n")
     return manifest
 
