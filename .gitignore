@@ -1,0 +1,8 @@
+/target/
+node_modules/
+__pycache__/
+.env
+.env.*
+*-keypair.json
+*.log
+.DS_Store

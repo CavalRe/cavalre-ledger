@@ -1,0 +1,41 @@
+name: Ledger
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: ledger-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  portable:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pinned Rust
+        run: rustup toolchain install 1.98.1 --profile minimal --component rustfmt --component clippy
+      - name: Check the portable crates without Solana tooling
+        run: |
+          cargo clippy -p cavalre-accounting -p cavalre-ledger-core --all-targets --locked -- -D warnings
+          cargo test --locked
+  solana:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      CARGO_BUILD_JOBS: 4
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: false
+      - name: Install pinned host Rust
+        run: rustup toolchain install 1.98.1 --profile minimal --component rustfmt --component clippy
+      - name: Install pinned Agave
+        run: |
+          bash scripts/install-agave.sh
+          echo "$PWD/target/toolchains/solana-release/bin" >> "$GITHUB_PATH"
+      - name: Build sBPF and test accounting, authority and custody
+        run: bash scripts/check.sh

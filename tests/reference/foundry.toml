@@ -1,0 +1,11 @@
+[profile.default]
+src = "."
+test = "."
+out = "../../target/reference-out"
+cache_path = "../../target/reference-cache"
+libs = []
+solc = "0.8.26"
+evm_version = "cancun"
+optimizer = true
+optimizer_runs = 200
+fs_permissions = [{ access = "write", path = "../../target" }]

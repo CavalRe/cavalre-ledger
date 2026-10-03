@@ -1,0 +1,3 @@
+[submodule "reference/cavalre-contracts"]
+	path = reference/cavalre-contracts
+	url = https://github.com/CavalRe/cavalre-contracts.git

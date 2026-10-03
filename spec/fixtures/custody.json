@@ -1,0 +1,2215 @@
+{
+  "schema_version": 1,
+  "contracts_commit": "34d159ff4e88fdfdee16738d9a1228f0bf407212",
+  "initial_tokens_per_user": 10000,
+  "steps": [
+    {
+      "amount": 120,
+      "kind": 0,
+      "positions": [
+        120,
+        0
+      ],
+      "success": true,
+      "total_claims": 120,
+      "user": 0,
+      "vault": 120,
+      "wallets": [
+        9880,
+        10000
+      ]
+    },
+    {
+      "amount": 80,
+      "kind": 0,
+      "positions": [
+        120,
+        80
+      ],
+      "success": true,
+      "total_claims": 200,
+      "user": 1,
+      "vault": 200,
+      "wallets": [
+        9880,
+        9920
+      ]
+    },
+    {
+      "amount": 45,
+      "kind": 1,
+      "positions": [
+        75,
+        80
+      ],
+      "success": true,
+      "total_claims": 155,
+      "user": 0,
+      "vault": 155,
+      "wallets": [
+        9925,
+        9920
+      ]
+    },
+    {
+      "amount": 9,
+      "kind": 2,
+      "positions": [
+        75,
+        80
+      ],
+      "success": true,
+      "total_claims": 155,
+      "user": 1,
+      "vault": 164,
+      "wallets": [
+        9925,
+        9911
+      ]
+    },
+    {
+      "amount": 81,
+      "kind": 1,
+      "positions": [
+        75,
+        80
+      ],
+      "success": false,
+      "total_claims": 155,
+      "user": 1,
+      "vault": 164,
+      "wallets": [
+        9925,
+        9911
+      ]
+    },
+    {
+      "amount": 0,
+      "kind": 0,
+      "positions": [
+        75,
+        80
+      ],
+      "success": true,
+      "total_claims": 155,
+      "user": 0,
+      "vault": 164,
+      "wallets": [
+        9925,
+        9911
+      ]
+    },
+    {
+      "amount": 0,
+      "kind": 1,
+      "positions": [
+        75,
+        80
+      ],
+      "success": true,
+      "total_claims": 155,
+      "user": 1,
+      "vault": 164,
+      "wallets": [
+        9925,
+        9911
+      ]
+    },
+    {
+      "amount": 10001,
+      "kind": 0,
+      "positions": [
+        75,
+        80
+      ],
+      "success": false,
+      "total_claims": 155,
+      "user": 0,
+      "vault": 164,
+      "wallets": [
+        9925,
+        9911
+      ]
+    },
+    {
+      "amount": 75,
+      "kind": 1,
+      "positions": [
+        0,
+        80
+      ],
+      "success": true,
+      "total_claims": 80,
+      "user": 0,
+      "vault": 89,
+      "wallets": [
+        10000,
+        9911
+      ]
+    },
+    {
+      "amount": 80,
+      "kind": 1,
+      "positions": [
+        0,
+        0
+      ],
+      "success": true,
+      "total_claims": 0,
+      "user": 1,
+      "vault": 9,
+      "wallets": [
+        10000,
+        9991
+      ]
+    },
+    {
+      "amount": 332,
+      "kind": 0,
+      "positions": [
+        332,
+        0
+      ],
+      "success": true,
+      "total_claims": 332,
+      "user": 0,
+      "vault": 341,
+      "wallets": [
+        9668,
+        9991
+      ]
+    },
+    {
+      "amount": 683,
+      "kind": 1,
+      "positions": [
+        332,
+        0
+      ],
+      "success": false,
+      "total_claims": 332,
+      "user": 0,
+      "vault": 341,
+      "wallets": [
+        9668,
+        9991
+      ]
+    },
+    {
+      "amount": 19,
+      "kind": 2,
+      "positions": [
+        332,
+        0
+      ],
+      "success": true,
+      "total_claims": 332,
+      "user": 1,
+      "vault": 360,
+      "wallets": [
+        9668,
+        9972
+      ]
+    },
+    {
+      "amount": 229,
+      "kind": 0,
+      "positions": [
+        561,
+        0
+      ],
+      "success": true,
+      "total_claims": 561,
+      "user": 0,
+      "vault": 589,
+      "wallets": [
+        9439,
+        9972
+      ]
+    },
+    {
+      "amount": 112,
+      "kind": 1,
+      "positions": [
+        449,
+        0
+      ],
+      "success": true,
+      "total_claims": 449,
+      "user": 0,
+      "vault": 477,
+      "wallets": [
+        9551,
+        9972
+      ]
+    },
+    {
+      "amount": 7,
+      "kind": 2,
+      "positions": [
+        449,
+        0
+      ],
+      "success": true,
+      "total_claims": 449,
+      "user": 1,
+      "vault": 484,
+      "wallets": [
+        9551,
+        9965
+      ]
+    },
+    {
+      "amount": 306,
+      "kind": 0,
+      "positions": [
+        449,
+        306
+      ],
+      "success": true,
+      "total_claims": 755,
+      "user": 1,
+      "vault": 790,
+      "wallets": [
+        9551,
+        9659
+      ]
+    },
+    {
+      "amount": 1241,
+      "kind": 1,
+      "positions": [
+        449,
+        306
+      ],
+      "success": false,
+      "total_claims": 755,
+      "user": 1,
+      "vault": 790,
+      "wallets": [
+        9551,
+        9659
+      ]
+    },
+    {
+      "amount": 15,
+      "kind": 2,
+      "positions": [
+        449,
+        306
+      ],
+      "success": true,
+      "total_claims": 755,
+      "user": 1,
+      "vault": 805,
+      "wallets": [
+        9551,
+        9644
+      ]
+    },
+    {
+      "amount": 1859,
+      "kind": 0,
+      "positions": [
+        449,
+        2165
+      ],
+      "success": true,
+      "total_claims": 2614,
+      "user": 1,
+      "vault": 2664,
+      "wallets": [
+        9551,
+        7785
+      ]
+    },
+    {
+      "amount": 1862,
+      "kind": 1,
+      "positions": [
+        449,
+        303
+      ],
+      "success": true,
+      "total_claims": 752,
+      "user": 1,
+      "vault": 802,
+      "wallets": [
+        9551,
+        9647
+      ]
+    },
+    {
+      "amount": 18,
+      "kind": 2,
+      "positions": [
+        449,
+        303
+      ],
+      "success": true,
+      "total_claims": 752,
+      "user": 0,
+      "vault": 820,
+      "wallets": [
+        9533,
+        9647
+      ]
+    },
+    {
+      "amount": 232,
+      "kind": 0,
+      "positions": [
+        681,
+        303
+      ],
+      "success": true,
+      "total_claims": 984,
+      "user": 0,
+      "vault": 1052,
+      "wallets": [
+        9301,
+        9647
+      ]
+    },
+    {
+      "amount": 1719,
+      "kind": 1,
+      "positions": [
+        681,
+        303
+      ],
+      "success": false,
+      "total_claims": 984,
+      "user": 1,
+      "vault": 1052,
+      "wallets": [
+        9301,
+        9647
+      ]
+    },
+    {
+      "amount": 6,
+      "kind": 2,
+      "positions": [
+        681,
+        303
+      ],
+      "success": true,
+      "total_claims": 984,
+      "user": 1,
+      "vault": 1058,
+      "wallets": [
+        9301,
+        9641
+      ]
+    },
+    {
+      "amount": 625,
+      "kind": 0,
+      "positions": [
+        1306,
+        303
+      ],
+      "success": true,
+      "total_claims": 1609,
+      "user": 0,
+      "vault": 1683,
+      "wallets": [
+        8676,
+        9641
+      ]
+    },
+    {
+      "amount": 140,
+      "kind": 1,
+      "positions": [
+        1306,
+        163
+      ],
+      "success": true,
+      "total_claims": 1469,
+      "user": 1,
+      "vault": 1543,
+      "wallets": [
+        8676,
+        9781
+      ]
+    },
+    {
+      "amount": 7,
+      "kind": 2,
+      "positions": [
+        1306,
+        163
+      ],
+      "success": true,
+      "total_claims": 1469,
+      "user": 1,
+      "vault": 1550,
+      "wallets": [
+        8676,
+        9774
+      ]
+    },
+    {
+      "amount": 1758,
+      "kind": 0,
+      "positions": [
+        1306,
+        1921
+      ],
+      "success": true,
+      "total_claims": 3227,
+      "user": 1,
+      "vault": 3308,
+      "wallets": [
+        8676,
+        8016
+      ]
+    },
+    {
+      "amount": 1893,
+      "kind": 1,
+      "positions": [
+        1306,
+        28
+      ],
+      "success": true,
+      "total_claims": 1334,
+      "user": 1,
+      "vault": 1415,
+      "wallets": [
+        8676,
+        9909
+      ]
+    },
+    {
+      "amount": 12,
+      "kind": 2,
+      "positions": [
+        1306,
+        28
+      ],
+      "success": true,
+      "total_claims": 1334,
+      "user": 0,
+      "vault": 1427,
+      "wallets": [
+        8664,
+        9909
+      ]
+    },
+    {
+      "amount": 255,
+      "kind": 0,
+      "positions": [
+        1306,
+        283
+      ],
+      "success": true,
+      "total_claims": 1589,
+      "user": 1,
+      "vault": 1682,
+      "wallets": [
+        8664,
+        9654
+      ]
+    },
+    {
+      "amount": 2,
+      "kind": 1,
+      "positions": [
+        1304,
+        283
+      ],
+      "success": true,
+      "total_claims": 1587,
+      "user": 0,
+      "vault": 1680,
+      "wallets": [
+        8666,
+        9654
+      ]
+    },
+    {
+      "amount": 5,
+      "kind": 2,
+      "positions": [
+        1304,
+        283
+      ],
+      "success": true,
+      "total_claims": 1587,
+      "user": 1,
+      "vault": 1685,
+      "wallets": [
+        8666,
+        9649
+      ]
+    },
+    {
+      "amount": 452,
+      "kind": 0,
+      "positions": [
+        1304,
+        735
+      ],
+      "success": true,
+      "total_claims": 2039,
+      "user": 1,
+      "vault": 2137,
+      "wallets": [
+        8666,
+        9197
+      ]
+    },
+    {
+      "amount": 835,
+      "kind": 1,
+      "positions": [
+        469,
+        735
+      ],
+      "success": true,
+      "total_claims": 1204,
+      "user": 0,
+      "vault": 1302,
+      "wallets": [
+        9501,
+        9197
+      ]
+    },
+    {
+      "amount": 14,
+      "kind": 2,
+      "positions": [
+        469,
+        735
+      ],
+      "success": true,
+      "total_claims": 1204,
+      "user": 0,
+      "vault": 1316,
+      "wallets": [
+        9487,
+        9197
+      ]
+    },
+    {
+      "amount": 13,
+      "kind": 0,
+      "positions": [
+        482,
+        735
+      ],
+      "success": true,
+      "total_claims": 1217,
+      "user": 0,
+      "vault": 1329,
+      "wallets": [
+        9474,
+        9197
+      ]
+    },
+    {
+      "amount": 1576,
+      "kind": 1,
+      "positions": [
+        482,
+        735
+      ],
+      "success": false,
+      "total_claims": 1217,
+      "user": 0,
+      "vault": 1329,
+      "wallets": [
+        9474,
+        9197
+      ]
+    },
+    {
+      "amount": 16,
+      "kind": 2,
+      "positions": [
+        482,
+        735
+      ],
+      "success": true,
+      "total_claims": 1217,
+      "user": 1,
+      "vault": 1345,
+      "wallets": [
+        9474,
+        9181
+      ]
+    },
+    {
+      "amount": 954,
+      "kind": 0,
+      "positions": [
+        1436,
+        735
+      ],
+      "success": true,
+      "total_claims": 2171,
+      "user": 0,
+      "vault": 2299,
+      "wallets": [
+        8520,
+        9181
+      ]
+    },
+    {
+      "amount": 1825,
+      "kind": 1,
+      "positions": [
+        1436,
+        735
+      ],
+      "success": false,
+      "total_claims": 2171,
+      "user": 0,
+      "vault": 2299,
+      "wallets": [
+        8520,
+        9181
+      ]
+    },
+    {
+      "amount": 4,
+      "kind": 2,
+      "positions": [
+        1436,
+        735
+      ],
+      "success": true,
+      "total_claims": 2171,
+      "user": 1,
+      "vault": 2303,
+      "wallets": [
+        8520,
+        9177
+      ]
+    },
+    {
+      "amount": 1595,
+      "kind": 0,
+      "positions": [
+        3031,
+        735
+      ],
+      "success": true,
+      "total_claims": 3766,
+      "user": 0,
+      "vault": 3898,
+      "wallets": [
+        6925,
+        9177
+      ]
+    },
+    {
+      "amount": 1038,
+      "kind": 1,
+      "positions": [
+        3031,
+        735
+      ],
+      "success": false,
+      "total_claims": 3766,
+      "user": 1,
+      "vault": 3898,
+      "wallets": [
+        6925,
+        9177
+      ]
+    },
+    {
+      "amount": 15,
+      "kind": 2,
+      "positions": [
+        3031,
+        735
+      ],
+      "success": true,
+      "total_claims": 3766,
+      "user": 1,
+      "vault": 3913,
+      "wallets": [
+        6925,
+        9162
+      ]
+    },
+    {
+      "amount": 1664,
+      "kind": 0,
+      "positions": [
+        3031,
+        2399
+      ],
+      "success": true,
+      "total_claims": 5430,
+      "user": 1,
+      "vault": 5577,
+      "wallets": [
+        6925,
+        7498
+      ]
+    },
+    {
+      "amount": 991,
+      "kind": 1,
+      "positions": [
+        3031,
+        1408
+      ],
+      "success": true,
+      "total_claims": 4439,
+      "user": 1,
+      "vault": 4586,
+      "wallets": [
+        6925,
+        8489
+      ]
+    },
+    {
+      "amount": 11,
+      "kind": 2,
+      "positions": [
+        3031,
+        1408
+      ],
+      "success": true,
+      "total_claims": 4439,
+      "user": 1,
+      "vault": 4597,
+      "wallets": [
+        6925,
+        8478
+      ]
+    },
+    {
+      "amount": 185,
+      "kind": 0,
+      "positions": [
+        3216,
+        1408
+      ],
+      "success": true,
+      "total_claims": 4624,
+      "user": 0,
+      "vault": 4782,
+      "wallets": [
+        6740,
+        8478
+      ]
+    },
+    {
+      "amount": 612,
+      "kind": 1,
+      "positions": [
+        2604,
+        1408
+      ],
+      "success": true,
+      "total_claims": 4012,
+      "user": 0,
+      "vault": 4170,
+      "wallets": [
+        7352,
+        8478
+      ]
+    },
+    {
+      "amount": 8,
+      "kind": 2,
+      "positions": [
+        2604,
+        1408
+      ],
+      "success": true,
+      "total_claims": 4012,
+      "user": 1,
+      "vault": 4178,
+      "wallets": [
+        7352,
+        8470
+      ]
+    },
+    {
+      "amount": 1254,
+      "kind": 0,
+      "positions": [
+        3858,
+        1408
+      ],
+      "success": true,
+      "total_claims": 5266,
+      "user": 0,
+      "vault": 5432,
+      "wallets": [
+        6098,
+        8470
+      ]
+    },
+    {
+      "amount": 237,
+      "kind": 1,
+      "positions": [
+        3858,
+        1171
+      ],
+      "success": true,
+      "total_claims": 5029,
+      "user": 1,
+      "vault": 5195,
+      "wallets": [
+        6098,
+        8707
+      ]
+    },
+    {
+      "amount": 14,
+      "kind": 2,
+      "positions": [
+        3858,
+        1171
+      ],
+      "success": true,
+      "total_claims": 5029,
+      "user": 0,
+      "vault": 5209,
+      "wallets": [
+        6084,
+        8707
+      ]
+    },
+    {
+      "amount": 775,
+      "kind": 0,
+      "positions": [
+        3858,
+        1946
+      ],
+      "success": true,
+      "total_claims": 5804,
+      "user": 1,
+      "vault": 5984,
+      "wallets": [
+        6084,
+        7932
+      ]
+    },
+    {
+      "amount": 1274,
+      "kind": 1,
+      "positions": [
+        3858,
+        672
+      ],
+      "success": true,
+      "total_claims": 4530,
+      "user": 1,
+      "vault": 4710,
+      "wallets": [
+        6084,
+        9206
+      ]
+    },
+    {
+      "amount": 10,
+      "kind": 2,
+      "positions": [
+        3858,
+        672
+      ],
+      "success": true,
+      "total_claims": 4530,
+      "user": 1,
+      "vault": 4720,
+      "wallets": [
+        6084,
+        9196
+      ]
+    },
+    {
+      "amount": 252,
+      "kind": 0,
+      "positions": [
+        4110,
+        672
+      ],
+      "success": true,
+      "total_claims": 4782,
+      "user": 0,
+      "vault": 4972,
+      "wallets": [
+        5832,
+        9196
+      ]
+    },
+    {
+      "amount": 1979,
+      "kind": 1,
+      "positions": [
+        4110,
+        672
+      ],
+      "success": false,
+      "total_claims": 4782,
+      "user": 1,
+      "vault": 4972,
+      "wallets": [
+        5832,
+        9196
+      ]
+    },
+    {
+      "amount": 17,
+      "kind": 2,
+      "positions": [
+        4110,
+        672
+      ],
+      "success": true,
+      "total_claims": 4782,
+      "user": 1,
+      "vault": 4989,
+      "wallets": [
+        5832,
+        9179
+      ]
+    },
+    {
+      "amount": 661,
+      "kind": 0,
+      "positions": [
+        4110,
+        1333
+      ],
+      "success": true,
+      "total_claims": 5443,
+      "user": 1,
+      "vault": 5650,
+      "wallets": [
+        5832,
+        8518
+      ]
+    },
+    {
+      "amount": 688,
+      "kind": 1,
+      "positions": [
+        4110,
+        645
+      ],
+      "success": true,
+      "total_claims": 4755,
+      "user": 1,
+      "vault": 4962,
+      "wallets": [
+        5832,
+        9206
+      ]
+    },
+    {
+      "amount": 11,
+      "kind": 2,
+      "positions": [
+        4110,
+        645
+      ],
+      "success": true,
+      "total_claims": 4755,
+      "user": 0,
+      "vault": 4973,
+      "wallets": [
+        5821,
+        9206
+      ]
+    },
+    {
+      "amount": 1202,
+      "kind": 0,
+      "positions": [
+        5312,
+        645
+      ],
+      "success": true,
+      "total_claims": 5957,
+      "user": 0,
+      "vault": 6175,
+      "wallets": [
+        4619,
+        9206
+      ]
+    },
+    {
+      "amount": 1193,
+      "kind": 1,
+      "positions": [
+        5312,
+        645
+      ],
+      "success": false,
+      "total_claims": 5957,
+      "user": 1,
+      "vault": 6175,
+      "wallets": [
+        4619,
+        9206
+      ]
+    },
+    {
+      "amount": 7,
+      "kind": 2,
+      "positions": [
+        5312,
+        645
+      ],
+      "success": true,
+      "total_claims": 5957,
+      "user": 1,
+      "vault": 6182,
+      "wallets": [
+        4619,
+        9199
+      ]
+    },
+    {
+      "amount": 1651,
+      "kind": 0,
+      "positions": [
+        6963,
+        645
+      ],
+      "success": true,
+      "total_claims": 7608,
+      "user": 0,
+      "vault": 7833,
+      "wallets": [
+        2968,
+        9199
+      ]
+    },
+    {
+      "amount": 230,
+      "kind": 1,
+      "positions": [
+        6733,
+        645
+      ],
+      "success": true,
+      "total_claims": 7378,
+      "user": 0,
+      "vault": 7603,
+      "wallets": [
+        3198,
+        9199
+      ]
+    },
+    {
+      "amount": 4,
+      "kind": 2,
+      "positions": [
+        6733,
+        645
+      ],
+      "success": true,
+      "total_claims": 7378,
+      "user": 1,
+      "vault": 7607,
+      "wallets": [
+        3198,
+        9195
+      ]
+    },
+    {
+      "amount": 1880,
+      "kind": 0,
+      "positions": [
+        6733,
+        2525
+      ],
+      "success": true,
+      "total_claims": 9258,
+      "user": 1,
+      "vault": 9487,
+      "wallets": [
+        3198,
+        7315
+      ]
+    },
+    {
+      "amount": 1271,
+      "kind": 1,
+      "positions": [
+        6733,
+        1254
+      ],
+      "success": true,
+      "total_claims": 7987,
+      "user": 1,
+      "vault": 8216,
+      "wallets": [
+        3198,
+        8586
+      ]
+    },
+    {
+      "amount": 8,
+      "kind": 2,
+      "positions": [
+        6733,
+        1254
+      ],
+      "success": true,
+      "total_claims": 7987,
+      "user": 0,
+      "vault": 8224,
+      "wallets": [
+        3190,
+        8586
+      ]
+    },
+    {
+      "amount": 609,
+      "kind": 0,
+      "positions": [
+        6733,
+        1863
+      ],
+      "success": true,
+      "total_claims": 8596,
+      "user": 1,
+      "vault": 8833,
+      "wallets": [
+        3190,
+        7977
+      ]
+    },
+    {
+      "amount": 588,
+      "kind": 1,
+      "positions": [
+        6733,
+        1275
+      ],
+      "success": true,
+      "total_claims": 8008,
+      "user": 1,
+      "vault": 8245,
+      "wallets": [
+        3190,
+        8565
+      ]
+    },
+    {
+      "amount": 19,
+      "kind": 2,
+      "positions": [
+        6733,
+        1275
+      ],
+      "success": true,
+      "total_claims": 8008,
+      "user": 0,
+      "vault": 8264,
+      "wallets": [
+        3171,
+        8565
+      ]
+    },
+    {
+      "amount": 174,
+      "kind": 0,
+      "positions": [
+        6907,
+        1275
+      ],
+      "success": true,
+      "total_claims": 8182,
+      "user": 0,
+      "vault": 8438,
+      "wallets": [
+        2997,
+        8565
+      ]
+    },
+    {
+      "amount": 309,
+      "kind": 1,
+      "positions": [
+        6598,
+        1275
+      ],
+      "success": true,
+      "total_claims": 7873,
+      "user": 0,
+      "vault": 8129,
+      "wallets": [
+        3306,
+        8565
+      ]
+    },
+    {
+      "amount": 2,
+      "kind": 2,
+      "positions": [
+        6598,
+        1275
+      ],
+      "success": true,
+      "total_claims": 7873,
+      "user": 1,
+      "vault": 8131,
+      "wallets": [
+        3306,
+        8563
+      ]
+    },
+    {
+      "amount": 1215,
+      "kind": 0,
+      "positions": [
+        7813,
+        1275
+      ],
+      "success": true,
+      "total_claims": 9088,
+      "user": 0,
+      "vault": 9346,
+      "wallets": [
+        2091,
+        8563
+      ]
+    },
+    {
+      "amount": 1250,
+      "kind": 1,
+      "positions": [
+        6563,
+        1275
+      ],
+      "success": true,
+      "total_claims": 7838,
+      "user": 0,
+      "vault": 8096,
+      "wallets": [
+        3341,
+        8563
+      ]
+    },
+    {
+      "amount": 5,
+      "kind": 2,
+      "positions": [
+        6563,
+        1275
+      ],
+      "success": true,
+      "total_claims": 7838,
+      "user": 1,
+      "vault": 8101,
+      "wallets": [
+        3341,
+        8558
+      ]
+    },
+    {
+      "amount": 1780,
+      "kind": 0,
+      "positions": [
+        8343,
+        1275
+      ],
+      "success": true,
+      "total_claims": 9618,
+      "user": 0,
+      "vault": 9881,
+      "wallets": [
+        1561,
+        8558
+      ]
+    },
+    {
+      "amount": 1939,
+      "kind": 1,
+      "positions": [
+        8343,
+        1275
+      ],
+      "success": false,
+      "total_claims": 9618,
+      "user": 1,
+      "vault": 9881,
+      "wallets": [
+        1561,
+        8558
+      ]
+    },
+    {
+      "amount": 15,
+      "kind": 2,
+      "positions": [
+        8343,
+        1275
+      ],
+      "success": true,
+      "total_claims": 9618,
+      "user": 0,
+      "vault": 9896,
+      "wallets": [
+        1546,
+        8558
+      ]
+    },
+    {
+      "amount": 1565,
+      "kind": 0,
+      "positions": [
+        8343,
+        1275
+      ],
+      "success": false,
+      "total_claims": 9618,
+      "user": 0,
+      "vault": 9896,
+      "wallets": [
+        1546,
+        8558
+      ]
+    },
+    {
+      "amount": 1704,
+      "kind": 1,
+      "positions": [
+        8343,
+        1275
+      ],
+      "success": false,
+      "total_claims": 9618,
+      "user": 1,
+      "vault": 9896,
+      "wallets": [
+        1546,
+        8558
+      ]
+    },
+    {
+      "amount": 13,
+      "kind": 2,
+      "positions": [
+        8343,
+        1275
+      ],
+      "success": true,
+      "total_claims": 9618,
+      "user": 1,
+      "vault": 9909,
+      "wallets": [
+        1546,
+        8545
+      ]
+    },
+    {
+      "amount": 1482,
+      "kind": 0,
+      "positions": [
+        9825,
+        1275
+      ],
+      "success": true,
+      "total_claims": 11100,
+      "user": 0,
+      "vault": 11391,
+      "wallets": [
+        64,
+        8545
+      ]
+    },
+    {
+      "amount": 1681,
+      "kind": 1,
+      "positions": [
+        8144,
+        1275
+      ],
+      "success": true,
+      "total_claims": 9419,
+      "user": 0,
+      "vault": 9710,
+      "wallets": [
+        1745,
+        8545
+      ]
+    },
+    {
+      "amount": 5,
+      "kind": 2,
+      "positions": [
+        8144,
+        1275
+      ],
+      "success": true,
+      "total_claims": 9419,
+      "user": 1,
+      "vault": 9715,
+      "wallets": [
+        1745,
+        8540
+      ]
+    },
+    {
+      "amount": 1467,
+      "kind": 0,
+      "positions": [
+        8144,
+        2742
+      ],
+      "success": true,
+      "total_claims": 10886,
+      "user": 1,
+      "vault": 11182,
+      "wallets": [
+        1745,
+        7073
+      ]
+    },
+    {
+      "amount": 1198,
+      "kind": 1,
+      "positions": [
+        6946,
+        2742
+      ],
+      "success": true,
+      "total_claims": 9688,
+      "user": 0,
+      "vault": 9984,
+      "wallets": [
+        2943,
+        7073
+      ]
+    },
+    {
+      "amount": 12,
+      "kind": 2,
+      "positions": [
+        6946,
+        2742
+      ],
+      "success": true,
+      "total_claims": 9688,
+      "user": 0,
+      "vault": 9996,
+      "wallets": [
+        2931,
+        7073
+      ]
+    },
+    {
+      "amount": 1056,
+      "kind": 0,
+      "positions": [
+        8002,
+        2742
+      ],
+      "success": true,
+      "total_claims": 10744,
+      "user": 0,
+      "vault": 11052,
+      "wallets": [
+        1875,
+        7073
+      ]
+    },
+    {
+      "amount": 1087,
+      "kind": 1,
+      "positions": [
+        6915,
+        2742
+      ],
+      "success": true,
+      "total_claims": 9657,
+      "user": 0,
+      "vault": 9965,
+      "wallets": [
+        2962,
+        7073
+      ]
+    },
+    {
+      "amount": 3,
+      "kind": 2,
+      "positions": [
+        6915,
+        2742
+      ],
+      "success": true,
+      "total_claims": 9657,
+      "user": 1,
+      "vault": 9968,
+      "wallets": [
+        2962,
+        7070
+      ]
+    },
+    {
+      "amount": 377,
+      "kind": 0,
+      "positions": [
+        7292,
+        2742
+      ],
+      "success": true,
+      "total_claims": 10034,
+      "user": 0,
+      "vault": 10345,
+      "wallets": [
+        2585,
+        7070
+      ]
+    },
+    {
+      "amount": 1460,
+      "kind": 1,
+      "positions": [
+        5832,
+        2742
+      ],
+      "success": true,
+      "total_claims": 8574,
+      "user": 0,
+      "vault": 8885,
+      "wallets": [
+        4045,
+        7070
+      ]
+    },
+    {
+      "amount": 10,
+      "kind": 2,
+      "positions": [
+        5832,
+        2742
+      ],
+      "success": true,
+      "total_claims": 8574,
+      "user": 0,
+      "vault": 8895,
+      "wallets": [
+        4035,
+        7070
+      ]
+    },
+    {
+      "amount": 1894,
+      "kind": 0,
+      "positions": [
+        7726,
+        2742
+      ],
+      "success": true,
+      "total_claims": 10468,
+      "user": 0,
+      "vault": 10789,
+      "wallets": [
+        2141,
+        7070
+      ]
+    },
+    {
+      "amount": 1917,
+      "kind": 1,
+      "positions": [
+        5809,
+        2742
+      ],
+      "success": true,
+      "total_claims": 8551,
+      "user": 0,
+      "vault": 8872,
+      "wallets": [
+        4058,
+        7070
+      ]
+    },
+    {
+      "amount": 10,
+      "kind": 2,
+      "positions": [
+        5809,
+        2742
+      ],
+      "success": true,
+      "total_claims": 8551,
+      "user": 1,
+      "vault": 8882,
+      "wallets": [
+        4058,
+        7060
+      ]
+    },
+    {
+      "amount": 1223,
+      "kind": 0,
+      "positions": [
+        5809,
+        3965
+      ],
+      "success": true,
+      "total_claims": 9774,
+      "user": 1,
+      "vault": 10105,
+      "wallets": [
+        4058,
+        5837
+      ]
+    },
+    {
+      "amount": 266,
+      "kind": 1,
+      "positions": [
+        5809,
+        3699
+      ],
+      "success": true,
+      "total_claims": 9508,
+      "user": 1,
+      "vault": 9839,
+      "wallets": [
+        4058,
+        6103
+      ]
+    },
+    {
+      "amount": 15,
+      "kind": 2,
+      "positions": [
+        5809,
+        3699
+      ],
+      "success": true,
+      "total_claims": 9508,
+      "user": 1,
+      "vault": 9854,
+      "wallets": [
+        4058,
+        6088
+      ]
+    },
+    {
+      "amount": 764,
+      "kind": 0,
+      "positions": [
+        6573,
+        3699
+      ],
+      "success": true,
+      "total_claims": 10272,
+      "user": 0,
+      "vault": 10618,
+      "wallets": [
+        3294,
+        6088
+      ]
+    },
+    {
+      "amount": 1307,
+      "kind": 1,
+      "positions": [
+        5266,
+        3699
+      ],
+      "success": true,
+      "total_claims": 8965,
+      "user": 0,
+      "vault": 9311,
+      "wallets": [
+        4601,
+        6088
+      ]
+    },
+    {
+      "amount": 13,
+      "kind": 2,
+      "positions": [
+        5266,
+        3699
+      ],
+      "success": true,
+      "total_claims": 8965,
+      "user": 0,
+      "vault": 9324,
+      "wallets": [
+        4588,
+        6088
+      ]
+    },
+    {
+      "amount": 1413,
+      "kind": 0,
+      "positions": [
+        5266,
+        5112
+      ],
+      "success": true,
+      "total_claims": 10378,
+      "user": 1,
+      "vault": 10737,
+      "wallets": [
+        4588,
+        4675
+      ]
+    },
+    {
+      "amount": 576,
+      "kind": 1,
+      "positions": [
+        4690,
+        5112
+      ],
+      "success": true,
+      "total_claims": 9802,
+      "user": 0,
+      "vault": 10161,
+      "wallets": [
+        5164,
+        4675
+      ]
+    },
+    {
+      "amount": 19,
+      "kind": 2,
+      "positions": [
+        4690,
+        5112
+      ],
+      "success": true,
+      "total_claims": 9802,
+      "user": 0,
+      "vault": 10180,
+      "wallets": [
+        5145,
+        4675
+      ]
+    },
+    {
+      "amount": 866,
+      "kind": 0,
+      "positions": [
+        5556,
+        5112
+      ],
+      "success": true,
+      "total_claims": 10668,
+      "user": 0,
+      "vault": 11046,
+      "wallets": [
+        4279,
+        4675
+      ]
+    },
+    {
+      "amount": 1929,
+      "kind": 1,
+      "positions": [
+        3627,
+        5112
+      ],
+      "success": true,
+      "total_claims": 8739,
+      "user": 0,
+      "vault": 9117,
+      "wallets": [
+        6208,
+        4675
+      ]
+    },
+    {
+      "amount": 14,
+      "kind": 2,
+      "positions": [
+        3627,
+        5112
+      ],
+      "success": true,
+      "total_claims": 8739,
+      "user": 1,
+      "vault": 9131,
+      "wallets": [
+        6208,
+        4661
+      ]
+    },
+    {
+      "amount": 387,
+      "kind": 0,
+      "positions": [
+        3627,
+        5499
+      ],
+      "success": true,
+      "total_claims": 9126,
+      "user": 1,
+      "vault": 9518,
+      "wallets": [
+        6208,
+        4274
+      ]
+    },
+    {
+      "amount": 806,
+      "kind": 1,
+      "positions": [
+        3627,
+        4693
+      ],
+      "success": true,
+      "total_claims": 8320,
+      "user": 1,
+      "vault": 8712,
+      "wallets": [
+        6208,
+        5080
+      ]
+    },
+    {
+      "amount": 16,
+      "kind": 2,
+      "positions": [
+        3627,
+        4693
+      ],
+      "success": true,
+      "total_claims": 8320,
+      "user": 0,
+      "vault": 8728,
+      "wallets": [
+        6192,
+        5080
+      ]
+    },
+    {
+      "amount": 1384,
+      "kind": 0,
+      "positions": [
+        5011,
+        4693
+      ],
+      "success": true,
+      "total_claims": 9704,
+      "user": 0,
+      "vault": 10112,
+      "wallets": [
+        4808,
+        5080
+      ]
+    },
+    {
+      "amount": 807,
+      "kind": 1,
+      "positions": [
+        5011,
+        3886
+      ],
+      "success": true,
+      "total_claims": 8897,
+      "user": 1,
+      "vault": 9305,
+      "wallets": [
+        4808,
+        5887
+      ]
+    },
+    {
+      "amount": 0,
+      "kind": 2,
+      "positions": [
+        5011,
+        3886
+      ],
+      "success": true,
+      "total_claims": 8897,
+      "user": 0,
+      "vault": 9305,
+      "wallets": [
+        4808,
+        5887
+      ]
+    },
+    {
+      "amount": 1473,
+      "kind": 0,
+      "positions": [
+        5011,
+        5359
+      ],
+      "success": true,
+      "total_claims": 10370,
+      "user": 1,
+      "vault": 10778,
+      "wallets": [
+        4808,
+        4414
+      ]
+    },
+    {
+      "amount": 140,
+      "kind": 1,
+      "positions": [
+        5011,
+        5219
+      ],
+      "success": true,
+      "total_claims": 10230,
+      "user": 1,
+      "vault": 10638,
+      "wallets": [
+        4808,
+        4554
+      ]
+    },
+    {
+      "amount": 7,
+      "kind": 2,
+      "positions": [
+        5011,
+        5219
+      ],
+      "success": true,
+      "total_claims": 10230,
+      "user": 1,
+      "vault": 10645,
+      "wallets": [
+        4808,
+        4547
+      ]
+    },
+    {
+      "amount": 942,
+      "kind": 0,
+      "positions": [
+        5953,
+        5219
+      ],
+      "success": true,
+      "total_claims": 11172,
+      "user": 0,
+      "vault": 11587,
+      "wallets": [
+        3866,
+        4547
+      ]
+    },
+    {
+      "amount": 1253,
+      "kind": 1,
+      "positions": [
+        5953,
+        3966
+      ],
+      "success": true,
+      "total_claims": 9919,
+      "user": 1,
+      "vault": 10334,
+      "wallets": [
+        3866,
+        5800
+      ]
+    },
+    {
+      "amount": 9,
+      "kind": 2,
+      "positions": [
+        5953,
+        3966
+      ],
+      "success": true,
+      "total_claims": 9919,
+      "user": 0,
+      "vault": 10343,
+      "wallets": [
+        3857,
+        5800
+      ]
+    },
+    {
+      "amount": 1615,
+      "kind": 0,
+      "positions": [
+        7568,
+        3966
+      ],
+      "success": true,
+      "total_claims": 11534,
+      "user": 0,
+      "vault": 11958,
+      "wallets": [
+        2242,
+        5800
+      ]
+    },
+    {
+      "amount": 1490,
+      "kind": 1,
+      "positions": [
+        7568,
+        2476
+      ],
+      "success": true,
+      "total_claims": 10044,
+      "user": 1,
+      "vault": 10468,
+      "wallets": [
+        2242,
+        7290
+      ]
+    },
+    {
+      "amount": 9,
+      "kind": 2,
+      "positions": [
+        7568,
+        2476
+      ],
+      "success": true,
+      "total_claims": 10044,
+      "user": 1,
+      "vault": 10477,
+      "wallets": [
+        2242,
+        7281
+      ]
+    },
+    {
+      "amount": 644,
+      "kind": 0,
+      "positions": [
+        8212,
+        2476
+      ],
+      "success": true,
+      "total_claims": 10688,
+      "user": 0,
+      "vault": 11121,
+      "wallets": [
+        1598,
+        7281
+      ]
+    },
+    {
+      "amount": 67,
+      "kind": 1,
+      "positions": [
+        8145,
+        2476
+      ],
+      "success": true,
+      "total_claims": 10621,
+      "user": 0,
+      "vault": 11054,
+      "wallets": [
+        1665,
+        7281
+      ]
+    },
+    {
+      "amount": 4,
+      "kind": 2,
+      "positions": [
+        8145,
+        2476
+      ],
+      "success": true,
+      "total_claims": 10621,
+      "user": 1,
+      "vault": 11058,
+      "wallets": [
+        1665,
+        7277
+      ]
+    },
+    {
+      "amount": 349,
+      "kind": 0,
+      "positions": [
+        8145,
+        2825
+      ],
+      "success": true,
+      "total_claims": 10970,
+      "user": 1,
+      "vault": 11407,
+      "wallets": [
+        1665,
+        6928
+      ]
+    },
+    {
+      "amount": 600,
+      "kind": 1,
+      "positions": [
+        7545,
+        2825
+      ],
+      "success": true,
+      "total_claims": 10370,
+      "user": 0,
+      "vault": 10807,
+      "wallets": [
+        2265,
+        6928
+      ]
+    },
+    {
+      "amount": 1,
+      "kind": 2,
+      "positions": [
+        7545,
+        2825
+      ],
+      "success": true,
+      "total_claims": 10370,
+      "user": 1,
+      "vault": 10808,
+      "wallets": [
+        2265,
+        6927
+      ]
+    },
+    {
+      "amount": 746,
+      "kind": 0,
+      "positions": [
+        7545,
+        3571
+      ],
+      "success": true,
+      "total_claims": 11116,
+      "user": 1,
+      "vault": 11554,
+      "wallets": [
+        2265,
+        6181
+      ]
+    },
+    {
+      "amount": 17,
+      "kind": 1,
+      "positions": [
+        7528,
+        3571
+      ],
+      "success": true,
+      "total_claims": 11099,
+      "user": 0,
+      "vault": 11537,
+      "wallets": [
+        2282,
+        6181
+      ]
+    }
+  ]
+}

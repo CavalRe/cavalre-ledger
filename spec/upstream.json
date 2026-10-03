@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "references": [
+    {
+      "repository": "CavalRe/cavalre-contracts",
+      "url": "https://github.com/CavalRe/cavalre-contracts.git",
+      "branch_observed": "main",
+      "commit": "34d159ff4e88fdfdee16738d9a1228f0bf407212",
+      "path": "reference/cavalre-contracts",
+      "role": "ledger-custody-shares-staking-math"
+    }
+  ],
+  "source_extraction": {
+    "repository": "CavalRe/cavalre-solana",
+    "commit": "cdd98ab33f472ec289bda88384511253e9f3c063"
+  },
+  "solana_program_deployed": false
+}

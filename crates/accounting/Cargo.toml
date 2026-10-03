@@ -1,0 +1,11 @@
+[package]
+name = "cavalre-accounting"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+description = "Checked hierarchical double-entry accounting without storage or authorization"
+
+[dev-dependencies]
+serde_json = "1"
