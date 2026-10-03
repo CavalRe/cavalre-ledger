@@ -1,7 +1,25 @@
 # CavalRe Ledgers
 
 Hierarchical double-entry accounting and omnibus custody, with a portable Rust
-service and a Solana adapter.
+service and a Solana adapter. This repository also houses the Solidity project
+setup for the planned standalone EVM implementation.
+
+## Repository layout
+
+| Path | Purpose |
+| --- | --- |
+| `crates/` | Rust accounting kernel, portable service, and Solana adapter |
+| `contracts/` | Solidity implementation location; currently project setup only |
+| `tests/solidity/` | Solidity implementation tests, once contracts are added |
+| `tests/integration/`, `tests/solana-consumer/` | Solana runtime and consumer tests |
+| `docs/` | Shared behavioral specifications and platform-specific documentation |
+| `spec/fixtures/` | Shared accounting and custody reference fixtures |
+| `tests/reference/`, `reference/` | Isolated Solidity fixture generator and pinned source |
+
+Rust and Solidity have separate build tooling. `Cargo.toml` and `foundry.toml`
+live at the repository root; generated output stays under ignored `target/`.
+
+## Rust crates
 
 | Crate | Responsibility |
 | --- | --- |
@@ -42,6 +60,8 @@ unchanged by the extraction and package rename.
 
 ## Build and verify
 
+### Rust and Solana
+
 Host Rust is pinned to **1.98.1**. The default workspace members are the portable
 crates, so these commands require no Solana toolchain:
 
@@ -60,6 +80,24 @@ bash scripts/install-agave.sh
 export PATH="$PWD/target/toolchains/solana-release/bin:$PATH"
 bash scripts/check.sh
 ```
+
+### Solidity
+
+The EVM project setup uses Foundry **1.8.3**, Solidity **0.8.26**, and **Cancun**.
+From the repository root:
+
+```bash
+forge build
+forge test
+forge fmt --check contracts tests/solidity
+```
+
+These commands currently have no Solidity implementation or tests to compile.
+They are ready for development under [`contracts/`](contracts/README.md), with
+artifacts and cache isolated under `target/solidity/`. The EVM contract and
+deployment architecture still needs to be agreed before implementation.
+
+### Shared reference fixtures
 
 The fixture baseline contains 162 hierarchy and 138 custody actions from pinned
 Solidity code. Reproduce it with Foundry **1.8.3**:
