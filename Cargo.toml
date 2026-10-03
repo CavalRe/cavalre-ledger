@@ -1,6 +1,6 @@
 [workspace]
-members = ["crates/accounting", "crates/ledger-core", "crates/ledger-solana", "tests/integration", "tests/solana-consumer"]
-default-members = ["crates/accounting", "crates/ledger-core"]
+members = ["crates/cavalre-ledgers-kernel", "crates/cavalre-ledgers-core", "crates/cavalre-ledgers-solana", "tests/integration", "tests/solana-consumer"]
+default-members = ["crates/cavalre-ledgers-kernel", "crates/cavalre-ledgers-core"]
 resolver = "2"
 
 [workspace.package]

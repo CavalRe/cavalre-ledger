@@ -1,7 +1,7 @@
 # Ledger: independent omnibus custody and accounting
 
-`crates/ledger-solana` is the standalone Ledger service. It depends on the shared
-`crates/ledger-core` portable service layer, its `crates/accounting` posting
+`crates/cavalre-ledgers-solana` is the standalone Ledger service. It depends on the shared
+`crates/cavalre-ledgers-core` portable service layer, its `crates/cavalre-ledgers-kernel` posting
 kernel, and the native token interfaces. See [Ledger core](LEDGER_CORE.md) for
 the shared rules and host adapter contract. It has no
 SR, reward, share, Multiswap, or Launchpad dependency. The checked-in program

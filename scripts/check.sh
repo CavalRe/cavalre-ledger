@@ -8,7 +8,7 @@ if [[ "$(cargo-build-sbf --version | head -n 1)" != "cargo-build-sbf 4.3.0" ]]; 
 fi
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
-python3 -B scripts/ledger/test_mainnet.py
+python3 -B scripts/ledgers/test_mainnet.py
 mkdir -p target
 build_sbpf() {
   local manifest="$1"
@@ -20,7 +20,7 @@ build_sbpf() {
     return 1
   fi
 }
-build_sbpf tests/solana-consumer/Cargo.toml target/ledger-consumer-build.log
-build_sbpf crates/ledger-solana/Cargo.toml target/ledger-build.log
-CAVALRE_LEDGER_COST_REPORT="$PWD/target/custody-costs.json" \
-CAVALRE_LEDGER_HIERARCHY_REPORT="$PWD/target/hierarchy-costs.json" cargo test --workspace --locked
+build_sbpf tests/solana-consumer/Cargo.toml target/ledgers-consumer-build.log
+build_sbpf crates/cavalre-ledgers-solana/Cargo.toml target/ledgers-build.log
+CAVALRE_LEDGERS_COST_REPORT="$PWD/target/custody-costs.json" \
+CAVALRE_LEDGERS_HIERARCHY_REPORT="$PWD/target/hierarchy-costs.json" cargo test --workspace --locked

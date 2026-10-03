@@ -1,8 +1,8 @@
 # Portable Ledger core
 
-`crates/ledger-core` (`cavalre-ledgers-core`) is the shared Ledger service layer.
+`crates/cavalre-ledgers-core` (`cavalre-ledgers-core`) is the shared Ledger service layer.
 It is `no_std` with `alloc` and depends only on `cavalre-ledgers-kernel`. The
-standalone Solana service in `crates/ledger-solana` now uses it for namespace and
+standalone Solana service in `crates/cavalre-ledgers-solana` now uses it for namespace and
 account lifecycle, controller-authorized postings, and native custody accounting.
 It can also be used by a Commonware state machine without Anchor or Solana.
 

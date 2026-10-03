@@ -19,7 +19,7 @@ no-log-ix-name = []
 idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
 
 [dependencies]
-cavalre-ledgers-core = { path = "../ledger-core", version = "0.1.0" }
+cavalre-ledgers-core = { path = "../cavalre-ledgers-core", version = "0.1.0" }
 anchor-lang = "=1.2.0"
 anchor-spl = { version = "=1.2.0", default-features = false, features = ["token", "token_2022"] }
 

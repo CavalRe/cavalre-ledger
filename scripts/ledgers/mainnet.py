@@ -16,9 +16,9 @@ import urllib.error
 import urllib.request
 
 ROOT = Path(__file__).resolve().parents[2]
-SOURCE = ROOT / "crates/ledger-solana/src/lib.rs"
+SOURCE = ROOT / "crates/cavalre-ledgers-solana/src/lib.rs"
 BINARY = ROOT / "target/deploy/cavalre_ledgers_solana.so"
-RELEASE = ROOT / "target/ledger-release"
+RELEASE = ROOT / "target/ledgers-release"
 SIMULATOR_ID = "DSXaqgjqGtTWfvk89dvXgii4x6EimeALFjhbxnN3mYmy"
 MAINNET = "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d"
 LOADER = "BPFLoaderUpgradeab1e11111111111111111111111"
@@ -180,7 +180,7 @@ def prepare(args):
     for key in list(env):
         if key.endswith("_PROGRAM_SO") or key in ("CARGO_TARGET_DIR", "CARGO_BUILD_TARGET", "RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS"):
             del env[key]
-    env["CAVALRE_LEDGER_PROGRAM_SO"] = str(BINARY)
+    env["CAVALRE_LEDGERS_PROGRAM_SO"] = str(BINARY)
     versions = {tool: subprocess.check_output([tool, "--version"], env=env, cwd=ROOT, text=True).strip()
                 for tool in ("solana", "cargo-build-sbf", "rustc")}
     require(versions["solana"].startswith("solana-cli 4.3.0 "), "Expected Solana CLI 4.3.0")

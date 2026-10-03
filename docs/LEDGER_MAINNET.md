@@ -1,6 +1,6 @@
 # Ledger mainnet deployment
 
-This runbook deploys only `crates/ledger-solana`, the independent omnibus service.
+This runbook deploys only `crates/cavalre-ledgers-solana`, the independent omnibus service.
 It does not deploy SR, Multiswap, demo programs, or the Ledger test consumer.
 No mainnet program has been deployed by the preparation work.
 
@@ -71,7 +71,7 @@ solana-keygen pubkey "$HOME/.config/cavalre/ledger-mainnet-program-keypair.json"
 ```
 
 Share only the public address. Replace `declare_id!` in
-`crates/ledger-solana/src/lib.rs` with that address, update its simulation-only
+`crates/cavalre-ledgers-solana/src/lib.rs` with that address, update its simulation-only
 comment, and commit the change. Tests and CPI callers use the crate's declared
 ID. Keep the keypair outside Git and do not reuse a build-generated keypair.
 
@@ -87,12 +87,12 @@ the clean, reviewed production-ID commit. From the repository root:
 ```bash
 export PATH="$PWD/target/toolchains/solana-release/bin:$PATH"
 export LEDGER_PROGRAM_ID="$(solana-keygen pubkey "$HOME/.config/cavalre/ledger-mainnet-program-keypair.json")"
-python3 -B scripts/ledger/test_mainnet.py
-python3 scripts/ledger/mainnet.py prepare --program-id "$LEDGER_PROGRAM_ID"
+python3 -B scripts/ledgers/test_mainnet.py
+python3 scripts/ledgers/mainnet.py prepare --program-id "$LEDGER_PROGRAM_ID"
 ```
 
 `prepare` runs the full repository gate and copies only `cavalre_ledgers_solana.so` into
-`target/ledger-release`, alongside a manifest binding its SHA-256, size, program
+`target/ledgers-release`, alongside a manifest binding its SHA-256, size, program
 ID, source commit, Cargo lockfile and toolchain versions. It refuses a dirty
 checkout, a mismatched ID, or an existing release directory. Keep this exact
 checkout and release for subsequent checks.
@@ -110,7 +110,7 @@ Solana endpoint. Provider credentials are not written to reports. Set
 
 ```bash
 export LEDGER_PAYER="$(solana-keygen pubkey "$LEDGER_DEPLOYER_KEYPAIR")"
-python3 scripts/ledger/mainnet.py preflight \
+python3 scripts/ledgers/mainnet.py preflight \
   --payer "$LEDGER_PAYER" \
   --upgrade-authority "$LEDGER_SQUADS_VAULT" \
   --fee-budget-lamports 50000000
@@ -125,7 +125,7 @@ buffer. It sends no transactions and reads no signing keys.
 For size and live rent inspection before a production identity is selected:
 
 ```bash
-python3 scripts/ledger/mainnet.py inspect
+python3 scripts/ledgers/mainnet.py inspect
 ```
 
 The October 2 quote for the current 408,096-byte build was **2.074839640 SOL**
@@ -144,12 +144,12 @@ not run them. First compare the local key's public address with the release:
 export LEDGER_PROGRAM_ID="$(solana-keygen pubkey "$HOME/.config/cavalre/ledger-mainnet-program-keypair.json")"
 python3 - "$LEDGER_PROGRAM_ID" <<'PY'
 import json, sys
-with open("target/ledger-release/release.json") as file:
+with open("target/ledgers-release/release.json") as file:
     release = json.load(file)
 if sys.argv[1] != release["program_id"]:
     raise SystemExit("Program keypair does not match the release")
 PY
-cat target/ledger-release/release.json
+cat target/ledgers-release/release.json
 ```
 
 Deploy with explicit payer and authority, using exactly the reviewed allocation.
@@ -159,13 +159,13 @@ use `--final`, which permanently removes upgrade authority.
 ```bash
 solana --url "${LEDGER_RPC_URL:-https://api.mainnet-beta.solana.com}" \
   --keypair "$LEDGER_DEPLOYER_KEYPAIR" program deploy \
-  target/ledger-release/cavalre_ledgers_solana.so \
+  target/ledgers-release/cavalre_ledgers_solana.so \
   --program-id "$HOME/.config/cavalre/ledger-mainnet-program-keypair.json" \
   --upgrade-authority "$LEDGER_DEPLOYER_KEYPAIR" \
   --fee-payer "$LEDGER_DEPLOYER_KEYPAIR" \
-  --max-len "$(python3 -c 'import json; print(json.load(open("target/ledger-release/release.json"))["bytes"])')" \
+  --max-len "$(python3 -c 'import json; print(json.load(open("target/ledgers-release/release.json"))["bytes"])')" \
   --use-rpc
-python3 scripts/ledger/mainnet.py verify --upgrade-authority "$LEDGER_PAYER"
+python3 scripts/ledgers/mainnet.py verify --upgrade-authority "$LEDGER_PAYER"
 ```
 
 After the deployment is finalized and the binary matches, register the program
@@ -181,7 +181,7 @@ solana --url "${LEDGER_RPC_URL:-https://api.mainnet-beta.solana.com}" \
   --upgrade-authority "$LEDGER_DEPLOYER_KEYPAIR" \
   --new-upgrade-authority "$LEDGER_SQUADS_VAULT" \
   --skip-new-upgrade-authority-signer-check
-python3 scripts/ledger/mainnet.py verify --upgrade-authority "$LEDGER_SQUADS_VAULT"
+python3 scripts/ledgers/mainnet.py verify --upgrade-authority "$LEDGER_SQUADS_VAULT"
 ```
 
 `verify` checks finalized loader ownership, executable state, the expected

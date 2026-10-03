@@ -13,7 +13,7 @@ no-entrypoint = []
 
 [dependencies]
 anchor-lang = "=1.2.0"
-cavalre-ledgers-solana = { path = "../../crates/ledger-solana", features = ["no-entrypoint"] }
+cavalre-ledgers-solana = { path = "../../crates/cavalre-ledgers-solana", features = ["no-entrypoint"] }
 spl-token-2022-interface = "=3.1.2"
 spl-transfer-hook-interface = "=2.1.0"
 
