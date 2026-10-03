@@ -88,5 +88,5 @@ applications remain in that repository and consume the shared accounting crate.
 
 Crates.io publication is disabled pending an explicit release and license
 selection. Internal package dependencies include versions and local paths;
-consumers can pin this repository by Git revision in the meantime. CI in another
-private repository needs read access to this repository to resolve that pin.
+consumers can pin this public repository by Git revision in the meantime.
+Fetching that dependency requires no GitHub credentials or repository secrets.

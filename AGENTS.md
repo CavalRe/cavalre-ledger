@@ -23,5 +23,7 @@
 - Preserve the pinned Rust, Agave and platform-tools versions. Stack-limit
   diagnostics are build failures even if the compiler exits successfully.
 - Test consumers and simulation identities are not deployment targets.
-- Do not publish crates, make the repository public, deploy programs, introduce
-  signing keys or change upgrade authority without explicit user authorization.
+- This repository is public. Keep credentials and private operational material
+  out of source control.
+- Do not publish crates, deploy programs, introduce signing keys or change
+  upgrade authority without explicit user authorization.
