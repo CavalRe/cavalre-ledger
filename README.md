@@ -11,8 +11,7 @@ service and a Solana adapter.
 
 The core depends only on the accounting kernel. Both are `no_std` with `alloc`.
 The Solana adapter depends on the core; portable consumers do not need Anchor
-or a Solana SDK. SR, Multiswap economics and validator admission are consuming
-applications, not Ledger dependencies.
+or a Solana SDK.
 
 ## Use the core
 
