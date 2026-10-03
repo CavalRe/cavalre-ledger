@@ -1,20 +1,18 @@
 # Solidity contracts
 
-This directory is the home for the standalone EVM implementation of CavalRe
-Ledgers. The repository layout and Foundry configuration are ready; the EVM
-contracts and deployment architecture have not yet been implemented or selected.
+| Contract | Responsibility |
+| --- | --- |
+| `Ledgers.sol` | Namespaces, immutable account topology, controller consent, journal postings and ERC20 claim accounting |
+| `LedgerVault.sol` | One immutable ERC20 vault per namespace/token; only its Ledgers service can release collateral |
 
-Use the [accounting model](../docs/ACCOUNTING.md),
-[portable service rules](../docs/LEDGER_CORE.md), and shared fixtures in
-[`spec/fixtures/`](../spec/fixtures/) as the behavioral reference. EVM storage,
-authorization and custody adapters must enforce those rules using EVM-native
-mechanisms.
+Read the [EVM interface](../docs/LEDGER_EVM.md) for operations, authorization,
+examples, limitations and verification. The [accounting model](../docs/ACCOUNTING.md)
+and [portable service rules](../docs/LEDGER_CORE.md) are the behavioral reference.
 
-The root `foundry.toml` uses Solidity 0.8.26 and Cancun, matching the pinned
-Solidity reference. Run Foundry from the repository root; tests belong in
-[`tests/solidity/`](../tests/solidity/), and generated output stays under
-`target/solidity/`.
+Use root `foundry.toml` and `bash scripts/check-solidity.sh`. Solidity 0.8.26
+targets Cancun; tests live under `tests/solidity/`, and generated files under
+`target/solidity/`. The implementation has no third-party Solidity dependencies.
 
-The pinned `reference/cavalre-contracts` checkout and `tests/reference` fixture
-generator remain separate, read-only specification inputs. They are not sources
-or dependencies of this Foundry project.
+`reference/cavalre-contracts` is a pinned, read-only specification checkout,
+separate from this implementation and its build. This port does not migrate
+existing accounts or replace the original Dispatcher module in place.

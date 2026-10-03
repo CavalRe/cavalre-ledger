@@ -9,6 +9,19 @@ concurrency:
   group: ledger-${{ github.ref }}
   cancel-in-progress: true
 jobs:
+  solidity:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pinned Foundry
+        run: |
+          bash scripts/install-foundry.sh
+          echo "$PWD/target/toolchains/foundry" >> "$GITHUB_PATH"
+      - name: Check EVM controllers, accounting, custody and shared fixtures
+        run: bash scripts/check-solidity.sh
   portable:
     runs-on: ubuntu-24.04
     steps:

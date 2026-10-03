@@ -1,12 +1,21 @@
 # Solidity tests
 
-Place the standalone EVM implementation's Foundry tests here, using the `.t.sol`
-suffix. Run `forge test` from the repository root with Foundry 1.8.3.
+Run `bash scripts/check-solidity.sh` from the repository root with Foundry 1.8.3.
+`forge test` runs only this Solidity suite. The small `Vm` interface in
+`TestBase.sol` exposes Foundry cheatcodes without a third-party test dependency.
 
-No Solidity implementation tests exist yet. As the contracts are implemented,
-replay the shared fixtures in `spec/fixtures/` and cover authorization, hierarchy,
-exact custody settlement and atomic rollback. Any fixture read permissions or
-test dependencies should be added explicitly when needed.
+- `Controllers.t.sol`: namespace and parent authority, exact joint consent,
+  expiry/revocation, replay prevention, closure/recreation and contract controllers.
+- `Accounting.t.sol`: gross double-entry balances, depth bounds, immutable
+  hierarchy, shared-ancestor cancellation, closure and fuzzed conservation.
+- `Custody.t.sol`: claim permissions, namespace vault isolation, solvency,
+  exact sender/recipient deltas, token failure and reentrancy rollback.
+- `Reference.t.sol`: all 162 hierarchy and 138 custody actions in the shared
+  fixtures, including every observed rejection and post-action balance. Group
+  aggregates, gross supply, collateral and conservation are checked separately.
 
-`tests/reference/` is the separate generator for the pinned Solidity baseline;
-it is not included in this test suite.
+Fixture reads are the only enabled filesystem permission. The source fixtures
+and their commit pin are read directly; no copies or edited expectations are used.
+`tests/reference/` remains the separate generator for the pinned baseline.
+
+`TestToken` and `ControllerApp` are test fixtures and are not deployment targets.
