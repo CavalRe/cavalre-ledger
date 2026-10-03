@@ -81,11 +81,6 @@ must never be deployed.
 - [Solana custody, controller and token policy](docs/OMNIBUS_LEDGER.md)
 - [Solana release and deployment preparation](docs/LEDGER_MAINNET.md)
 
-The implementation was extracted from `CavalRe/cavalre-solana` at
-`cdd98ab33f472ec289bda88384511253e9f3c063`; source pins are recorded in
-`spec/upstream.json`. The older bundled Ledger/SR prototype and Multiswap
-applications remain in that repository and consume the shared accounting crate.
-
 Crates.io publication is disabled pending an explicit release and license
 selection. Internal package dependencies include versions and local paths;
 consumers can pin this public repository by Git revision in the meantime.
