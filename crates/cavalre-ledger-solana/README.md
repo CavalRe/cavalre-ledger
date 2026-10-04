@@ -2,8 +2,9 @@
 
 Fresh implementation based on the original `cavalre-contracts` LedgerLib at
 `34d159ff4e88fdfdee16738d9a1228f0bf407212`. This crate does not use the previous
-controller service or accounting kernel. The plural `cavalre-ledgers-solana`
-crate remains the earlier prototype; this singular crate is the new draft.
+controller service or accounting kernel. This is the only active implementation.
+The earlier prototype is available in Git history; see
+[the porting notes](../../docs/PORTING.md) for reusable Solana pieces.
 
 This first slice implements account identity, effective flags, ledger lookup
 and custody resolution. It is a library, not yet an executable Solana program.

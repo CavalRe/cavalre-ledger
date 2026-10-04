@@ -1,93 +1,56 @@
-# CavalRe Ledgers
+# CavalRe Ledger
 
-Hierarchical double-entry accounting and omnibus custody. Development currently
-focuses on Solana; the standalone Solidity implementation is deferred.
+A Solana implementation based on the original Solidity Ledger. The active code
+is in [`crates/cavalre-ledger-solana`](crates/cavalre-ledger-solana).
 
-The fresh Solidity-faithful Solana draft is in
-[`crates/cavalre-ledger-solana`](crates/cavalre-ledger-solana/README.md).
-It currently covers account resolution only; the earlier implementation remains
-separate while the new program is developed.
+The draft currently implements account identity, inherited effective flags,
+ledger lookup and custody resolution in `src/ledger_lib.rs`, corresponding to
+`cavalre-contracts/modules/ledger/LedgerLib.sol`. Transfers, persistent account
+storage and program instructions are still to come. It is not deployable yet.
 
-## Repository layout
+Preserve the original accounting and recognizable module structure while
+adapting storage, addresses and authorization to Solana. Standalone Solidity
+work is deferred until this implementation settles.
+
+## Layout
 
 | Path | Purpose |
 | --- | --- |
-| `crates/` | Rust accounting kernel, portable service, and Solana adapter |
-| `tests/integration/`, `tests/solana-consumer/` | Solana runtime and consumer tests |
-| `docs/` | Shared behavioral specifications and platform-specific documentation |
-| `spec/fixtures/` | Shared accounting and custody reference fixtures |
-| `tests/reference/`, `reference/` | Isolated Solidity fixture generator and pinned source |
+| `crates/cavalre-ledger-solana/src/ledger_lib.rs` | Port of the original LedgerLib helpers |
+| `crates/cavalre-ledger-solana/tests/` | Tests for the active implementation |
+| `docs/PORTING.md` | Source baseline, module mapping and reusable work in Git history |
+| `reference/`, `tests/reference/`, `spec/fixtures/` | Original Solidity reference and fixture generation |
+| `scripts/` | Validation, pinned tool installation and reference tooling |
 
-The Rust workspace is configured by the root `Cargo.toml`; generated output
-stays under ignored `target/`. Solidity remains only as reference material and
-an isolated fixture generator for checking the original behavior.
+The previous controller-based implementation is removed from the working tree.
+Its code and tests remain available in Git history.
 
-## Rust crates
+## Verify
 
-| Crate | Responsibility |
-| --- | --- |
-| `cavalre-ledgers-kernel` | Checked posting arithmetic and hierarchy validation; no authorization or storage |
-| `cavalre-ledgers-core` | Controller permissions, namespace/account lifecycle, journal and claim transfers, custody accounting |
-| `cavalre-ledgers-solana` | Solana program and CPI interface, authenticated accounts, native tokens and atomic execution |
-
-The core depends only on the accounting kernel. Both are `no_std` with `alloc`.
-The Solana adapter depends on the core; portable consumers do not need Anchor
-or a Solana SDK.
-
-## Use the core
-
-```rust
-use cavalre_ledgers_core::{Authorization, RootKind, create_root, initialize_namespace};
-
-fn main() -> Result<(), cavalre_ledgers_core::Error> {
-    let creator = [1; 32]; // identity already authenticated by the host
-    let signers = [creator];
-    let auth = Authorization::from_verified_signers(&signers);
-    let namespace = initialize_namespace([2; 32], creator, auth)?;
-    let journal = create_root(&namespace, [3; 32], RootKind::Journal, auth)?;
-    // Persist the namespace and journal atomically in the host's storage.
-    Ok(())
-}
-```
-
-The host loads current authenticated records and atomically applies successful
-plans. See [the complete adapter contract](docs/LEDGER_CORE.md) before integrating
-storage or transaction authorization. The arithmetic kernel alone grants no
-spending permissions.
-
-For Solana clients, depend on `cavalre-ledgers-solana` with `cpi` for Anchor CPI
-or `no-entrypoint` for instruction/account types. Its Rust import is
-`cavalre_ledgers_solana`; the built program is `cavalre_ledgers_solana.so`.
-The simulation program ID, instruction discriminators and account layouts are
-unchanged by the extraction and package rename.
-
-## Build and verify
-
-### Rust and Solana
-
-Host Rust is pinned to **1.98.1**. The default workspace members are the portable
-crates, so these commands require no Solana toolchain:
+Host Rust is pinned to **1.98.1**, including rustfmt and Clippy.
 
 ```bash
-cargo test --locked
-cargo clippy -p cavalre-ledgers-kernel -p cavalre-ledgers-core --all-targets --locked -- -D warnings
+bash scripts/check.sh
 ```
 
-To verify the Solana adapter, install pinned Agave **4.3.0** and run the full
-gate. It compiles actual sBPF artifacts with platform-tools **v1.57**, tests the
-external application consumer, and runs the host, runtime and release-helper
-suites:
+This formats-checks, lints and tests the active workspace. It does not claim to
+run a Solana program: no executable program exists in this draft yet.
+
+The pinned Agave **4.3.0** installer and sBPF build helper remain for the program
+stage. The helper uses platform-tools **v1.57** and rejects stack-limit warnings:
 
 ```bash
 bash scripts/install-agave.sh
 export PATH="$PWD/target/toolchains/solana-release/bin:$PATH"
-bash scripts/check.sh
+# Once an executable program exists:
+# bash scripts/build-sbf.sh <program/Cargo.toml>
 ```
 
-### Shared reference fixtures
+## Original reference
 
-The fixture baseline contains 162 hierarchy and 138 custody actions from pinned
-Solidity code. Reproduce it with Foundry **1.8.3**:
+The Solidity reference and saved accounting fixtures are comparison material,
+not an implementation dependency. The draft's current tests do not yet replay
+the saved posting fixtures. To reproduce those fixtures with Foundry **1.8.3**:
 
 ```bash
 git submodule update --init reference/cavalre-contracts
@@ -96,18 +59,5 @@ export PATH="$PWD/target/toolchains/foundry:$PATH"
 bash scripts/reference.sh
 ```
 
-The reference checkout is read-only specification material. Successful tests
-are not an audit or deployment. All test consumers have `publish = false` and
-must never be deployed.
-
-## Documentation and releases
-
-- [Portable core and host adapter contract](docs/LEDGER_CORE.md)
-- [Accounting model](docs/ACCOUNTING.md)
-- [Solana custody, controller and token policy](docs/OMNIBUS_LEDGER.md)
-- [Solana release and deployment preparation](docs/LEDGER_MAINNET.md)
-
-Crates.io publication is disabled pending an explicit release and license
-selection. Internal package dependencies include versions and local paths;
-consumers can pin this public repository by Git revision in the meantime.
-Fetching that dependency requires no GitHub credentials or repository secrets.
+See the [crate README](crates/cavalre-ledger-solana/README.md) for implemented
+behavior. Publication and deployment require an explicit release decision.

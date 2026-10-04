@@ -9,46 +9,13 @@ concurrency:
   group: ledger-${{ github.ref }}
   cancel-in-progress: true
 jobs:
-  solana-draft:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Install pinned Rust
-        run: rustup toolchain install 1.98.1 --profile minimal --component rustfmt --component clippy
-      - name: Check fresh Solana Ledger draft
-        run: |
-          cargo fmt -p cavalre-ledger-solana -- --check
-          cargo clippy -p cavalre-ledger-solana --all-targets --locked -- -D warnings
-          cargo test -p cavalre-ledger-solana --locked
-  portable:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Install pinned Rust
-        run: rustup toolchain install 1.98.1 --profile minimal --component rustfmt --component clippy
-      - name: Check the portable crates without Solana tooling
-        run: |
-          cargo clippy -p cavalre-ledgers-kernel -p cavalre-ledgers-core --all-targets --locked -- -D warnings
-          cargo test --locked
   solana:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    env:
-      CARGO_BUILD_JOBS: 4
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          submodules: false
-      - name: Install pinned host Rust
+      - name: Install pinned Rust
         run: rustup toolchain install 1.98.1 --profile minimal --component rustfmt --component clippy
-      - name: Install pinned Agave
-        run: |
-          bash scripts/install-agave.sh
-          echo "$PWD/target/toolchains/solana-release/bin" >> "$GITHUB_PATH"
-      - name: Build sBPF and test accounting, authority and custody
+      - name: Check Solidity-inspired Solana Ledger
         run: bash scripts/check.sh
