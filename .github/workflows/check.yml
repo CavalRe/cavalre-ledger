@@ -17,5 +17,9 @@ jobs:
           persist-credentials: false
       - name: Install pinned Rust
         run: rustup toolchain install 1.98.1 --profile minimal --component rustfmt --component clippy
-      - name: Check reusable Ledger core and Solana adapter
+      - name: Install pinned Agave
+        run: |
+          bash scripts/install-agave.sh
+          echo "$PWD/target/toolchains/solana-release/bin" >> "$GITHUB_PATH"
+      - name: Check reusable Ledger core and Solana program
         run: bash scripts/check.sh

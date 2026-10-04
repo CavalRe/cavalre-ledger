@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/cavalre-ledger-core", "crates/cavalre-ledger-solana"]
+members = ["crates/cavalre-ledger-core", "crates/cavalre-ledger-solana", "tests/runtime", "tests/consumer"]
 default-members = ["crates/cavalre-ledger-core", "crates/cavalre-ledger-solana"]
 resolver = "2"
 

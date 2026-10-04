@@ -20,9 +20,8 @@
   and signatures; never trust client-supplied flags or account snapshots.
 - Distinguish storage allocation from logical registration. Preserve atomic
   accounting and custody settlement, checked arithmetic and backing checks.
-- Run `bash scripts/check.sh` for active Rust changes. Once program instructions
-  exist, use freshly built sBPF for runtime tests. `scripts/build-sbf.sh` retains
-  the pinned build and stack-limit checks; no runtime coverage is claimed yet.
+- Run `bash scripts/check.sh` for active Rust changes. Runtime tests must use freshly built sBPF, including the test consumer.
+  `scripts/build-sbf.sh` enforces the pinned build and stack-limit checks.
 - Preserve pinned Rust, Agave and platform-tools versions. Run
   `bash scripts/reference.sh` for reference-affecting changes.
 - See `docs/PORTING.md` before recovering old plumbing or tests. Adapt them to the

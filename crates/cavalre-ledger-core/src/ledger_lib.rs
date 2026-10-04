@@ -54,6 +54,12 @@ pub enum Error {
     DifferentRoots,
     InvalidAddress,
     DepthOverflow,
+    InvalidLedgerAccount,
+    InsufficientBalance,
+    Overflow,
+    Unauthorized,
+    NonemptyAccount,
+    RegistrationRequired,
 }
 
 /// Host-specific deterministic address derivation. The implementation must bind
@@ -135,4 +141,183 @@ pub fn custody<A: Copy + Eq>(
         return Err(Error::DifferentRoots);
     }
     Ok((store.relative(&custodian)?, flags.account_kind.is_credit()))
+}
+
+/// Current gross balances, not cumulative transaction totals.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Balances {
+    pub debit: u128,
+    pub credit: u128,
+}
+
+pub trait AccountingStore<A>: Store<A> {
+    fn balances(&self, absolute: &A) -> Result<Balances, Error>;
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Endpoint<A> {
+    pub relative: A,
+    pub flags: Flags<A>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BalanceChange<A> {
+    pub absolute: A,
+    pub before: Balances,
+    pub after: Balances,
+}
+
+/// Original depth-aligned transfer walk. Callers resolve effective flags and
+/// authorize the operation first. The returned writes must be committed
+/// atomically against the same authenticated state, including native settlement.
+/// Staging writes avoids partial host mutations on a late arithmetic failure.
+/// This internal posting preserves the original same-account no-op behavior;
+/// public debit transfers must check funds before invoking it.
+pub fn transfer<A: Copy + Eq>(
+    store: &impl AccountingStore<A>,
+    addresses: &impl AddressDerivation<A>,
+    ledger_address: &A,
+    from: Endpoint<A>,
+    to: Endpoint<A>,
+    amount: u128,
+) -> Result<alloc::vec::Vec<BalanceChange<A>>, Error> {
+    let mut changes = alloc::vec::Vec::new();
+    if from.flags.account_kind.is_group() || to.flags.account_kind.is_group() {
+        return Err(Error::InvalidLedgerAccount);
+    }
+    let mut from_address = addresses.to_address(&from.flags.parent, &from.relative);
+    let mut to_address = addresses.to_address(&to.flags.parent, &to.relative);
+    if from_address == to_address {
+        return Ok(changes);
+    }
+    let from_credit = from.flags.account_kind.is_credit();
+    let to_credit = to.flags.account_kind.is_credit();
+    let mut from_flags = from.flags;
+    let mut to_flags = to.flags;
+    let mut depth = from_flags.depth.max(to_flags.depth);
+    if from_flags.depth < 3 || to_flags.depth < 3 {
+        return Err(Error::InvalidLedgerAccount);
+    }
+    loop {
+        if from.flags.depth >= depth {
+            update(
+                store,
+                &mut changes,
+                from_address,
+                from_credit,
+                from_credit,
+                amount,
+            )?;
+            if depth > 2 {
+                (from_address, from_flags) = ancestor(store, ledger_address, from_flags)?;
+            }
+        }
+        if to.flags.depth >= depth {
+            update(
+                store,
+                &mut changes,
+                to_address,
+                to_credit,
+                !to_credit,
+                amount,
+            )?;
+            if depth > 2 {
+                (to_address, to_flags) = ancestor(store, ledger_address, to_flags)?;
+            }
+        }
+        if depth == 2 || (from_address == to_address && from_credit == to_credit) {
+            return Ok(changes);
+        }
+        depth -= 1;
+    }
+}
+
+fn ancestor<A: Copy + Eq>(
+    store: &impl Store<A>,
+    ledger_address: &A,
+    child: Flags<A>,
+) -> Result<(A, Flags<A>), Error> {
+    let parent = store
+        .flags(&child.parent)?
+        .ok_or(Error::InvalidAccountGroup)?;
+    if !parent.account_kind.is_group() || parent.depth.checked_add(1) != Some(child.depth) {
+        return Err(Error::InvalidAccountGroup);
+    }
+    if parent.depth < 2 || (parent.depth == 2 && child.parent != *ledger_address) {
+        return Err(Error::DifferentRoots);
+    }
+    Ok((child.parent, parent))
+}
+
+fn update<A: Copy + Eq>(
+    store: &impl AccountingStore<A>,
+    changes: &mut alloc::vec::Vec<BalanceChange<A>>,
+    absolute: A,
+    credit: bool,
+    increase: bool,
+    amount: u128,
+) -> Result<(), Error> {
+    let index = if let Some(index) = changes.iter().position(|c| c.absolute == absolute) {
+        index
+    } else {
+        let before = store.balances(&absolute)?;
+        changes.push(BalanceChange {
+            absolute,
+            before,
+            after: before,
+        });
+        changes.len() - 1
+    };
+    let balances = &mut changes[index].after;
+    let balance = if credit {
+        &mut balances.credit
+    } else {
+        &mut balances.debit
+    };
+    *balance = if increase {
+        balance.checked_add(amount).ok_or(Error::Overflow)?
+    } else {
+        balance
+            .checked_sub(amount)
+            .ok_or(Error::InsufficientBalance)?
+    };
+    Ok(())
+}
+
+/// Custodian identity must already be authenticated by the host. This is not
+/// signature verification and cannot turn an instruction argument into authority.
+pub fn enforce_is_custodian<A: Copy + Eq>(
+    store: &impl Store<A>,
+    ledger_address: &A,
+    account: Endpoint<A>,
+    authority: &A,
+) -> Result<(), Error> {
+    if custody(store, ledger_address, account.flags, &account.relative)?.0 != *authority {
+        return Err(Error::Unauthorized);
+    }
+    Ok(())
+}
+
+/// Public same-custodian debit transfer, including checks before self no-ops.
+pub fn transfer_debits<A: Copy + Eq>(
+    store: &impl AccountingStore<A>,
+    addresses: &impl AddressDerivation<A>,
+    ledger_address: &A,
+    from: Endpoint<A>,
+    to: Endpoint<A>,
+    authority: &A,
+    amount: u128,
+) -> Result<alloc::vec::Vec<BalanceChange<A>>, Error> {
+    if from.flags.account_kind != AccountKind::DebitLedger
+        || to.flags.account_kind != AccountKind::DebitLedger
+    {
+        return Err(Error::InvalidLedgerAccount);
+    }
+    enforce_is_custodian(store, ledger_address, from, authority)?;
+    enforce_is_custodian(store, ledger_address, to, authority)?;
+    let absolute = addresses.to_address(&from.flags.parent, &from.relative);
+    if store.balances(&absolute)?.debit < amount {
+        return Err(Error::InsufficientBalance);
+    }
+    transfer(store, addresses, ledger_address, from, to, amount)
 }

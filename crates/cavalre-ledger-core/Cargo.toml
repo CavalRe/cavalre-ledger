@@ -6,3 +6,6 @@ rust-version.workspace = true
 publish.workspace = true
 repository.workspace = true
 description = "Platform-independent Ledger rules based on the original LedgerLib"
+
+[dev-dependencies]
+serde_json = "1"

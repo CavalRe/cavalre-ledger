@@ -8,14 +8,14 @@ proof of complete parity with this baseline.
 
 | Solidity module | Rust module | Status |
 | --- | --- | --- |
-| `LedgerLib.sol` | `cavalre-ledger-core/src/ledger_lib.rs` | Identity, effective flags and custody lookup implemented; accounting pending |
-| `Ledger.sol` | `ledger.rs` | Planned program operations; not created yet |
-| `LedgerView.sol` | `ledger_view.rs` | Planned read interface; not created yet |
+| `LedgerLib.sol` | `cavalre-ledger-core/src/ledger_lib.rs` | Identity, effective flags, custody lookup and posting walk implemented |
+| `Ledger.sol` | `ledger.rs` | Account management, transfer and custody operations implemented |
+| `LedgerView.sol` | `ledger_view.rs` | Account and gross-balance read helpers implemented |
 
 The reusable core holds shared rules without platform dependencies.
 `cavalre-ledger-solana/src/ledger_lib.rs` supplies PDA derivation and forwards to
 the core. Address types are host-defined; the core does not impose Solana keys.
-The pure accounting portion will remain in the core rather than a separate
+The pure accounting portion remains in the core rather than a separate
 kernel crate for now.
 
 Keep corresponding functions in recognizable order and use Rust naming

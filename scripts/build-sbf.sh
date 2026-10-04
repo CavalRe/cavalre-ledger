@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Use once the draft has an executable program; this does not deploy it.
+# Build an executable program and reject stack-limit diagnostics; never deploy.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 manifest="${1:?Usage: bash scripts/build-sbf.sh <program/Cargo.toml>}"

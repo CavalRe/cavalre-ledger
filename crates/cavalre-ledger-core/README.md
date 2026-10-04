@@ -1,8 +1,8 @@
 # Ledger core
 
 Platform-independent rules based on the original Solidity `LedgerLib.sol` at
-`34d159ff4e88fdfdee16738d9a1228f0bf407212`. This crate is `no_std`, uses no heap
-allocation, and has no dependencies. It does not use the removed controller
+`34d159ff4e88fdfdee16738d9a1228f0bf407212`. This crate is `no_std`, has no runtime dependencies. Posting changes use `alloc::Vec` so arithmetic
+failures do not partially mutate host storage. It does not use the removed controller
 implementation.
 
 `src/ledger_lib.rs` retains the original names and responsibilities in Rust
@@ -27,9 +27,14 @@ The Solana adapter supplies PDA derivation and public keys. The tests here use
 an independent in-memory host and test-only integer identities, without a
 Solana SDK. Those test identities are not a production address scheme.
 
-The original posting arithmetic and ancestor walk will be added here next.
-There is no separate kernel crate for now. Account mutations, permissions and
-token settlement are not implemented in this slice.
+The original posting arithmetic and ancestor walk live in `transfer`.
+`transfer_debits` enforces same-custodian debit transfers and checks funds before
+self-transfer no-ops. Hosts must commit returned balance changes atomically
+against the same state. The Solana program supplies account lifecycle, native
+signer validation and token settlement. There is no separate kernel crate.
+
+Balances and posting amounts use checked `u128`. Native SPL movement uses `u64`;
+wide internal values never truncate into native token transfers.
 
 ```bash
 cargo test -p cavalre-ledger-core --locked
