@@ -581,6 +581,17 @@ pub fn remove_account<'info>(
         relative != SOURCE || parent != *root.key,
         LedgerError::Unauthorized
     );
+    // Original LedgerLib validates the parent even when removal is a no-op.
+    // Resolve directly rather than applying monetary admission policy: removing
+    // an unregistered target remains a no-op beneath a registered-only group.
+    core::effective_flags(
+        &before,
+        &PdaAddresses(&crate::ID),
+        root.key,
+        &parent,
+        &relative,
+    )
+    .map_err(|_| error!(LedgerError::InvalidAccount))?;
     let key = to_address(&crate::ID, &parent, &relative).0;
     let Some(r) = before.optional(&key) else {
         return Ok(());

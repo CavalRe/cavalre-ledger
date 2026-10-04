@@ -54,6 +54,11 @@ issuance, implicit receipts, parent admission, account lifecycle, token custody,
 application isolation, PDA authority, and transaction rollback. This is not the
 full original Solidity test suite or a security audit.
 
+The suite contains **30 test functions**, including **17 sBPF runtime tests**.
+One core test replays the 162 saved posting cases; those are not 162 separate
+test functions. See [acceptance coverage](docs/ACCEPTANCE.md) for the exercised
+requirements and remaining validation work.
+
 See [program usage and limitations](crates/cavalre-ledger-solana/README.md)
 before attempting deployment. The checked-in program ID is for local simulation.
 

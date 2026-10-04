@@ -842,11 +842,13 @@ dependencies = [
  "solana-account",
  "solana-address 2.6.1",
  "solana-instruction",
+ "solana-instruction-error",
  "solana-keypair",
  "solana-program-option",
  "solana-program-pack",
  "solana-signer",
  "solana-transaction",
+ "solana-transaction-error",
  "spl-token-interface 3.0.0",
 ]
 

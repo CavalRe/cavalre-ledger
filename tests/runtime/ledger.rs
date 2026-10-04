@@ -11,6 +11,7 @@ use solana_program_pack::Pack;
 use solana_signer::Signer;
 use solana_transaction::Transaction;
 use spl_token_interface::state::{Account as TokenAccount, AccountState, Mint};
+mod acceptance;
 const SYSTEM: Address = address!("11111111111111111111111111111111");
 const TOKEN: Address = address!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 fn ap(a: Address) -> anchor_lang::prelude::Pubkey {
