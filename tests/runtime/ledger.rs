@@ -457,6 +457,22 @@ fn external_token_deposit_transfer_withdraw_and_isolation() {
     ));
     assert_eq!(h.token(vault), 10);
     assert_eq!(h.record(a).debit, 60);
+    // Read actual persisted program records even while custody cannot satisfy a
+    // withdrawal. Inspection has no signer, token settlement or mutation gate.
+    let mut reader = ledger::ledger_view::Reader::new();
+    for key in [root, source, group, a, b] {
+        let snapshot = h.svm.get_account(&key).unwrap();
+        reader
+            .insert(ap(key), &ap(snapshot.owner), &snapshot.data)
+            .unwrap();
+    }
+    assert_eq!(
+        reader
+            .balance_of(&ap(root), &ap(group), &ap(h.key(1)))
+            .unwrap(),
+        60
+    );
+    assert_eq!(reader.total_supply(&ap(root)).unwrap(), 60);
 }
 
 #[test]

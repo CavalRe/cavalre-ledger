@@ -5,8 +5,10 @@ artifacts before running tests. Runtime tests load those artifacts into LiteSVM;
 they do not substitute native Rust handlers. This is local runtime validation,
 not a deployed-cluster test or a security audit.
 
-There are 38 test functions: 15 core tests (including eight independent host
-tests), six Solana address/effective-flag tests, and 17 runtime tests.
+There are 49 test functions: 22 core tests (including eight independent host
+tests and seven view tests), six Solana address/effective-flag tests, four Solana
+view tests and 17 runtime tests. View suites also run with mutations excluded;
+those repeat executions are not additional test functions.
 One core test replays all 162 saved Solidity posting
 cases, including expected rejections and every node's resulting gross balances.
 
@@ -46,6 +48,14 @@ Injected short settlement and late commit failure test the host's rollback
 contract across both token movement and ledger writes. The unchanged Solana
 runtime acceptance suite also passes through this shared service.
 
+The read suites compile independently of the mutating `ledger` modules. They
+exercise registered and implicit properties, restricted-parent visibility,
+gross/net/supply semantics, confirmed absence versus missing input, enumeration
+completeness and decoder rejection. The Solana fixture supplies only readonly,
+nonsigner accounts and verifies that neither bytes nor lamports change. A runtime
+test also reads actual persisted records after a withdrawal is rejected for
+insufficient total backing.
+
 ## Regression fixed
 
 Removal previously returned success for an absent target before validating its
@@ -59,8 +69,10 @@ apply monetary admission policy to removal.
 - This does not port every original Solidity test or establish complete spec
   conformance. Randomized operation sequences and broader adversarial review
   remain useful additional coverage.
-- Query/event compatibility remains implementation work. Shared account
-  lifecycle, admission, authority and settlement policy now live in the core.
+- Core balance/account query semantics and the independent read boundary are
+  implemented. Token/native metadata parity, a complete Solana root-discovery
+  client and event compatibility remain; see READS.md. Shared account lifecycle,
+  admission, authority and settlement policy live in the core.
 - Practical depth limits, compute usage, transaction size, rent costs and
   concurrency have not been characterized. Instructions still lock the root
   writable.

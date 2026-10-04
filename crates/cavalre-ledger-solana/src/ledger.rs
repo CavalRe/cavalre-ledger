@@ -1,57 +1,10 @@
 //! Solana host for the shared Ledger service. Owns runtime authentication,
 //! account encoding/allocation, token calls and transaction rollback integration.
-use crate::ledger_lib::to_address;
+pub use crate::ledger_lib::{decode, root_address, LedgerError, Record, SOURCE};
+use crate::ledger_lib::{to_address, MAGIC, SPACE};
 use anchor_lang::{prelude::*, system_program};
 use anchor_spl::token::{self, Mint, Token, TokenAccount, TransferChecked};
 use cavalre_ledger_core::{ledger as service, ledger_lib as core};
-
-pub const SOURCE: Pubkey = Pubkey::new_from_array([83; 32]);
-const MAGIC: &[u8; 8] = b"CVLEDG01";
-const SPACE: usize = 512;
-
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug, PartialEq, Eq)]
-pub struct Record {
-    pub root: Pubkey,
-    pub parent: Pubkey,
-    pub relative: Pubkey,
-    pub custodian: Pubkey,
-    pub kind: u8,
-    pub token_kind: u8,
-    pub depth: u8,
-    pub registered: bool,
-    pub implicit_allowed: bool,
-    pub children: u32,
-    pub debit: u128,
-    pub credit: u128,
-    pub name: String,
-    // Root-only identity: scope zero for an external mint, authority for internal units.
-    pub scope: Pubkey,
-    pub identifier: Pubkey,
-    pub bump: u8,
-}
-impl Record {
-    fn flags(&self) -> core::Flags<Pubkey> {
-        core::Flags {
-            parent: self.parent,
-            account_kind: match self.kind {
-                0 => core::AccountKind::DebitGroup,
-                1 => core::AccountKind::CreditGroup,
-                2 => core::AccountKind::DebitLedger,
-                _ => core::AccountKind::CreditLedger,
-            },
-            token_kind: if self.depth == 2 {
-                if self.scope == Pubkey::default() {
-                    core::TokenKind::External
-                } else {
-                    core::TokenKind::Internal
-                }
-            } else {
-                core::TokenKind::Unregistered
-            },
-            depth: self.depth,
-        }
-    }
-}
 
 #[derive(Accounts)]
 pub struct LedgerAccounts<'info> {
@@ -99,21 +52,6 @@ pub struct MoveTokens<'info> {
     pub system_program: Program<'info, System>,
 }
 
-#[error_code]
-pub enum LedgerError {
-    InvalidAccount,
-    Unauthorized,
-    InvalidKind,
-    Nonempty,
-    MetadataConflict,
-    InvalidName,
-    MissingAccount,
-    Accounting,
-    UnsupportedToken,
-    Settlement,
-    Undercollateralized,
-}
-
 #[derive(Clone)]
 struct State {
     records: Vec<(Pubkey, Record)>,
@@ -129,30 +67,6 @@ impl State {
     fn optional(&self, key: &Pubkey) -> Option<&Record> {
         self.records.iter().find(|(k, _)| k == key).map(|(_, v)| v)
     }
-}
-pub fn root_address(scope: &Pubkey, id: &Pubkey) -> (Pubkey, u8) {
-    Pubkey::find_program_address(&[b"ledger", scope.as_ref(), id.as_ref()], &crate::ID)
-}
-pub fn decode(info: &AccountInfo) -> Result<Record> {
-    require_keys_eq!(*info.owner, crate::ID, LedgerError::InvalidAccount);
-    let data = info.try_borrow_data()?;
-    require!(
-        data.len() == SPACE && &data[..8] == MAGIC,
-        LedgerError::InvalidAccount
-    );
-    let r =
-        Record::deserialize(&mut &data[8..]).map_err(|_| error!(LedgerError::InvalidAccount))?;
-    require!(
-        r.kind <= 3 && r.depth >= 2 && r.name.len() <= 64,
-        LedgerError::InvalidAccount
-    );
-    let key = if r.depth == 2 {
-        root_address(&r.scope, &r.identifier).0
-    } else {
-        to_address(&crate::ID, &r.parent, &r.relative).0
-    };
-    require_keys_eq!(key, *info.key, LedgerError::InvalidAccount);
-    Ok(r)
 }
 fn info<'a, 'info>(
     root: &'a AccountInfo<'info>,
@@ -394,27 +308,6 @@ impl service::Host<Pubkey> for SolanaHost<'_, '_> {
             return Err(core::Error::Unauthorized.into());
         }
         Ok(*account.key)
-    }
-    fn to_address(&self, parent: &Pubkey, relative: &Pubkey) -> Pubkey {
-        to_address(&crate::ID, parent, relative).0
-    }
-    fn account(
-        &self,
-        key: &Pubkey,
-    ) -> std::result::Result<Option<service::Account<Pubkey>>, core::Error> {
-        Ok(self.state.optional(key).map(|r| service::Account {
-            flags: r.flags(),
-            relative: r.relative,
-            custodian: r.custodian,
-            registered: r.registered,
-            implicit_allowed: r.implicit_allowed,
-            children: r.children,
-            balances: core::Balances {
-                debit: r.debit,
-                credit: r.credit,
-            },
-            name: r.name.clone(),
-        }))
     }
     fn put(
         &mut self,
@@ -674,4 +567,28 @@ pub struct AccountChanged {
     pub debit: u128,
     pub credit: u128,
     pub registered: bool,
+}
+
+impl core::AddressDerivation<Pubkey> for SolanaHost<'_, '_> {
+    fn to_address(&self, parent: &Pubkey, relative: &Pubkey) -> Pubkey {
+        to_address(&crate::ID, parent, relative).0
+    }
+}
+
+impl core::ReadStore<Pubkey> for SolanaHost<'_, '_> {
+    fn account(
+        &self,
+        key: &Pubkey,
+    ) -> std::result::Result<Option<service::Account<Pubkey>>, core::Error> {
+        if let Some(record) = self.state.optional(key) {
+            return Ok(Some(record.logical()));
+        }
+        let account =
+            info(&self.root_info, self.rest, key).map_err(|_| core::Error::MissingAccount)?;
+        if *account.owner == system_program::ID && account.data_is_empty() {
+            Ok(None)
+        } else {
+            Err(core::Error::InvalidAccount)
+        }
+    }
 }

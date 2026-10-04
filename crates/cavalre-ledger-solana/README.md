@@ -9,6 +9,12 @@ LedgerLib commit `34d159ff4e88fdfdee16738d9a1228f0bf407212`.
 | `Ledger.sol` | Core `ledger.rs` operations; Solana host in `ledger.rs` and entry points in `lib.rs` |
 | `LedgerView.sol` | `ledger_view.rs` |
 
+Read clients can depend on this crate with `default-features = false`. That
+excludes the mutation program and SPL call dependency. Shared `Record` decoding
+and PDA derivation live in `ledger_lib.rs`; `ledger_view::Reader` queries a
+validated account snapshot without invoking Ledger. Existing exports from
+`ledger` remain available when mutations are enabled. See [read usage](../../docs/READS.md).
+
 ## Accounts and authority
 
 Each entry point invokes the shared core service through `SolanaHost`. The host

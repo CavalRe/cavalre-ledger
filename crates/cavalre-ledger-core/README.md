@@ -11,6 +11,24 @@ Registered metadata takes precedence; implicit leaves inherit their parent's
 polarity and depth without registration. Custody resolution identifies an
 account's custodian; it does not authorize spending.
 
+## Independent read interface
+
+`ledger_view.rs` corresponds to `LedgerView.sol`. It depends only on the shared
+`ReadStore` and address derivation in `ledger_lib.rs`, with optional child/root
+indexes for enumeration. It has no dependency on `ledger.rs`, authentication,
+token settlement or commit. The mutation `Host` extends that read interface.
+
+Read queries resolve names, effective account flags, custody, gross/net balances,
+total supply and registered children. They validate identities and parent/ledger
+membership but do not enforce mutation permission or monetary admission. A
+restricted implicit leaf remains readable. `None` from `ReadStore::account`
+means confirmed absence; unavailable state must return an error.
+
+Build with `default-features = false` to exclude `ledger.rs`. Shared account
+types, LedgerLib primitives and LedgerView stay available. This supports removing
+the mutation module while keeping queries connected to the same stored state;
+it does not add a pause flag. See [query semantics and host integration](../../docs/READS.md).
+
 ## Service and host boundary
 
 `src/ledger.rs` corresponds to the public responsibilities of `Ledger.sol`.

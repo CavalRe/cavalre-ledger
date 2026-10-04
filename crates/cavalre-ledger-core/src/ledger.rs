@@ -3,35 +3,8 @@
 use crate::ledger_lib::{self as lib, AccountKind, Balances, Error, Flags, TokenKind};
 use alloc::{string::String, vec::Vec};
 
-/// Logical account state, independent of serialization and physical allocation.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Account<A> {
-    pub flags: Flags<A>,
-    pub relative: A,
-    pub custodian: A,
-    pub registered: bool,
-    pub implicit_allowed: bool,
-    pub children: u32,
-    pub balances: Balances,
-    pub name: String,
-}
-
-/// Host-authenticated root identity. `authority: None` means external custody;
-/// an accounting-only root has an explicit owner and no withdrawal entitlement.
-#[derive(Clone, Copy, Debug)]
-pub struct Root<A> {
-    pub address: A,
-    pub parent: A,
-    pub identifier: A,
-    pub source: A,
-    pub authority: Option<A>,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct Child<A> {
-    pub parent: A,
-    pub relative: A,
-}
+pub use lib::{Account, Child, Root};
+use lib::{ReadStore, StoreView as View};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Role {
@@ -64,12 +37,10 @@ pub struct TokenBalances<A> {
 /// On any error all effects except transaction fees must roll back. A runtime
 /// with transaction-wide rollback must propagate errors out of its entry point;
 /// it must not catch an error and commit the surrounding transaction.
-pub trait Host<A: Copy + Eq>: Sized {
+pub trait Host<A: Copy + Eq>: ReadStore<A> + Sized {
     type Error: From<Error>;
     fn root(&self) -> Root<A>;
     fn authenticate(&self, role: Role, command: &Command<A>) -> Result<A, Self::Error>;
-    fn to_address(&self, parent: &A, relative: &A) -> A;
-    fn account(&self, address: &A) -> Result<Option<Account<A>>, Error>;
     fn put(&mut self, address: A, account: Account<A>) -> Result<(), Self::Error>;
     fn token_balances(&mut self) -> Result<TokenBalances<A>, Self::Error>;
     fn move_tokens(&mut self, deposit: bool, amount: u128) -> Result<(), Self::Error>;
@@ -134,37 +105,6 @@ pub fn execute<A: Copy + Eq, H: Host<A>>(
     })
 }
 
-// Adapt the richer account view to the unchanged LedgerLib read interfaces.
-struct View<'a, H>(&'a H);
-impl<A: Copy + Eq, H: Host<A>> lib::Store<A> for View<'_, H> {
-    fn flags(&self, key: &A) -> Result<Option<Flags<A>>, Error> {
-        Ok(self
-            .0
-            .account(key)?
-            .filter(|a| a.registered)
-            .map(|a| a.flags))
-    }
-    fn custody_account(&self, key: &A) -> Result<Option<A>, Error> {
-        Ok(self
-            .0
-            .account(key)?
-            .filter(|a| a.registered && a.flags.depth > 2)
-            .map(|a| a.custodian))
-    }
-    fn relative(&self, key: &A) -> Result<A, Error> {
-        Ok(get(self.0, key)?.relative)
-    }
-}
-impl<A: Copy + Eq, H: Host<A>> lib::AccountingStore<A> for View<'_, H> {
-    fn balances(&self, key: &A) -> Result<Balances, Error> {
-        Ok(self.0.account(key)?.map(|a| a.balances).unwrap_or_default())
-    }
-}
-impl<A: Copy + Eq, H: Host<A>> lib::AddressDerivation<A> for View<'_, H> {
-    fn to_address(&self, parent: &A, relative: &A) -> A {
-        self.0.to_address(parent, relative)
-    }
-}
 fn get<A: Copy + Eq>(host: &impl Host<A>, key: &A) -> Result<Account<A>, Error> {
     host.account(key)?.ok_or(Error::MissingAccount)
 }

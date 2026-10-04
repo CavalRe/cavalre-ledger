@@ -126,12 +126,6 @@ impl Host<u64> for MemoryHost {
         };
         identity.ok_or(Failure::Rule(Error::Unauthorized))
     }
-    fn to_address(&self, parent: &u64, relative: &u64) -> u64 {
-        address(*parent, *relative)
-    }
-    fn account(&self, absolute: &u64) -> Result<Option<Account<u64>>, Error> {
-        Ok(self.accounts.get(absolute).cloned())
-    }
     fn put(&mut self, absolute: u64, account: Account<u64>) -> Result<(), Failure> {
         assert!(self.active);
         self.accounts.insert(absolute, account);
@@ -499,4 +493,16 @@ fn host_authentication_receives_the_requested_funding_terms() {
     assert_eq!((host.tokens.wallet, host.tokens.vault), (1000, 0));
     host.move_funds(parent, 40, true).unwrap();
     assert_eq!(host.balance(address(parent, USER)).debit, 40);
+}
+
+impl cavalre_ledger_core::ledger_lib::AddressDerivation<u64> for MemoryHost {
+    fn to_address(&self, parent: &u64, relative: &u64) -> u64 {
+        address(*parent, *relative)
+    }
+}
+
+impl cavalre_ledger_core::ledger_lib::ReadStore<u64> for MemoryHost {
+    fn account(&self, absolute: &u64) -> Result<Option<Account<u64>>, Error> {
+        Ok(self.accounts.get(absolute).cloned())
+    }
 }

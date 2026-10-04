@@ -2,6 +2,38 @@
 //! Shared accounting rules over host-authenticated state. No platform SDK,
 //! serialization format, account allocation or signature verification lives here.
 
+use alloc::string::String;
+
+/// Logical account state, independent of serialization and physical allocation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Account<A> {
+    pub flags: Flags<A>,
+    pub relative: A,
+    pub custodian: A,
+    pub registered: bool,
+    pub implicit_allowed: bool,
+    pub children: u32,
+    pub balances: Balances,
+    pub name: String,
+}
+
+/// Host-authenticated root identity. `authority: None` means external custody;
+/// an accounting-only root has an explicit owner and no withdrawal entitlement.
+#[derive(Clone, Copy, Debug)]
+pub struct Root<A> {
+    pub address: A,
+    pub parent: A,
+    pub identifier: A,
+    pub source: A,
+    pub authority: Option<A>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Child<A> {
+    pub parent: A,
+    pub relative: A,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AccountKind {
     DebitGroup,
@@ -69,6 +101,8 @@ pub enum Error {
     UnsupportedToken,
     Settlement,
     Undercollateralized,
+    IncompleteIndex,
+    InvalidIndex,
 }
 
 /// Host-specific deterministic address derivation. The implementation must bind
@@ -329,4 +363,43 @@ pub fn transfer_debits<A: Copy + Eq>(
         return Err(Error::InsufficientBalance);
     }
     transfer(store, addresses, ledger_address, from, to, amount)
+}
+
+/// State reads shared by queries and mutations. None means confirmed absence;
+/// omitted or unavailable state must return an error. Implementations validate
+/// owner, identity and ledger membership and read a consistent state snapshot.
+pub trait ReadStore<A: Copy + Eq>: AddressDerivation<A> {
+    fn account(&self, address: &A) -> Result<Option<Account<A>>, Error>;
+}
+
+/// Read-only adaptation to the original LedgerLib interfaces.
+pub struct StoreView<'a, S>(pub &'a S);
+impl<A: Copy + Eq, S: ReadStore<A>> Store<A> for StoreView<'_, S> {
+    fn flags(&self, key: &A) -> Result<Option<Flags<A>>, Error> {
+        Ok(self
+            .0
+            .account(key)?
+            .filter(|a| a.registered)
+            .map(|a| a.flags))
+    }
+    fn custody_account(&self, key: &A) -> Result<Option<A>, Error> {
+        Ok(self
+            .0
+            .account(key)?
+            .filter(|a| a.registered && a.flags.depth > 2)
+            .map(|a| a.custodian))
+    }
+    fn relative(&self, key: &A) -> Result<A, Error> {
+        Ok(self.0.account(key)?.ok_or(Error::MissingAccount)?.relative)
+    }
+}
+impl<A: Copy + Eq, S: ReadStore<A>> AccountingStore<A> for StoreView<'_, S> {
+    fn balances(&self, key: &A) -> Result<Balances, Error> {
+        Ok(self.0.account(key)?.map(|a| a.balances).unwrap_or_default())
+    }
+}
+impl<A: Copy + Eq, S: ReadStore<A>> AddressDerivation<A> for StoreView<'_, S> {
+    fn to_address(&self, parent: &A, relative: &A) -> A {
+        self.0.to_address(parent, relative)
+    }
 }

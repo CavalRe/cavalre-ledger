@@ -1,11 +1,14 @@
 //! Standalone Ledger program. The checked-in identity is for local simulation.
 use anchor_lang::prelude::*;
+#[cfg(feature = "mutations")]
 pub mod ledger;
 pub mod ledger_lib;
 pub mod ledger_view;
+#[cfg(feature = "mutations")]
 use ledger::*;
 declare_id!("HZyRps1XCM8cFqT7wZ8guNzV22EkVU4pLUBi9LNzpo97");
 
+#[cfg(feature = "mutations")]
 #[program]
 pub mod cavalre_ledger_solana {
     use super::*;
