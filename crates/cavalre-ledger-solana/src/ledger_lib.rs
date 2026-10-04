@@ -70,9 +70,9 @@ pub fn ledger(store: &impl Store, absolute: &Pubkey) -> Result<Option<Pubkey>, E
         let flags = store.flags(&custodian)?.ok_or(Error::InvalidAddress)?;
         return Ok(Some(flags.parent));
     }
-    Ok(store.flags(absolute)?.and_then(|flags| {
-        (flags.depth == 2 && flags.account_kind.is_group()).then_some(*absolute)
-    }))
+    Ok(store
+        .flags(absolute)?
+        .and_then(|flags| (flags.depth == 2 && flags.account_kind.is_group()).then_some(*absolute)))
 }
 
 /// Returns (effective flags, original registered flags, absolute address).

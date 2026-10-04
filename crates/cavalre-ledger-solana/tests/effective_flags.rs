@@ -75,7 +75,10 @@ fn direct_implicit_leaf_needs_no_registration() {
     assert_eq!(effective.depth, 3);
     assert_eq!(store.flags.len(), 1);
     assert_eq!(ledger(&store, &absolute), Ok(None));
-    assert_eq!(custody(&store, &key(1), effective, &key(3)), Ok((key(3), false)));
+    assert_eq!(
+        custody(&store, &key(1), effective, &key(3)),
+        Ok((key(3), false))
+    );
 }
 
 #[test]
@@ -89,7 +92,10 @@ fn nested_implicit_leaves_inherit_both_polarities_and_custody() {
         assert_eq!(effective.account_kind.is_credit(), credit);
         assert!(!effective.account_kind.is_group());
         assert_eq!(effective.depth, 4);
-        assert_eq!(custody(&store, &key(1), effective, &key(3)), Ok((key(2), credit)));
+        assert_eq!(
+            custody(&store, &key(1), effective, &key(3)),
+            Ok((key(2), credit))
+        );
     }
 }
 
@@ -110,7 +116,10 @@ fn registered_leaf_keeps_its_own_polarity() {
         Ok((original, Some(original), absolute))
     );
     // Custodian polarity is independent of the leaf's polarity.
-    assert_eq!(custody(&store, &key(1), original, &key(3)), Ok((key(2), false)));
+    assert_eq!(
+        custody(&store, &key(1), original, &key(3)),
+        Ok((key(2), false))
+    );
 }
 
 #[test]
