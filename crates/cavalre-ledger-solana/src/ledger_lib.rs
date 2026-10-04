@@ -38,6 +38,10 @@ pub fn effective_flags(
 }
 
 pub const SOURCE: Pubkey = Pubkey::new_from_array([83; 32]);
+/// Current Solana execution envelope; root depth is 2. See docs/EXECUTION_LIMITS.md.
+pub const MAX_ACCOUNT_DEPTH: u8 = 7;
+/// Reserve one level for leaves, including unregistered recipients.
+pub const MAX_GROUP_DEPTH: u8 = MAX_ACCOUNT_DEPTH - 1;
 pub(crate) const MAGIC: &[u8; 8] = b"CVLEDG01";
 pub(crate) const SPACE: usize = 512;
 
@@ -98,6 +102,7 @@ pub enum LedgerError {
     UnsupportedToken,
     Settlement,
     Undercollateralized,
+    DepthLimit,
 }
 
 pub fn root_address(scope: &Pubkey, id: &Pubkey) -> (Pubkey, u8) {

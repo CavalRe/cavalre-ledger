@@ -99,7 +99,11 @@ registration after mutations; this new schema is not ERC20 event compatibility.
   authority, upgrades/migration policy and rent reclamation are not implemented.
 - Group cancellation preserves the original accounting walk; the current
   instruction contexts conservatively lock the root writable. Parallel account
-  scheduling and compute optimization still need measurement.
+  scheduling and removal of unnecessary root locks remain optimization work.
+- Leaves are capped at depth 7 and groups at depth 6, with root depth 2. This
+  Solana host limit prevents creation of trees beyond the tested heap envelope;
+  it also leaves space for implicit children. See [execution measurements](../../docs/EXECUTION_LIMITS.md)
+  for compute, signed packet sizes, rent and client construction guidance.
 - Names are bounded to 64 bytes. External mint decimals come from the mint.
   Internal units are raw integers; presentation precision is application policy.
 - No deployed service, production program identity or upgrade authority has been

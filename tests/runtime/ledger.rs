@@ -118,13 +118,16 @@ impl Harness {
             .amount
     }
     fn internal(&mut self) -> (Address, Address) {
+        self.internal_named("Scale")
+    }
+    fn internal_named(&mut self, name: &str) -> (Address, Address) {
         let root = sa(ledger::ledger::root_address(&ap(self.key(0)), &ap(self.key(2))).0);
         let source = child(root, sa(SOURCE));
         let mut i = ix(
             self.base(0, root),
             instruction::AddLedger {
                 id: ap(self.key(2)),
-                name: "Scale".into(),
+                name: name.into(),
             },
             &[source],
         );

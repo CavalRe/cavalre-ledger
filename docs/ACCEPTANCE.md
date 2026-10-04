@@ -5,9 +5,9 @@ artifacts before running tests. Runtime tests load those artifacts into LiteSVM;
 they do not substitute native Rust handlers. This is local runtime validation,
 not a deployed-cluster test or a security audit.
 
-There are 49 test functions: 22 core tests (including eight independent host
+There are 51 test functions: 22 core tests (including eight independent host
 tests and seven view tests), six Solana address/effective-flag tests, four Solana
-view tests and 17 runtime tests. View suites also run with mutations excluded;
+view tests and 19 runtime tests. View suites also run with mutations excluded;
 those repeat executions are not additional test functions.
 One core test replays all 162 saved Solidity posting
 cases, including expected rejections and every node's resulting gross balances.
@@ -56,6 +56,12 @@ nonsigner accounts and verifies that neither bytes nor lamports change. A runtim
 test also reads actual persisted records after a withdrawal is rejected for
 insufficient total backing.
 
+The execution suite measures 630 transactions across supported depths, direct
+calls, application CPI and internal debit/credit postings. It checks signed
+packet size, compute headroom, first-use rent and final accounting balances.
+Boundary rejections enforce the Solana depth cap and verify atomic rollback;
+see [execution limits](EXECUTION_LIMITS.md).
+
 ## Regression fixed
 
 Removal previously returned success for an absent target before validating its
@@ -73,9 +79,9 @@ apply monetary admission policy to removal.
   implemented. Token/native metadata parity, a complete Solana root-discovery
   client and event compatibility remain; see READS.md. Shared account lifecycle,
   admission, authority and settlement policy live in the core.
-- Practical depth limits, compute usage, transaction size, rent costs and
-  concurrency have not been characterized. Instructions still lock the root
-  writable.
+- Deeper trees, additional CPI layers, versioned/batched transactions and cluster
+  throughput are not established by the measured envelope. Instructions still
+  lock the root writable, serializing mutations that share a root.
 - Production identity, upgrade authority, deployment tooling and a deployed
   release rehearsal remain unfinished.
 - Token-2022, direct native SOL, cross-custodian transfers, off-chain intents,

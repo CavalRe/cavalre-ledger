@@ -19,6 +19,9 @@ solana-transaction-error = "3.3.2"
 solana-program-option = "3.1.0"
 solana-program-pack = "3.1.0"
 spl-token-interface = "3.0.0"
+wincode = "=0.5.5"
+serde_json = "1"
+solana-compute-budget-interface = "=3.0.0"
 
 [[test]]
 name = "ledger"

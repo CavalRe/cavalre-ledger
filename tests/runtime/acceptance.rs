@@ -5,6 +5,8 @@ use ledger::ledger::LedgerError;
 use litesvm::types::{FailedTransactionMetadata, TransactionMetadata};
 use solana_instruction_error::InstructionError;
 use solana_transaction_error::TransactionError;
+#[path = "execution_limits.rs"]
+mod execution_limits;
 
 fn run(
     h: &mut Harness,
@@ -78,6 +80,9 @@ struct External {
 }
 impl External {
     fn new(h: &mut Harness, tag: u8, owner: usize) -> Self {
+        Self::named(h, tag, owner, "Token")
+    }
+    fn named(h: &mut Harness, tag: u8, owner: usize, name: &str) -> Self {
         let mint = Address::new_from_array([tag; 32]);
         let wallet = Address::new_from_array([tag + 1; 32]);
         h.pack(
@@ -119,9 +124,7 @@ impl External {
                 token_program: ap(TOKEN),
                 system_program: ap(SYSTEM),
             },
-            instruction::AddExternalToken {
-                name: "Token".into(),
-            },
+            instruction::AddExternalToken { name: name.into() },
             &[source],
         );
         succeeds(h, &[0], create);
