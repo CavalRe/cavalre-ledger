@@ -1,0 +1,11 @@
+[package]
+name = "cavalre-ledger-solana"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+description = "Fresh Solana Ledger draft based on the original Solidity LedgerLib"
+
+[dependencies]
+anchor-lang = "=1.2.0"

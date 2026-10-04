@@ -3,6 +3,11 @@
 Hierarchical double-entry accounting and omnibus custody, with a portable Rust
 service, a Solana adapter, and a standalone Solidity implementation.
 
+The fresh Solidity-faithful Solana draft is in
+[`crates/cavalre-ledger-solana`](crates/cavalre-ledger-solana/README.md).
+It currently covers account resolution only; the earlier implementation remains
+separate while the new program is developed.
+
 ## Repository layout
 
 | Path | Purpose |

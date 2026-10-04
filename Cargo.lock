@@ -836,6 +836,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "cavalre-ledger-solana"
+version = "0.1.0"
+dependencies = [
+ "anchor-lang",
+]
+
+[[package]]
 name = "cavalre-ledgers-core"
 version = "0.1.0"
 dependencies = [
