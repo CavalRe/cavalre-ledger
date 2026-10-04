@@ -9,14 +9,17 @@ proof of complete parity with this baseline.
 | Solidity module | Rust module | Status |
 | --- | --- | --- |
 | `LedgerLib.sol` | `cavalre-ledger-core/src/ledger_lib.rs` | Identity, effective flags, custody lookup and posting walk implemented |
-| `Ledger.sol` | `ledger.rs` | Account management, transfer and custody operations implemented |
+| `Ledger.sol` | Core `ledger.rs`, plus the Solana host adapter | Shared account management, permissions, transfers and settlement policy implemented |
 | `LedgerView.sol` | `ledger_view.rs` | Account and gross-balance read helpers implemented |
 
-The reusable core holds shared rules without platform dependencies.
+The reusable core holds shared rules and the `Host` interface without platform dependencies.
 `cavalre-ledger-solana/src/ledger_lib.rs` supplies PDA derivation and forwards to
 the core. Address types are host-defined; the core does not impose Solana keys.
 The pure accounting portion remains in the core rather than a separate
-kernel crate for now.
+kernel crate for now. Core `ledger::execute` requires host authentication and
+transactional storage/settlement, and enforces lifecycle and custodian policy.
+The Solana `ledger.rs` implements those capabilities while retaining its existing
+instruction arguments and record layout.
 
 Keep corresponding functions in recognizable order and use Rust naming
 conventions. Introduce platform-specific files only for actual Solana needs.

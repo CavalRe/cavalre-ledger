@@ -1,9 +1,9 @@
-//! Program operations corresponding to Ledger.sol. Shared posting rules remain
-//! in LedgerLib; this module authenticates storage/signers and commits atomically.
-use crate::ledger_lib::{to_address, PdaAddresses};
+//! Solana host for the shared Ledger service. Owns runtime authentication,
+//! account encoding/allocation, token calls and transaction rollback integration.
+use crate::ledger_lib::to_address;
 use anchor_lang::{prelude::*, system_program};
 use anchor_spl::token::{self, Mint, Token, TokenAccount, TransferChecked};
-use cavalre_ledger_core::ledger_lib as core;
+use cavalre_ledger_core::{ledger as service, ledger_lib as core};
 
 pub const SOURCE: Pubkey = Pubkey::new_from_array([83; 32]);
 const MAGIC: &[u8; 8] = b"CVLEDG01";
@@ -114,6 +114,7 @@ pub enum LedgerError {
     Undercollateralized,
 }
 
+#[derive(Clone)]
 struct State {
     records: Vec<(Pubkey, Record)>,
 }
@@ -125,48 +126,10 @@ impl State {
             .map(|(_, v)| v)
             .ok_or(error!(LedgerError::MissingAccount))
     }
-    fn get_mut(&mut self, key: &Pubkey) -> Result<&mut Record> {
-        self.records
-            .iter_mut()
-            .find(|(k, _)| k == key)
-            .map(|(_, v)| v)
-            .ok_or(error!(LedgerError::MissingAccount))
-    }
     fn optional(&self, key: &Pubkey) -> Option<&Record> {
         self.records.iter().find(|(k, _)| k == key).map(|(_, v)| v)
     }
 }
-impl core::Store<Pubkey> for State {
-    fn flags(&self, key: &Pubkey) -> std::result::Result<Option<core::Flags<Pubkey>>, core::Error> {
-        Ok(self
-            .optional(key)
-            .filter(|v| v.registered)
-            .map(Record::flags))
-    }
-    fn custody_account(&self, key: &Pubkey) -> std::result::Result<Option<Pubkey>, core::Error> {
-        Ok(self
-            .optional(key)
-            .filter(|v| v.depth > 2 && v.registered)
-            .map(|v| v.custodian))
-    }
-    fn relative(&self, key: &Pubkey) -> std::result::Result<Pubkey, core::Error> {
-        self.optional(key)
-            .map(|v| v.relative)
-            .ok_or(core::Error::InvalidAddress)
-    }
-}
-impl core::AccountingStore<Pubkey> for State {
-    fn balances(&self, key: &Pubkey) -> std::result::Result<core::Balances, core::Error> {
-        Ok(self
-            .optional(key)
-            .map(|r| core::Balances {
-                debit: r.debit,
-                credit: r.credit,
-            })
-            .unwrap_or_default())
-    }
-}
-
 pub fn root_address(scope: &Pubkey, id: &Pubkey) -> (Pubkey, u8) {
     Pubkey::find_program_address(&[b"ledger", scope.as_ref(), id.as_ref()], &crate::ID)
 }
@@ -304,185 +267,327 @@ fn allocate<'info>(
         &crate::ID,
     )
 }
-fn valid_name(name: &str) -> Result<()> {
-    require!(
-        !name.is_empty() && name.len() <= 64,
-        LedgerError::InvalidName
-    );
-    Ok(())
+// All host operations are private to this entry-point adapter. A failed service
+// call propagates directly to Anchor; the runtime rolls back the entire transaction.
+struct SolanaHost<'a, 'info> {
+    root_info: AccountInfo<'info>,
+    rest: &'a [AccountInfo<'info>],
+    payer: AccountInfo<'info>,
+    authority: AccountInfo<'info>,
+    system: AccountInfo<'info>,
+    native: Option<&'a mut MoveTokens<'info>>,
+    root: service::Root<Pubkey>,
+    before: State,
+    state: State,
 }
-fn initial(
-    root: Pubkey,
-    parent: Pubkey,
-    relative: Pubkey,
-    kind: u8,
-    depth: u8,
-    bump: u8,
-) -> Record {
-    Record {
-        root,
-        parent,
-        relative,
-        custodian: Pubkey::default(),
-        kind,
-        token_kind: 0,
-        depth,
-        registered: true,
-        implicit_allowed: true,
-        children: 0,
-        debit: 0,
-        credit: 0,
-        name: String::new(),
-        scope: Pubkey::default(),
-        identifier: Pubkey::default(),
-        bump,
+struct HostError(anchor_lang::error::Error);
+impl From<anchor_lang::error::Error> for HostError {
+    fn from(error: anchor_lang::error::Error) -> Self {
+        Self(error)
     }
 }
-fn initialize<'info>(
-    payer: &AccountInfo<'info>,
-    root: &AccountInfo<'info>,
-    system: &AccountInfo<'info>,
-    rest: &[AccountInfo<'info>],
-    scope: Pubkey,
-    id: Pubkey,
-    name: String,
-) -> Result<()> {
-    valid_name(&name)?;
-    let (key, bump) = root_address(&scope, &id);
-    require_keys_eq!(key, *root.key, LedgerError::InvalidAccount);
-    allocate(
-        payer,
-        root,
-        system,
-        &[b"ledger", scope.as_ref(), id.as_ref(), &[bump]],
-    )?;
-    let mut r = initial(key, Pubkey::default(), id, 0, 2, bump);
-    r.scope = scope;
-    r.identifier = id;
-    r.name = name;
-    r.children = 1;
-    r.token_kind = if scope == Pubkey::default() { 2 } else { 3 };
-    save(root, &r)?;
-    let (source, bump) = to_address(&crate::ID, &key, &SOURCE);
-    let target = info(root, rest, &source)?;
-    allocate(
-        payer,
-        target,
-        system,
-        &[b"account", key.as_ref(), SOURCE.as_ref(), &[bump]],
-    )?;
-    let mut r = initial(key, key, SOURCE, 3, 3, bump);
-    r.custodian = source;
-    r.name = "Source".into();
-    save(target, &r)
+impl From<core::Error> for HostError {
+    fn from(error: core::Error) -> Self {
+        use core::Error as E;
+        Self(match error {
+            E::Unauthorized => error!(LedgerError::Unauthorized),
+            E::InvalidKind | E::InvalidLedgerAccount => error!(LedgerError::InvalidKind),
+            E::NonemptyAccount => error!(LedgerError::Nonempty),
+            E::MetadataConflict => error!(LedgerError::MetadataConflict),
+            E::InvalidName => error!(LedgerError::InvalidName),
+            E::MissingAccount => error!(LedgerError::MissingAccount),
+            E::Accounting | E::Overflow | E::InsufficientBalance => error!(LedgerError::Accounting),
+            E::UnsupportedToken => error!(LedgerError::UnsupportedToken),
+            E::Settlement => error!(LedgerError::Settlement),
+            E::Undercollateralized => error!(LedgerError::Undercollateralized),
+            _ => error!(LedgerError::InvalidAccount),
+        })
+    }
 }
+impl<'a, 'info> SolanaHost<'a, 'info> {
+    fn new(
+        root_info: AccountInfo<'info>,
+        rest: &'a [AccountInfo<'info>],
+        payer: AccountInfo<'info>,
+        authority: AccountInfo<'info>,
+        system: AccountInfo<'info>,
+        initialize: Option<(Pubkey, Pubkey)>,
+    ) -> Result<Self> {
+        let (before, scope, identifier) = if let Some((scope, identifier)) = initialize {
+            require_keys_eq!(
+                root_address(&scope, &identifier).0,
+                *root_info.key,
+                LedgerError::InvalidAccount
+            );
+            (
+                State {
+                    records: Vec::new(),
+                },
+                scope,
+                identifier,
+            )
+        } else {
+            let before = load(&root_info, rest)?;
+            let r = before.get(root_info.key)?;
+            let (scope, identifier) = (r.scope, r.identifier);
+            (before, scope, identifier)
+        };
+        let root = service::Root {
+            address: *root_info.key,
+            parent: Pubkey::default(),
+            identifier,
+            source: SOURCE,
+            authority: (scope != Pubkey::default()).then_some(scope),
+        };
+        Ok(Self {
+            root_info,
+            rest,
+            payer,
+            authority,
+            system,
+            native: None,
+            root,
+            state: before.clone(),
+            before,
+        })
+    }
+    fn accounts(
+        ctx: &Context<'info, LedgerAccounts<'info>>,
+        initialize: Option<Pubkey>,
+    ) -> Result<Self>
+    where
+        'info: 'a,
+    {
+        Self::new(
+            ctx.accounts.root.to_account_info(),
+            ctx.remaining_accounts,
+            ctx.accounts.payer.to_account_info(),
+            ctx.accounts.authority.to_account_info(),
+            ctx.accounts.system_program.to_account_info(),
+            initialize.map(|id| (ctx.accounts.authority.key(), id)),
+        )
+    }
+    fn run(mut self, command: service::Command<Pubkey>) -> Result<()> {
+        service::execute(&mut self, command).map_err(|error| error.0)
+    }
+}
+impl service::Host<Pubkey> for SolanaHost<'_, '_> {
+    type Error = HostError;
+    fn root(&self) -> service::Root<Pubkey> {
+        self.root
+    }
+    fn authenticate(
+        &self,
+        role: service::Role,
+        _command: &service::Command<Pubkey>,
+    ) -> std::result::Result<Pubkey, HostError> {
+        let account = match role {
+            service::Role::Authority => self.authority.clone(),
+            service::Role::TokenPayer => self
+                .native
+                .as_ref()
+                .ok_or(core::Error::Unauthorized)?
+                .funding_authority
+                .to_account_info(),
+        };
+        if !account.is_signer {
+            return Err(core::Error::Unauthorized.into());
+        }
+        Ok(*account.key)
+    }
+    fn to_address(&self, parent: &Pubkey, relative: &Pubkey) -> Pubkey {
+        to_address(&crate::ID, parent, relative).0
+    }
+    fn account(
+        &self,
+        key: &Pubkey,
+    ) -> std::result::Result<Option<service::Account<Pubkey>>, core::Error> {
+        Ok(self.state.optional(key).map(|r| service::Account {
+            flags: r.flags(),
+            relative: r.relative,
+            custodian: r.custodian,
+            registered: r.registered,
+            implicit_allowed: r.implicit_allowed,
+            children: r.children,
+            balances: core::Balances {
+                debit: r.debit,
+                credit: r.credit,
+            },
+            name: r.name.clone(),
+        }))
+    }
+    fn put(
+        &mut self,
+        key: Pubkey,
+        account: service::Account<Pubkey>,
+    ) -> std::result::Result<(), HostError> {
+        let is_root = key == self.root.address;
+        let scope = if is_root {
+            self.root.authority.unwrap_or_default()
+        } else {
+            Pubkey::default()
+        };
+        let identifier = if is_root {
+            self.root.identifier
+        } else {
+            Pubkey::default()
+        };
+        let (expected, bump) = if is_root {
+            root_address(&scope, &identifier)
+        } else {
+            to_address(&crate::ID, &account.flags.parent, &account.relative)
+        };
+        if expected != key {
+            return Err(core::Error::InvalidAccount.into());
+        }
+        let r = Record {
+            root: self.root.address,
+            parent: account.flags.parent,
+            relative: account.relative,
+            custodian: account.custodian,
+            kind: match account.flags.account_kind {
+                core::AccountKind::DebitGroup => 0,
+                core::AccountKind::CreditGroup => 1,
+                core::AccountKind::DebitLedger => 2,
+                core::AccountKind::CreditLedger => 3,
+            },
+            token_kind: if is_root {
+                if self.root.authority.is_some() {
+                    3
+                } else {
+                    2
+                }
+            } else {
+                0
+            },
+            depth: account.flags.depth,
+            registered: account.registered,
+            implicit_allowed: account.implicit_allowed,
+            children: account.children,
+            debit: account.balances.debit,
+            credit: account.balances.credit,
+            name: account.name,
+            scope,
+            identifier,
+            bump,
+        };
+        if let Some((_, existing)) = self.state.records.iter_mut().find(|(id, _)| *id == key) {
+            *existing = r;
+        } else {
+            self.state.records.push((key, r));
+        }
+        Ok(())
+    }
+    fn token_balances(&mut self) -> std::result::Result<service::TokenBalances<Pubkey>, HostError> {
+        let native = self.native.as_mut().ok_or(core::Error::UnsupportedToken)?;
+        native.vault.reload()?;
+        native.wallet.reload()?;
+        Ok(service::TokenBalances {
+            asset: native.mint.key(),
+            owner: native.wallet.owner,
+            vault: u128::from(native.vault.amount),
+            wallet: u128::from(native.wallet.amount),
+        })
+    }
+    fn move_tokens(&mut self, deposit: bool, amount: u128) -> std::result::Result<(), HostError> {
+        let native = self.native.as_mut().ok_or(core::Error::UnsupportedToken)?;
+        let r = self.state.get(self.root_info.key)?;
+        let bump = [r.bump];
+        let seeds: &[&[u8]] = &[b"ledger", r.scope.as_ref(), r.identifier.as_ref(), &bump];
+        let signer = &[seeds];
+        let accounts = TransferChecked {
+            from: if deposit {
+                native.wallet.to_account_info()
+            } else {
+                native.vault.to_account_info()
+            },
+            mint: native.mint.to_account_info(),
+            to: if deposit {
+                native.vault.to_account_info()
+            } else {
+                native.wallet.to_account_info()
+            },
+            authority: if deposit {
+                native.funding_authority.to_account_info()
+            } else {
+                self.root_info.clone()
+            },
+        };
+        let cpi = CpiContext::new(native.token_program.key(), accounts);
+        token::transfer_checked(
+            if deposit {
+                cpi
+            } else {
+                cpi.with_signer(signer)
+            },
+            u64::try_from(amount).map_err(|_| core::Error::Overflow)?,
+            native.mint.decimals,
+        )?;
+        Ok(())
+    }
+    fn commit(&mut self) -> std::result::Result<(), HostError> {
+        for (key, record) in &self.state.records {
+            if self.before.optional(key).is_none() {
+                let target = info(&self.root_info, self.rest, key)?;
+                let bump = [record.bump];
+                let seeds: &[&[u8]] = if *key == self.root.address {
+                    &[
+                        b"ledger",
+                        record.scope.as_ref(),
+                        record.identifier.as_ref(),
+                        &bump,
+                    ]
+                } else {
+                    &[
+                        b"account",
+                        record.parent.as_ref(),
+                        record.relative.as_ref(),
+                        &bump,
+                    ]
+                };
+                allocate(&self.payer, target, &self.system, seeds)?;
+            }
+        }
+        // Initialization previously emitted no mutation snapshots; retain that schema.
+        if self.before.records.is_empty() {
+            for (key, record) in &self.state.records {
+                save(info(&self.root_info, self.rest, key)?, record)?;
+            }
+        } else {
+            commit(&self.root_info, self.rest, &self.before, &self.state)?;
+        }
+        Ok(())
+    }
+    fn atomic(
+        &mut self,
+        operation: impl FnOnce(&mut Self) -> std::result::Result<(), HostError>,
+    ) -> std::result::Result<(), HostError> {
+        // run() consumes this host and propagates every failure to the entry point.
+        // Solana owns rollback of allocation, token CPIs, and account writes.
+        operation(self)
+    }
+}
+
 pub fn add_ledger<'info>(
     ctx: &Context<'info, LedgerAccounts<'info>>,
     id: Pubkey,
     name: String,
 ) -> Result<()> {
-    initialize(
-        &ctx.accounts.payer.to_account_info(),
-        &ctx.accounts.root.to_account_info(),
-        &ctx.accounts.system_program.to_account_info(),
-        ctx.remaining_accounts,
-        ctx.accounts.authority.key(),
-        id,
-        name,
-    )
+    SolanaHost::accounts(ctx, Some(id))?.run(service::Command::Initialize { name })
 }
 pub fn add_external_token<'info>(
     ctx: Context<'info, RegisterToken<'info>>,
     name: String,
 ) -> Result<()> {
-    initialize(
-        &ctx.accounts.payer.to_account_info(),
-        &ctx.accounts.root.to_account_info(),
-        &ctx.accounts.system_program.to_account_info(),
+    SolanaHost::new(
+        ctx.accounts.root.to_account_info(),
         ctx.remaining_accounts,
-        Pubkey::default(),
-        ctx.accounts.mint.key(),
-        name,
-    )
-}
-fn authority(
-    state: &State,
-    root: &Pubkey,
-    parent: &Pubkey,
-    relative: &Pubkey,
-    signer: &Pubkey,
-) -> Result<()> {
-    let r = state.get(root)?;
-    if r.scope != Pubkey::default() {
-        require_keys_eq!(r.scope, *signer, LedgerError::Unauthorized);
-        return Ok(());
-    }
-    if parent == root {
-        require_keys_eq!(*relative, *signer, LedgerError::Unauthorized)
-    } else {
-        let p = state.get(parent)?;
-        let c = state.get(&p.custodian)?;
-        require_keys_eq!(c.relative, *signer, LedgerError::Unauthorized);
-    }
-    Ok(())
-}
-fn resolve(
-    state: &State,
-    root: &Pubkey,
-    parent: &Pubkey,
-    relative: &Pubkey,
-) -> Result<core::Endpoint<Pubkey>> {
-    let (flags, original, _) =
-        core::effective_flags(state, &PdaAddresses(&crate::ID), root, parent, relative)
-            .map_err(|_| error!(LedgerError::InvalidAccount))?;
-    require!(
-        original.is_some() || state.get(parent)?.implicit_allowed,
-        LedgerError::InvalidAccount
-    );
-    Ok(core::Endpoint {
-        relative: *relative,
-        flags,
-    })
-}
-fn implicit<'info>(
-    state: &mut State,
-    root: &AccountInfo<'info>,
-    rest: &[AccountInfo<'info>],
-    payer: &AccountInfo<'info>,
-    system: &AccountInfo<'info>,
-    parent: Pubkey,
-    relative: Pubkey,
-) -> Result<()> {
-    let (key, bump) = to_address(&crate::ID, &parent, &relative);
-    if state.optional(&key).is_some() {
-        return Ok(());
-    }
-    let p = state.get(&parent)?;
-    require!(p.registered && p.kind < 2, LedgerError::InvalidKind);
-    let mut r = initial(
-        *root.key,
-        parent,
-        relative,
-        if p.kind == 1 { 3 } else { 2 },
-        p.depth
-            .checked_add(1)
-            .ok_or(error!(LedgerError::InvalidAccount))?,
-        bump,
-    );
-    r.registered = false;
-    r.custodian = if parent == *root.key {
-        key
-    } else {
-        p.custodian
-    };
-    allocate(
-        payer,
-        info(root, rest, &key)?,
-        system,
-        &[b"account", parent.as_ref(), relative.as_ref(), &[bump]],
-    )?;
-    state.records.push((key, r));
-    Ok(())
+        ctx.accounts.payer.to_account_info(),
+        ctx.accounts.payer.to_account_info(),
+        ctx.accounts.system_program.to_account_info(),
+        Some((Pubkey::default(), ctx.accounts.mint.key())),
+    )?
+    .run(service::Command::Initialize { name })
 }
 pub fn add_account<'info>(
     ctx: &Context<'info, LedgerAccounts<'info>>,
@@ -493,74 +598,18 @@ pub fn add_account<'info>(
     group: bool,
     implicit_allowed: bool,
 ) -> Result<()> {
-    valid_name(&name)?;
-    let root = ctx.accounts.root.to_account_info();
-    let before = load(&root, ctx.remaining_accounts)?;
-    authority(
-        &before,
-        root.key,
-        &parent,
-        &relative,
-        &ctx.accounts.authority.key(),
-    )?;
-    require!(
-        relative != SOURCE || parent != *root.key,
-        LedgerError::Unauthorized
-    );
-    let p = before.get(&parent)?;
-    require!(p.registered && p.kind < 2, LedgerError::InvalidKind);
-    require!(
-        !credit || before.get(root.key)?.scope != Pubkey::default(),
-        LedgerError::InvalidKind
-    );
-    let mut state = State {
-        records: before.records.clone(),
+    let kind = match (credit, group) {
+        (false, true) => core::AccountKind::DebitGroup,
+        (true, true) => core::AccountKind::CreditGroup,
+        (false, false) => core::AccountKind::DebitLedger,
+        (true, false) => core::AccountKind::CreditLedger,
     };
-    implicit(
-        &mut state,
-        &root,
-        ctx.remaining_accounts,
-        &ctx.accounts.payer.to_account_info(),
-        &ctx.accounts.system_program.to_account_info(),
-        parent,
-        relative,
-    )?;
-    let key = to_address(&crate::ID, &parent, &relative).0;
-    let r = state.get_mut(&key)?;
-    let kind = if group {
-        u8::from(credit)
-    } else {
-        2 + u8::from(credit)
-    };
-    if r.registered {
-        require!(
-            r.kind == kind && r.name == name && (!group || r.implicit_allowed == implicit_allowed),
-            LedgerError::MetadataConflict
-        );
-        return Ok(());
-    }
-    require!(
-        !group || (r.debit == 0 && r.credit == 0),
-        LedgerError::Nonempty
-    );
-    require!(
-        if credit {
-            r.debit <= r.credit
-        } else {
-            r.credit <= r.debit
-        },
-        LedgerError::InvalidKind
-    );
-    r.kind = kind;
-    r.name = name;
-    r.registered = true;
-    r.implicit_allowed = implicit_allowed;
-    let p = state.get_mut(&parent)?;
-    p.children = p
-        .children
-        .checked_add(1)
-        .ok_or(error!(LedgerError::InvalidAccount))?;
-    commit(&root, ctx.remaining_accounts, &before, &state)
+    SolanaHost::accounts(ctx, None)?.run(service::Command::Add {
+        child: service::Child { parent, relative },
+        name,
+        kind,
+        implicit_allowed,
+    })
 }
 pub fn remove_account<'info>(
     ctx: &Context<'info, LedgerAccounts<'info>>,
@@ -568,66 +617,10 @@ pub fn remove_account<'info>(
     relative: Pubkey,
     group: bool,
 ) -> Result<()> {
-    let root = ctx.accounts.root.to_account_info();
-    let before = load(&root, ctx.remaining_accounts)?;
-    authority(
-        &before,
-        root.key,
-        &parent,
-        &relative,
-        &ctx.accounts.authority.key(),
-    )?;
-    require!(
-        relative != SOURCE || parent != *root.key,
-        LedgerError::Unauthorized
-    );
-    // Original LedgerLib validates the parent even when removal is a no-op.
-    // Resolve directly rather than applying monetary admission policy: removing
-    // an unregistered target remains a no-op beneath a registered-only group.
-    core::effective_flags(
-        &before,
-        &PdaAddresses(&crate::ID),
-        root.key,
-        &parent,
-        &relative,
-    )
-    .map_err(|_| error!(LedgerError::InvalidAccount))?;
-    let key = to_address(&crate::ID, &parent, &relative).0;
-    let Some(r) = before.optional(&key) else {
-        return Ok(());
-    };
-    if !r.registered {
-        return Ok(());
-    }
-    require!((r.kind < 2) == group, LedgerError::InvalidKind);
-    require!(
-        r.debit == 0 && r.credit == 0 && r.children == 0,
-        LedgerError::Nonempty
-    );
-    let mut state = State {
-        records: before.records.clone(),
-    };
-    let r = state.get_mut(&key)?;
-    r.registered = false;
-    r.name.clear();
-    state.get_mut(&parent)?.children = state
-        .get(&parent)?
-        .children
-        .checked_sub(1)
-        .ok_or(error!(LedgerError::InvalidAccount))?;
-    commit(&root, ctx.remaining_accounts, &before, &state)
-}
-fn apply(state: &mut State, changes: Vec<core::BalanceChange<Pubkey>>) -> Result<()> {
-    for c in changes {
-        let r = state.get_mut(&c.absolute)?;
-        require!(
-            r.debit == c.before.debit && r.credit == c.before.credit,
-            LedgerError::Accounting
-        );
-        r.debit = c.after.debit;
-        r.credit = c.after.credit;
-    }
-    Ok(())
+    SolanaHost::accounts(ctx, None)?.run(service::Command::Remove {
+        child: service::Child { parent, relative },
+        group,
+    })
 }
 pub fn transfer<'info>(
     ctx: &Context<'info, LedgerAccounts<'info>>,
@@ -637,55 +630,17 @@ pub fn transfer<'info>(
     to: Pubkey,
     amount: u128,
 ) -> Result<()> {
-    let root = ctx.accounts.root.to_account_info();
-    let before = load(&root, ctx.remaining_accounts)?;
-    let source = resolve(&before, root.key, &from_parent, &from)?;
-    let destination = resolve(&before, root.key, &to_parent, &to)?;
-    let internal = before.get(root.key)?.scope != Pubkey::default();
-    let changes = if internal {
-        authority(
-            &before,
-            root.key,
-            &from_parent,
-            &from,
-            &ctx.accounts.authority.key(),
-        )?;
-        core::transfer(
-            &before,
-            &PdaAddresses(&crate::ID),
-            root.key,
-            source,
-            destination,
-            amount,
-        )
-    } else {
-        core::transfer_debits(
-            &before,
-            &PdaAddresses(&crate::ID),
-            root.key,
-            source,
-            destination,
-            &ctx.accounts.authority.key(),
-            amount,
-        )
-    }
-    .map_err(|_| error!(LedgerError::Accounting))?;
-    let mut state = State {
-        records: before.records.clone(),
-    };
-    for (parent, relative) in [(from_parent, from), (to_parent, to)] {
-        implicit(
-            &mut state,
-            &root,
-            ctx.remaining_accounts,
-            &ctx.accounts.payer.to_account_info(),
-            &ctx.accounts.system_program.to_account_info(),
-            parent,
-            relative,
-        )?;
-    }
-    apply(&mut state, changes)?;
-    commit(&root, ctx.remaining_accounts, &before, &state)
+    SolanaHost::accounts(ctx, None)?.run(service::Command::Transfer {
+        from: service::Child {
+            parent: from_parent,
+            relative: from,
+        },
+        to: service::Child {
+            parent: to_parent,
+            relative: to,
+        },
+        amount,
+    })
 }
 pub fn move_tokens<'info>(
     ctx: Context<'info, MoveTokens<'info>>,
@@ -694,107 +649,20 @@ pub fn move_tokens<'info>(
     amount: u64,
     deposit: bool,
 ) -> Result<()> {
-    let root = ctx.accounts.root.to_account_info();
-    let before = load(&root, ctx.remaining_accounts)?;
-    let r = before.get(root.key)?;
-    require!(
-        r.scope == Pubkey::default() && r.identifier == ctx.accounts.mint.key(),
-        LedgerError::UnsupportedToken
-    );
-    let leaf = resolve(&before, root.key, &parent, &relative)?;
-    require!(
-        leaf.flags.account_kind == core::AccountKind::DebitLedger,
-        LedgerError::InvalidKind
-    );
-    core::enforce_is_custodian(&before, root.key, leaf, &ctx.accounts.authority.key())
-        .map_err(|_| error!(LedgerError::Unauthorized))?;
-    let source = resolve(&before, root.key, root.key, &SOURCE)?;
-    if !deposit {
-        require!(
-            u128::from(ctx.accounts.vault.amount) >= r.credit,
-            LedgerError::Undercollateralized
-        );
-    }
-    let (from, to) = if deposit {
-        (source, leaf)
-    } else {
-        (leaf, source)
-    };
-    let changes = core::transfer(
-        &before,
-        &PdaAddresses(&crate::ID),
-        root.key,
-        from,
-        to,
-        u128::from(amount),
-    )
-    .map_err(|_| error!(LedgerError::Accounting))?;
-    let vault_before = ctx.accounts.vault.amount;
-    let wallet_before = ctx.accounts.wallet.amount;
-    if deposit {
-        require_keys_eq!(
-            ctx.accounts.wallet.owner,
-            ctx.accounts.funding_authority.key(),
-            LedgerError::Unauthorized
-        );
-    }
-    let bump = [r.bump];
-    let seeds: &[&[u8]] = &[b"ledger", r.scope.as_ref(), r.identifier.as_ref(), &bump];
-    let signer = &[seeds];
-    let accounts = TransferChecked {
-        from: if deposit {
-            ctx.accounts.wallet.to_account_info()
-        } else {
-            ctx.accounts.vault.to_account_info()
-        },
-        mint: ctx.accounts.mint.to_account_info(),
-        to: if deposit {
-            ctx.accounts.vault.to_account_info()
-        } else {
-            ctx.accounts.wallet.to_account_info()
-        },
-        authority: if deposit {
-            ctx.accounts.funding_authority.to_account_info()
-        } else {
-            root.clone()
-        },
-    };
-    let cpi = CpiContext::new(ctx.accounts.token_program.key(), accounts);
-    token::transfer_checked(
-        if deposit {
-            cpi
-        } else {
-            cpi.with_signer(signer)
-        },
-        amount,
-        ctx.accounts.mint.decimals,
-    )?;
-    ctx.accounts.vault.reload()?;
-    ctx.accounts.wallet.reload()?;
-    require!(
-        if deposit {
-            ctx.accounts.vault.amount.checked_sub(vault_before) == Some(amount)
-                && wallet_before.checked_sub(ctx.accounts.wallet.amount) == Some(amount)
-        } else {
-            vault_before.checked_sub(ctx.accounts.vault.amount) == Some(amount)
-                && ctx.accounts.wallet.amount.checked_sub(wallet_before) == Some(amount)
-        },
-        LedgerError::Settlement
-    );
-    let mut state = State {
-        records: before.records.clone(),
-    };
-    implicit(
-        &mut state,
-        &root,
+    let mut host = SolanaHost::new(
+        ctx.accounts.root.to_account_info(),
         ctx.remaining_accounts,
-        &ctx.accounts.payer.to_account_info(),
-        &ctx.accounts.system_program.to_account_info(),
-        parent,
-        relative,
+        ctx.accounts.payer.to_account_info(),
+        ctx.accounts.authority.to_account_info(),
+        ctx.accounts.system_program.to_account_info(),
+        None,
     )?;
-    apply(&mut state, changes)?;
-    commit(&root, ctx.remaining_accounts, &before, &state)
+    host.native = Some(ctx.accounts);
+    host.run(service::Command::MoveTokens {
+        child: service::Child { parent, relative },
+        amount: u128::from(amount),
+        deposit,
+    })
 }
 
 /// Snapshot after a committed mutation. This is a new Solana event schema;

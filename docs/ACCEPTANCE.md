@@ -5,8 +5,9 @@ artifacts before running tests. Runtime tests load those artifacts into LiteSVM;
 they do not substitute native Rust handlers. This is local runtime validation,
 not a deployed-cluster test or a security audit.
 
-There are 30 test functions: seven core tests, six Solana address/effective-flag
-tests, and 17 runtime tests. One core test replays all 162 saved Solidity posting
+There are 38 test functions: 15 core tests (including eight independent host
+tests), six Solana address/effective-flag tests, and 17 runtime tests.
+One core test replays all 162 saved Solidity posting
 cases, including expected rejections and every node's resulting gross balances.
 
 ## Exercised requirements
@@ -37,6 +38,14 @@ the fee payer's remaining lamports, data and ownership are checked as well.
 Malformed-record fixtures deliberately inject invalid state to exercise decoder
 rejection; they do not imply another program can write Ledger-owned records.
 
+The [independent host tests](../crates/cavalre-ledger-core/tests/host.rs) exercise
+the same service without Solana dependencies. They verify authentication for
+every command, distinct actor/payer identities, operation-bound funding terms,
+lifecycle/admission rules, internal issuance and external Source protection.
+Injected short settlement and late commit failure test the host's rollback
+contract across both token movement and ledger writes. The unchanged Solana
+runtime acceptance suite also passes through this shared service.
+
 ## Regression fixed
 
 Removal previously returned success for an absent target before validating its
@@ -50,8 +59,8 @@ apply monetary admission policy to removal.
 - This does not port every original Solidity test or establish complete spec
   conformance. Randomized operation sequences and broader adversarial review
   remain useful additional coverage.
-- Query/event compatibility and extraction of shared account-lifecycle and
-  admission rules remain implementation work.
+- Query/event compatibility remains implementation work. Shared account
+  lifecycle, admission, authority and settlement policy now live in the core.
 - Practical depth limits, compute usage, transaction size, rent costs and
   concurrency have not been characterized. Instructions still lock the root
   writable.

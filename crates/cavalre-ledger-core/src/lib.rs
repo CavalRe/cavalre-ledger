@@ -3,4 +3,5 @@
 
 extern crate alloc;
 
+pub mod ledger;
 pub mod ledger_lib;

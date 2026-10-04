@@ -16,9 +16,10 @@ work is deferred until this implementation settles.
 
 | Path | Purpose |
 | --- | --- |
-| `crates/cavalre-ledger-core/src/ledger_lib.rs` | Shared LedgerLib rules; no platform dependencies |
+| `crates/cavalre-ledger-core/src/ledger_lib.rs` | Original LedgerLib identity and posting rules |
+| `crates/cavalre-ledger-core/src/ledger.rs` | Shared service operations and authenticated host interface |
 | `crates/cavalre-ledger-solana/src/ledger_lib.rs` | Solana PDA derivation and calls into the core |
-| `crates/cavalre-ledger-solana/src/ledger.rs` | Authenticated program operations and storage |
+| `crates/cavalre-ledger-solana/src/ledger.rs` | Solana implementation of the host interface |
 | `crates/cavalre-ledger-solana/src/ledger_view.rs` | Read helpers |
 | `tests/runtime/`, `tests/consumer/` | Actual sBPF execution and application CPI tests |
 | `crates/*/tests/` | Platform-independent behavior and Solana adapter tests |
@@ -29,10 +30,13 @@ work is deferred until this implementation settles.
 The previous controller-based implementation is removed from the working tree.
 Its code and tests remain available in Git history.
 
-The core is `no_std` with no dependencies. Hosts provide deterministic address
-derivation and authenticated state through the core interfaces. The Solana
-adapter supplies public keys and PDAs; other hosts can supply their own address
-types and storage. No separate kernel crate is needed at this stage.
+The core is `no_std` with no runtime dependencies. Its service interface requires
+host authentication, address derivation, state access, native token movement and
+atomic commit. The core enforces custodian permissions, account lifecycle,
+implicit-leaf admission, posting, backing and exact settlement. The Solana adapter
+implements those host capabilities using runtime signers, PDAs, program accounts
+and token calls. See the [core host contract](crates/cavalre-ledger-core/README.md).
+No separate kernel crate is needed at this stage.
 
 ## Verify
 
@@ -54,7 +58,8 @@ issuance, implicit receipts, parent admission, account lifecycle, token custody,
 application isolation, PDA authority, and transaction rollback. This is not the
 full original Solidity test suite or a security audit.
 
-The suite contains **30 test functions**, including **17 sBPF runtime tests**.
+The suite contains **38 test functions**, including **17 sBPF runtime tests** and
+**eight independent host tests** with no platform SDK.
 One core test replays the 162 saved posting cases; those are not 162 separate
 test functions. See [acceptance coverage](docs/ACCEPTANCE.md) for the exercised
 requirements and remaining validation work.

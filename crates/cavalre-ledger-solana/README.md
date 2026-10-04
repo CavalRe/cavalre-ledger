@@ -6,10 +6,20 @@ LedgerLib commit `34d159ff4e88fdfdee16738d9a1228f0bf407212`.
 | Solidity | Rust |
 | --- | --- |
 | `LedgerLib.sol` | Core `ledger_lib.rs`, with Solana address derivation in the adapter |
-| `Ledger.sol` | `ledger.rs` and the instruction entry points in `lib.rs` |
+| `Ledger.sol` | Core `ledger.rs` operations; Solana host in `ledger.rs` and entry points in `lib.rs` |
 | `LedgerView.sol` | `ledger_view.rs` |
 
 ## Accounts and authority
+
+Each entry point invokes the shared core service through `SolanaHost`. The host
+authenticates runtime signers, validates and serializes accounts, derives PDAs,
+allocates rent-funded storage and performs standard SPL movement. Custodian,
+lifecycle, admission, posting, backing and exact-settlement rules live in the
+core. Its `atomic` contract uses Solana transaction rollback: every error is
+propagated directly to the entry point. The host is consumed by each call.
+
+This extraction retains the existing instruction arguments and 512-byte `Record`
+layout; it does not require a data migration.
 
 An external mint has one root PDA: `["ledger", zero public key, mint]`.
 All applications share that tree and its vault `["vault", root]`. Each root has

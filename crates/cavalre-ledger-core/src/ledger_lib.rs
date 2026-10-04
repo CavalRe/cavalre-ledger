@@ -1,5 +1,5 @@
 //! Corresponds to cavalre-contracts/modules/ledger/LedgerLib.sol.
-//! Shared, read-only rules over host-authenticated state. No platform SDK,
+//! Shared accounting rules over host-authenticated state. No platform SDK,
 //! serialization format, account allocation or signature verification lives here.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -60,6 +60,15 @@ pub enum Error {
     Unauthorized,
     NonemptyAccount,
     RegistrationRequired,
+    InvalidAccount,
+    InvalidKind,
+    InvalidName,
+    MetadataConflict,
+    MissingAccount,
+    Accounting,
+    UnsupportedToken,
+    Settlement,
+    Undercollateralized,
 }
 
 /// Host-specific deterministic address derivation. The implementation must bind
