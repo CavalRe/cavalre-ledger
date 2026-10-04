@@ -1,7 +1,7 @@
 # CavalRe Ledgers
 
-Hierarchical double-entry accounting and omnibus custody, with a portable Rust
-service, a Solana adapter, and a standalone Solidity implementation.
+Hierarchical double-entry accounting and omnibus custody. Development currently
+focuses on Solana; the standalone Solidity implementation is deferred.
 
 The fresh Solidity-faithful Solana draft is in
 [`crates/cavalre-ledger-solana`](crates/cavalre-ledger-solana/README.md).
@@ -13,15 +13,14 @@ separate while the new program is developed.
 | Path | Purpose |
 | --- | --- |
 | `crates/` | Rust accounting kernel, portable service, and Solana adapter |
-| `contracts/` | Solidity service and isolated ERC20 custody vaults |
-| `tests/solidity/` | EVM controller, accounting, custody and shared-fixture tests |
 | `tests/integration/`, `tests/solana-consumer/` | Solana runtime and consumer tests |
 | `docs/` | Shared behavioral specifications and platform-specific documentation |
 | `spec/fixtures/` | Shared accounting and custody reference fixtures |
 | `tests/reference/`, `reference/` | Isolated Solidity fixture generator and pinned source |
 
-Rust and Solidity have separate build tooling. `Cargo.toml` and `foundry.toml`
-live at the repository root; generated output stays under ignored `target/`.
+The Rust workspace is configured by the root `Cargo.toml`; generated output
+stays under ignored `target/`. Solidity remains only as reference material and
+an isolated fixture generator for checking the original behavior.
 
 ## Rust crates
 
@@ -85,28 +84,6 @@ export PATH="$PWD/target/toolchains/solana-release/bin:$PATH"
 bash scripts/check.sh
 ```
 
-### Solidity
-
-The EVM implementation uses Foundry **1.8.3**, Solidity **0.8.26**, and **Cancun**.
-From the repository root:
-
-```bash
-bash scripts/install-foundry.sh
-export PATH="$PWD/target/toolchains/foundry:$PATH"
-bash scripts/check-solidity.sh
-```
-
-`Ledgers` implements namespaces, per-account controllers, hierarchical journals,
-and ERC20 claims. Controllers authorize through calls; joint actions use expiring,
-single-use consent for the exact operation. `LedgerVault` isolates each
-namespace's collateral for each token. See the [EVM interface](docs/LEDGER_EVM.md)
-for authority rules, examples and token assumptions.
-
-The Solidity suite replays all 300 shared reference actions and tests controller
-isolation, approval expiry and replay, contract callers, bounded arithmetic,
-custody settlement and rollback. Artifacts and cache stay under
-`target/solidity/`. Rust/Solana and Solidity checks run independently in CI.
-
 ### Shared reference fixtures
 
 The fixture baseline contains 162 hierarchy and 138 custody actions from pinned
@@ -114,6 +91,8 @@ Solidity code. Reproduce it with Foundry **1.8.3**:
 
 ```bash
 git submodule update --init reference/cavalre-contracts
+bash scripts/install-foundry.sh
+export PATH="$PWD/target/toolchains/foundry:$PATH"
 bash scripts/reference.sh
 ```
 
@@ -125,7 +104,6 @@ must never be deployed.
 
 - [Portable core and host adapter contract](docs/LEDGER_CORE.md)
 - [Accounting model](docs/ACCOUNTING.md)
-- [EVM controllers, journals and custody](docs/LEDGER_EVM.md)
 - [Solana custody, controller and token policy](docs/OMNIBUS_LEDGER.md)
 - [Solana release and deployment preparation](docs/LEDGER_MAINNET.md)
 

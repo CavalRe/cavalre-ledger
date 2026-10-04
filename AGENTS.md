@@ -1,19 +1,16 @@
 # Working on CavalRe Ledgers
 
 - Work on `main` and push completed, verified changes when authorized.
-- This is the standalone Ledger product: accounting kernel, portable service,
-  Solana adapter and EVM implementation. Keep SR, Multiswap and consensus policy
-  in consumers.
-- Rust lives in `crates/`; Solidity lives in `contracts/`, with tests in
-  `tests/solidity/` and root Foundry configuration. Keep language-specific
-  tooling independent and generated output under `target/`.
-- The root Foundry project is separate from `tests/reference/`. Never include
-  the pinned reference checkout as an implementation dependency.
-- Read `docs/LEDGER_EVM.md` for Solidity work. Controllers authenticate through
-  `msg.sender`; joint operations consume exact, expiring approvals bound to the
-  chain, service, parameters and account incarnations. Preserve this boundary.
-- Run `bash scripts/check-solidity.sh` for Solidity changes. Keep the shared
-  reference fixtures read-only and preserve the per-namespace ERC20 vaults.
+- This is the standalone Ledger product. Focus on Solana until its design is
+  settled; the standalone EVM implementation is deferred. Keep SR, Multiswap
+  and consensus policy in consumers.
+- Rust lives in `crates/`; generated output belongs under `target/`.
+- The fresh draft is `crates/cavalre-ledger-solana`; follow its scoped AGENTS.md
+  and the original Solidity LedgerLib baseline. The older plural-named crates
+  retain their existing model while the fresh implementation is developed.
+- Solidity under `tests/reference/` and `reference/` is reference material only.
+  Keep the fixture generator and pinned fixtures; never include the reference
+  checkout as an implementation dependency.
 - Read `docs/LEDGER_CORE.md`, `docs/ACCOUNTING.md` and
   `docs/OMNIBUS_LEDGER.md` before changing economics or authority boundaries.
 - Treat `reference/cavalre-contracts` and pinned fixtures as read-only
