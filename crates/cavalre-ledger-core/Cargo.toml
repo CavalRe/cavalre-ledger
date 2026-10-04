@@ -1,0 +1,8 @@
+[package]
+name = "cavalre-ledger-core"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+description = "Platform-independent Ledger rules based on the original LedgerLib"

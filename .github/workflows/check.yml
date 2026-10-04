@@ -9,7 +9,7 @@ concurrency:
   group: ledger-${{ github.ref }}
   cancel-in-progress: true
 jobs:
-  solana:
+  ledger:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -17,5 +17,5 @@ jobs:
           persist-credentials: false
       - name: Install pinned Rust
         run: rustup toolchain install 1.98.1 --profile minimal --component rustfmt --component clippy
-      - name: Check Solidity-inspired Solana Ledger
+      - name: Check reusable Ledger core and Solana adapter
         run: bash scripts/check.sh

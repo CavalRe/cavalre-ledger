@@ -1,10 +1,10 @@
 # Solana Ledger draft
 
-Fresh implementation based on the original `cavalre-contracts` LedgerLib at
-`34d159ff4e88fdfdee16738d9a1228f0bf407212`. This crate does not use the previous
-controller service or accounting kernel. This is the only active implementation.
-The earlier prototype is available in Git history; see
-[the porting notes](../../docs/PORTING.md) for reusable Solana pieces.
+Solana adapter for [`cavalre-ledger-core`](../cavalre-ledger-core), based on the
+original `cavalre-contracts` LedgerLib at
+`34d159ff4e88fdfdee16738d9a1228f0bf407212`. Shared rules live in the core;
+this crate provides PDA derivation and binds addresses to Solana public keys.
+See [the porting notes](../../docs/PORTING.md) for reusable work in Git history.
 
 This first slice implements account identity, effective flags, ledger lookup
 and custody resolution. It is a library, not yet an executable Solana program.
@@ -40,6 +40,9 @@ Next: bring over the original `transfer` ancestor walk and its debit/credit
 behavior, then implement authenticated Solana storage and instructions.
 Source remains an explicit credit account in the intended tree. Token custody,
 app authorization and token compatibility checks are not implemented yet.
+
+Shared helpers are implemented only in the core and forwarded here. The core
+is `no_std` and has no Solana dependency.
 
 Run `cargo test -p cavalre-ledger-solana --locked` from the repository root.
 The tests exercise inherited debit and credit leaves, registered overrides,

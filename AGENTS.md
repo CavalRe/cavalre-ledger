@@ -1,9 +1,12 @@
 # Working on CavalRe Ledger
 
 - Work on `main` and push completed, verified changes when authorized.
-- The only active implementation is `crates/cavalre-ledger-solana`. Follow its
-  scoped AGENTS.md and the original Solidity LedgerLib baseline. Keep recognizable
-  module names and responsibilities; explain material behavioral differences.
+- Shared rules live in `crates/cavalre-ledger-core`; Solana-specific behavior
+  lives in `crates/cavalre-ledger-solana`. Follow the original Solidity LedgerLib
+  baseline and keep recognizable module names and responsibilities.
+- The core must remain reusable, `no_std` and free of platform SDK dependencies.
+  Hosts own address derivation, storage, signer verification and token movement.
+  Do not duplicate accounting rules in adapters or name downstream consumers.
 - Preserve implicit leaves, effective flags, relative identities, custody
   ancestry, explicit Source and the original double-entry ancestor walk.
 - Use Solana-native storage and signer validation without importing the previous

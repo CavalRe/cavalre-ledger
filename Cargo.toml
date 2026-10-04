@@ -1,13 +1,13 @@
 [workspace]
-members = ["crates/cavalre-ledger-solana"]
-default-members = ["crates/cavalre-ledger-solana"]
+members = ["crates/cavalre-ledger-core", "crates/cavalre-ledger-solana"]
+default-members = ["crates/cavalre-ledger-core", "crates/cavalre-ledger-solana"]
 resolver = "2"
 
 [workspace.package]
 edition = "2021"
 rust-version = "1.89"
 publish = false
-repository = "https://github.com/CavalRe/cavalre-ledgers"
+repository = "https://github.com/CavalRe/cavalre-ledger"
 
 [profile.release]
 overflow-checks = true

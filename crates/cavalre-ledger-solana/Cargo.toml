@@ -8,4 +8,5 @@ repository.workspace = true
 description = "Fresh Solana Ledger draft based on the original Solidity LedgerLib"
 
 [dependencies]
+cavalre-ledger-core = { path = "../cavalre-ledger-core", version = "0.1.0" }
 anchor-lang = "=1.2.0"

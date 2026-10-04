@@ -8,9 +8,15 @@ proof of complete parity with this baseline.
 
 | Solidity module | Rust module | Status |
 | --- | --- | --- |
-| `LedgerLib.sol` | `ledger_lib.rs` | Identity, effective flags and custody lookup implemented; accounting pending |
+| `LedgerLib.sol` | `cavalre-ledger-core/src/ledger_lib.rs` | Identity, effective flags and custody lookup implemented; accounting pending |
 | `Ledger.sol` | `ledger.rs` | Planned program operations; not created yet |
 | `LedgerView.sol` | `ledger_view.rs` | Planned read interface; not created yet |
+
+The reusable core holds shared rules without platform dependencies.
+`cavalre-ledger-solana/src/ledger_lib.rs` supplies PDA derivation and forwards to
+the core. Address types are host-defined; the core does not impose Solana keys.
+The pure accounting portion will remain in the core rather than a separate
+kernel crate for now.
 
 Keep corresponding functions in recognizable order and use Rust naming
 conventions. Introduce platform-specific files only for actual Solana needs.
@@ -19,7 +25,7 @@ There are no placeholder program modules implying unfinished features work.
 ## Recover useful work without restoring the old model
 
 The superseded implementation is preserved at
-[`37e46c5`](https://github.com/CavalRe/cavalre-ledgers/tree/37e46c5b9465cdf9a501d99eea5b661c0914834a).
+[`37e46c5`](https://github.com/CavalRe/cavalre-ledger/tree/37e46c5b9465cdf9a501d99eea5b661c0914834a).
 The paths below refer to that commit, not the current working tree.
 
 | When needed | Prior source | What to adapt |

@@ -1,24 +1,24 @@
-use anchor_lang::prelude::Pubkey;
-use cavalre_ledger_solana::ledger_lib::*;
+use cavalre_ledger_core::ledger_lib::{self, *};
+type Flags = ledger_lib::Flags<u64>;
 use std::collections::BTreeMap;
 
 #[derive(Default)]
 struct MemoryStore {
-    flags: BTreeMap<Pubkey, Flags>,
-    custody: BTreeMap<Pubkey, Pubkey>,
-    relatives: BTreeMap<Pubkey, Pubkey>,
+    flags: BTreeMap<u64, Flags>,
+    custody: BTreeMap<u64, u64>,
+    relatives: BTreeMap<u64, u64>,
 }
 
-impl Store<Pubkey> for MemoryStore {
-    fn flags(&self, absolute: &Pubkey) -> Result<Option<Flags>, Error> {
+impl Store<u64> for MemoryStore {
+    fn flags(&self, absolute: &u64) -> Result<Option<Flags>, Error> {
         Ok(self.flags.get(absolute).copied())
     }
 
-    fn custody_account(&self, absolute: &Pubkey) -> Result<Option<Pubkey>, Error> {
+    fn custody_account(&self, absolute: &u64) -> Result<Option<u64>, Error> {
         Ok(self.custody.get(absolute).copied())
     }
 
-    fn relative(&self, absolute: &Pubkey) -> Result<Pubkey, Error> {
+    fn relative(&self, absolute: &u64) -> Result<u64, Error> {
         self.relatives
             .get(absolute)
             .copied()
@@ -26,8 +26,8 @@ impl Store<Pubkey> for MemoryStore {
     }
 }
 
-fn key(n: u8) -> Pubkey {
-    Pubkey::new_from_array([n; 32])
+fn key(n: u8) -> u64 {
+    u64::from(n)
 }
 
 fn root() -> MemoryStore {
@@ -44,8 +44,8 @@ fn root() -> MemoryStore {
     store
 }
 
-fn group(store: &mut MemoryStore, credit: bool) -> Pubkey {
-    let absolute = to_address(&key(9), &key(1), &key(2)).0;
+fn group(store: &mut MemoryStore, credit: bool) -> u64 {
+    let absolute = TestAddresses.to_address(&key(1), &key(2));
     store.flags.insert(
         absolute,
         Flags {
@@ -68,7 +68,7 @@ fn group(store: &mut MemoryStore, credit: bool) -> Pubkey {
 fn direct_implicit_leaf_needs_no_registration() {
     let store = root();
     let (effective, original, absolute) =
-        effective_flags(&store, &key(9), &key(1), &key(1), &key(3)).unwrap();
+        effective_flags(&store, &TestAddresses, &key(1), &key(1), &key(3)).unwrap();
     assert_eq!(original, None);
     assert_eq!(effective.account_kind, AccountKind::DebitLedger);
     assert_eq!(effective.token_kind, TokenKind::Unregistered);
@@ -87,7 +87,7 @@ fn nested_implicit_leaves_inherit_both_polarities_and_custody() {
         let mut store = root();
         let parent = group(&mut store, credit);
         let (effective, original, _) =
-            effective_flags(&store, &key(9), &key(1), &parent, &key(3)).unwrap();
+            effective_flags(&store, &TestAddresses, &key(1), &parent, &key(3)).unwrap();
         assert_eq!(original, None);
         assert_eq!(effective.account_kind.is_credit(), credit);
         assert!(!effective.account_kind.is_group());
@@ -103,7 +103,7 @@ fn nested_implicit_leaves_inherit_both_polarities_and_custody() {
 fn registered_leaf_keeps_its_own_polarity() {
     let mut store = root();
     let parent = group(&mut store, false);
-    let absolute = to_address(&key(9), &parent, &key(3)).0;
+    let absolute = TestAddresses.to_address(&parent, &key(3));
     let original = Flags {
         parent,
         account_kind: AccountKind::CreditLedger,
@@ -112,7 +112,7 @@ fn registered_leaf_keeps_its_own_polarity() {
     };
     store.flags.insert(absolute, original);
     assert_eq!(
-        effective_flags(&store, &key(9), &key(1), &parent, &key(3)),
+        effective_flags(&store, &TestAddresses, &key(1), &parent, &key(3)),
         Ok((original, Some(original), absolute))
     );
     // Custodian polarity is independent of the leaf's polarity.
@@ -126,16 +126,16 @@ fn registered_leaf_keeps_its_own_polarity() {
 fn rejects_wrong_root_and_non_group_parent() {
     let mut store = root();
     assert_eq!(
-        effective_flags(&store, &key(9), &key(8), &key(1), &key(3)),
+        effective_flags(&store, &TestAddresses, &key(8), &key(1), &key(3)),
         Err(Error::DifferentRoots)
     );
     assert_eq!(
-        effective_flags(&store, &key(9), &key(1), &key(7), &key(3)),
+        effective_flags(&store, &TestAddresses, &key(1), &key(7), &key(3)),
         Err(Error::InvalidAccountGroup)
     );
     store.flags.get_mut(&key(1)).unwrap().account_kind = AccountKind::DebitLedger;
     assert_eq!(
-        effective_flags(&store, &key(9), &key(1), &key(1), &key(3)),
+        effective_flags(&store, &TestAddresses, &key(1), &key(1), &key(3)),
         Err(Error::InvalidAccountGroup)
     );
 }
@@ -146,14 +146,16 @@ fn rejects_depth_overflow() {
     let parent = group(&mut store, false);
     store.flags.get_mut(&parent).unwrap().depth = u8::MAX;
     assert_eq!(
-        effective_flags(&store, &key(9), &key(1), &parent, &key(3)),
+        effective_flags(&store, &TestAddresses, &key(1), &parent, &key(3)),
         Err(Error::DepthOverflow)
     );
 }
 
-#[test]
-fn relative_identity_is_scoped_by_parent_and_program() {
-    let address = to_address(&key(9), &key(1), &key(3)).0;
-    assert_ne!(address, to_address(&key(9), &key(2), &key(3)).0);
-    assert_ne!(address, to_address(&key(8), &key(1), &key(3)).0);
+// Test-only address scheme, deliberately independent of Solana. Production
+// hosts choose and authenticate their own collision-resistant derivation.
+struct TestAddresses;
+impl AddressDerivation<u64> for TestAddresses {
+    fn to_address(&self, parent: &u64, relative: &u64) -> u64 {
+        parent * 256 + relative
+    }
 }
