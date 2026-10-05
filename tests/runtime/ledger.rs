@@ -14,6 +14,7 @@ use spl_token_interface::state::{Account as TokenAccount, AccountState, Mint};
 mod acceptance;
 const SYSTEM: Address = address!("11111111111111111111111111111111");
 const TOKEN: Address = address!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+const TOKEN_2022: Address = address!("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
 fn ap(a: Address) -> anchor_lang::prelude::Pubkey {
     anchor_lang::prelude::Pubkey::new_from_array(a.to_bytes())
 }
@@ -97,6 +98,9 @@ impl Harness {
         }
     }
     fn pack<T: Pack>(&mut self, key: Address, value: T) {
+        self.pack_for(key, value, TOKEN);
+    }
+    fn pack_for<T: Pack>(&mut self, key: Address, value: T, token_program: Address) {
         let mut data = vec![0; T::LEN];
         T::pack(value, &mut data).unwrap();
         self.svm
@@ -105,7 +109,7 @@ impl Harness {
                 Account {
                     lamports: self.svm.minimum_balance_for_rent_exemption(T::LEN),
                     data,
-                    owner: TOKEN,
+                    owner: token_program,
                     executable: false,
                     rent_epoch: 0,
                 },
@@ -113,7 +117,7 @@ impl Harness {
             .unwrap();
     }
     fn token(&self, key: Address) -> u64 {
-        TokenAccount::unpack(&self.svm.get_account(&key).unwrap().data)
+        TokenAccount::unpack(&self.svm.get_account(&key).unwrap().data[..TokenAccount::LEN])
             .unwrap()
             .amount
     }

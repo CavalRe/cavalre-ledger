@@ -4,7 +4,7 @@ A reusable core based on the original Solidity Ledger, with a Solana adapter.
 Both share one implementation of the accounting rules.
 
 The program now supports ledger creation, account registration and removal,
-implicit leaves, transfers, and standard SPL Token deposits and withdrawals.
+implicit leaves, transfers, and classic SPL Token and compatible Token-2022 deposits and withdrawals.
 The reusable core implements the original depth-aligned debit/credit walk.
 This is a tested development implementation, not a deployed or audited release.
 
@@ -65,7 +65,7 @@ issuance, implicit receipts, parent admission, account lifecycle, token custody,
 application isolation, PDA authority, and transaction rollback. This is not the
 full original Solidity test suite or a security audit.
 
-The suite contains **52 test functions**, including **19 sBPF runtime tests**,
+The suite contains **58 test functions**, including **25 sBPF runtime tests**,
 **eight independent host tests**, and **12 read-interface tests**. The read suites
 also run with mutation modules excluded; these repeat runs are not extra tests.
 One core test replays the 162 saved posting cases; those are not 162 separate

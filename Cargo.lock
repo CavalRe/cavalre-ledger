@@ -851,7 +851,9 @@ dependencies = [
  "solana-signer",
  "solana-transaction",
  "solana-transaction-error",
+ "spl-token-2022-interface",
  "spl-token-interface 3.0.0",
+ "spl-token-metadata-interface",
  "wincode",
 ]
 

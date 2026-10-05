@@ -7,6 +7,8 @@ use solana_instruction_error::InstructionError;
 use solana_transaction_error::TransactionError;
 #[path = "execution_limits.rs"]
 mod execution_limits;
+#[path = "token2022.rs"]
+mod token2022;
 
 fn run(
     h: &mut Harness,
@@ -34,6 +36,15 @@ fn succeeds(h: &mut Harness, signers: &[usize], instruction: Instruction) {
 // supplied accounts, including unallocated destinations and token accounts.
 // Only the transaction payer's fee is excluded; its data/owner are still checked.
 fn rejects(h: &mut Harness, signers: &[usize], instruction: Instruction, code: u32) {
+    rejects_with_error(h, signers, instruction, InstructionError::Custom(code));
+}
+
+fn rejects_with_error(
+    h: &mut Harness,
+    signers: &[usize],
+    instruction: Instruction,
+    error: InstructionError,
+) {
     let before: Vec<_> = instruction
         .accounts
         .iter()
@@ -42,7 +53,7 @@ fn rejects(h: &mut Harness, signers: &[usize], instruction: Instruction, code: u
     let failure = run(h, signers, instruction).expect_err("expected rejection");
     assert_eq!(
         failure.err,
-        TransactionError::InstructionError(0, InstructionError::Custom(code)),
+        TransactionError::InstructionError(0, error),
         "wrong rejection: {failure:?}"
     );
     for (key, old) in before {
@@ -72,6 +83,7 @@ fn remaining(root: Address, keys: &[Address]) -> Vec<Address> {
 }
 
 struct External {
+    token_program: Address,
     mint: Address,
     wallet: Address,
     root: Address,
@@ -83,9 +95,15 @@ impl External {
         Self::named(h, tag, owner, "Token")
     }
     fn named(h: &mut Harness, tag: u8, owner: usize, name: &str) -> Self {
+        let token = Self::setup(h, tag, owner, TOKEN);
+        succeeds(h, &[0], token.registration(h, name));
+        token
+    }
+    // Native mint/wallet fixtures; Ledger registration and settlement execute sBPF.
+    fn setup(h: &mut Harness, tag: u8, owner: usize, token_program: Address) -> Self {
         let mint = Address::new_from_array([tag; 32]);
         let wallet = Address::new_from_array([tag + 1; 32]);
-        h.pack(
+        h.pack_for(
             mint,
             Mint {
                 mint_authority: COption::None,
@@ -94,8 +112,9 @@ impl External {
                 is_initialized: true,
                 freeze_authority: COption::None,
             },
+            token_program,
         );
-        h.pack(
+        h.pack_for(
             wallet,
             TokenAccount {
                 mint,
@@ -107,6 +126,7 @@ impl External {
                 delegated_amount: 0,
                 close_authority: COption::None,
             },
+            token_program,
         );
         let root = sa(ledger::ledger::root_address(&ap(SYSTEM), &ap(mint)).0);
         let source = child(root, sa(SOURCE));
@@ -115,26 +135,28 @@ impl External {
             &ledger::ID,
         )
         .0);
-        let create = ix(
-            accounts::RegisterToken {
-                payer: ap(h.key(0)),
-                root: ap(root),
-                mint: ap(mint),
-                vault: ap(vault),
-                token_program: ap(TOKEN),
-                system_program: ap(SYSTEM),
-            },
-            instruction::AddExternalToken { name: name.into() },
-            &[source],
-        );
-        succeeds(h, &[0], create);
         Self {
+            token_program,
             mint,
             wallet,
             root,
             source,
             vault,
         }
+    }
+    fn registration(&self, h: &Harness, name: &str) -> Instruction {
+        ix(
+            accounts::RegisterToken {
+                payer: ap(h.key(0)),
+                root: ap(self.root),
+                mint: ap(self.mint),
+                vault: ap(self.vault),
+                token_program: ap(self.token_program),
+                system_program: ap(SYSTEM),
+            },
+            instruction::AddExternalToken { name: name.into() },
+            &[self.source],
+        )
     }
 
     fn movement(
@@ -156,7 +178,7 @@ impl External {
             mint: ap(self.mint),
             vault: ap(self.vault),
             wallet: ap(self.wallet),
-            token_program: ap(TOKEN),
+            token_program: ap(self.token_program),
             system_program: ap(SYSTEM),
         };
         let mut rest = vec![self.source, parent, child(parent, relative)];

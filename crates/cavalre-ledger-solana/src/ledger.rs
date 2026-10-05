@@ -3,8 +3,13 @@
 pub use crate::ledger_lib::{decode, root_address, LedgerError, Record, SOURCE};
 use crate::ledger_lib::{to_address, MAGIC, SPACE};
 use anchor_lang::{prelude::*, system_program};
-use anchor_spl::token::{self, Mint, Token, TokenAccount, TransferChecked};
+use anchor_spl::token_interface::{
+    self as token, Mint, TokenAccount, TokenInterface, TransferChecked,
+};
 use cavalre_ledger_core::{ledger as service, ledger_lib as core};
+use token::spl_token_2022::extension::{
+    BaseStateWithExtensions, ExtensionType, StateWithExtensions,
+};
 
 #[derive(Accounts)]
 pub struct LedgerAccounts<'info> {
@@ -25,11 +30,12 @@ pub struct RegisterToken<'info> {
     /// CHECK: derived from the mint, authenticated and initialized in the handler.
     #[account(mut)]
     pub root: UncheckedAccount<'info>,
-    pub mint: Account<'info, Mint>,
+    #[account(mint::token_program=token_program)]
+    pub mint: InterfaceAccount<'info, Mint>,
     #[account(init, payer=payer, seeds=[b"vault", root.key().as_ref()], bump,
-        token::mint=mint, token::authority=root)]
-    pub vault: Account<'info, TokenAccount>,
-    pub token_program: Program<'info, Token>,
+        token::mint=mint, token::authority=root, token::token_program=token_program)]
+    pub vault: InterfaceAccount<'info, TokenAccount>,
+    pub token_program: Interface<'info, TokenInterface>,
     pub system_program: Program<'info, System>,
 }
 #[derive(Accounts)]
@@ -42,14 +48,57 @@ pub struct MoveTokens<'info> {
     /// CHECK: authenticated root record and signer seeds in handler.
     #[account(mut)]
     pub root: UncheckedAccount<'info>,
-    pub mint: Account<'info, Mint>,
+    #[account(mint::token_program=token_program)]
+    pub mint: InterfaceAccount<'info, Mint>,
     #[account(mut, seeds=[b"vault",root.key().as_ref()],bump,
-        token::mint=mint,token::authority=root)]
-    pub vault: Account<'info, TokenAccount>,
-    #[account(mut, token::mint=mint, constraint=wallet.key()!=vault.key() @ LedgerError::InvalidAccount)]
-    pub wallet: Account<'info, TokenAccount>,
-    pub token_program: Program<'info, Token>,
+        token::mint=mint,token::authority=root,token::token_program=token_program)]
+    pub vault: InterfaceAccount<'info, TokenAccount>,
+    #[account(mut, token::mint=mint, token::token_program=token_program,
+        constraint=wallet.key()!=vault.key() @ LedgerError::InvalidAccount)]
+    pub wallet: InterfaceAccount<'info, TokenAccount>,
+    pub token_program: Interface<'info, TokenInterface>,
     pub system_program: Program<'info, System>,
+}
+
+// Compatibility is determined by token behavior, not by a mint allowlist.
+// Inspect extensions on every custody operation, including already-admitted mints.
+fn validate_mint(mint: &AccountInfo) -> Result<()> {
+    if mint.owner == &token::ID {
+        let data = mint.try_borrow_data()?;
+        let state = StateWithExtensions::<token::spl_token_2022::state::Mint>::unpack(&data)?;
+        for extension in state.get_extension_types()? {
+            require!(
+                matches!(
+                    extension,
+                    ExtensionType::MintCloseAuthority
+                        | ExtensionType::MetadataPointer
+                        | ExtensionType::TokenMetadata
+                        | ExtensionType::GroupPointer
+                        | ExtensionType::TokenGroup
+                        | ExtensionType::GroupMemberPointer
+                        | ExtensionType::TokenGroupMember
+                        | ExtensionType::InterestBearingConfig
+                        | ExtensionType::ScaledUiAmount
+                ),
+                LedgerError::UnsupportedToken
+            );
+        }
+    }
+    Ok(())
+}
+
+fn validate_token_account(account: &AccountInfo) -> Result<()> {
+    if account.owner == &token::ID {
+        let data = account.try_borrow_data()?;
+        let state = StateWithExtensions::<token::spl_token_2022::state::Account>::unpack(&data)?;
+        for extension in state.get_extension_types()? {
+            require!(
+                extension == ExtensionType::ImmutableOwner,
+                LedgerError::UnsupportedToken
+            );
+        }
+    }
+    Ok(())
 }
 
 struct StoredAccount {
@@ -510,6 +559,8 @@ pub fn add_external_token<'info>(
     ctx: Context<'info, RegisterToken<'info>>,
     name: String,
 ) -> Result<()> {
+    validate_mint(&ctx.accounts.mint.to_account_info())?;
+    validate_token_account(&ctx.accounts.vault.to_account_info())?;
     SolanaHost::new(
         ctx.accounts.root.to_account_info(),
         ctx.remaining_accounts,
@@ -580,6 +631,9 @@ pub fn move_tokens<'info>(
     amount: u64,
     deposit: bool,
 ) -> Result<()> {
+    validate_mint(&ctx.accounts.mint.to_account_info())?;
+    validate_token_account(&ctx.accounts.vault.to_account_info())?;
+    validate_token_account(&ctx.accounts.wallet.to_account_info())?;
     let mut host = SolanaHost::new(
         ctx.accounts.root.to_account_info(),
         ctx.remaining_accounts,

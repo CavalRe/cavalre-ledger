@@ -19,7 +19,7 @@ validated account snapshot without invoking Ledger. Existing exports from
 
 Each entry point invokes the shared core service through `SolanaHost`. The host
 authenticates runtime signers, validates and serializes accounts, derives PDAs,
-allocates rent-funded storage and performs standard SPL movement. Custodian,
+allocates rent-funded storage and performs classic SPL Token or Token-2022 movement. Custodian,
 lifecycle, admission, posting, backing and exact-settlement rules live in the
 core. Its `atomic` contract uses Solana transaction rollback: every error is
 propagated directly to the entry point. The host is consumed by each call.
@@ -65,7 +65,7 @@ registration, retaining storage; rent reclamation is not implemented.
 ## Instructions
 
 - `add_ledger`: create an accounting-only root and Source.
-- `add_external_token`: permissionlessly create a standard SPL mint's root,
+- `add_external_token`: permissionlessly create a supported mint's root,
   Source and vault. The initializer acquires no special spending authority.
 - `add_sub_account`, `add_sub_account_group`: register accounts with custodian
   authorization and existing balance/kind checks.
@@ -96,10 +96,49 @@ header. Parent is at byte offset 40 for RPC filtering; filter registered records
 when listing registered children. `AccountChanged` reports updated balances and
 registration after mutations; this new schema is not ERC20 event compatibility.
 
+## Token compatibility
+
+The existing instructions accept classic SPL Token and Token-2022 through
+Anchor's shared token interface. Supply the mint's owning token program in
+`token_program`; the mint, vault and wallet must all belong to that program.
+The root remains unique per mint, with the same Source, custody permissions,
+base-unit amounts and exact-settlement checks. No discretionary mint list is used.
+
+Token-2022 extensions are inspected at registration and on every deposit and
+withdrawal. The current policy is:
+
+| Extension | Treatment |
+| --- | --- |
+| No extensions | Supported |
+| `MetadataPointer`, `TokenMetadata` | Supported; descriptive data does not change raw balances |
+| `GroupPointer`, `TokenGroup`, `GroupMemberPointer`, `TokenGroupMember` | Supported; group metadata does not change settlement |
+| `MintCloseAuthority` | Supported; the token program enforces its supply checks |
+| `InterestBearingConfig`, `ScaledUiAmount` | Supported in raw base units; Ledger does not apply UI multipliers or accrue additional units |
+| Token-account `ImmutableOwner` | Supported, including Token-2022 associated accounts |
+| All other mint or token-account extensions | Rejected with `UnsupportedToken`; malformed data also rejects |
+
+The rejected set includes transfer fees, transfer hooks, permanent delegates,
+confidential transfers, nontransferable/pausable tokens, default account states,
+CPI guards and memo requirements. This version has no settlement mechanism for
+those configurations. Fee and hook extensions are rejected even when their
+current fee is zero or their hook is disabled. Unknown extension data cannot
+silently become supported. Metadata support here is custody compatibility;
+completing metadata queries is separate work.
+
+Both token programs retain their own mint/freeze authority behavior. Runtime
+settlement failures roll back token movement, accounting and new allocations.
+The Ledger instruction arguments, account order and stored record layout are
+unchanged; clients select the appropriate token program.
+
+References: [Anchor token interface](https://www.anchor-lang.com/docs/tokens/basics/transfer-tokens)
+and [Token-2022 extensions](https://solana.com/docs/tokens/extensions).
+
 ## Supported scope and release status
 
-- Standard SPL Token only. Token-2022, transfer hooks, transfer-fee tokens and
-  direct native SOL are not supported by this first executable implementation.
+- Classic SPL Token and the Token-2022 configurations above are supported.
+  Direct native SOL deposits and withdrawals are a required next feature, not
+  implemented by this change. Native SOL must not be advertised as supported
+  merely because a client can separately wrap it into a token account.
 - Cross-custodian external-token transfers, off-chain intents, delegated app
   authority, upgrades/migration policy and rent reclamation are not implemented.
 - Group cancellation preserves the original accounting walk; the current
