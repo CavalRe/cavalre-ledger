@@ -367,6 +367,23 @@ fn proxy(h: &Harness, app: Address, authority: Address, mut inner: Instruction) 
     }
 }
 
+fn custody_proxy(h: &Harness, app: Address, authority: Address, inner: Instruction) -> Instruction {
+    use anchor_lang::Discriminator;
+    let mut call = proxy(h, app, authority, inner);
+    if [
+        instruction::Wrap::DISCRIMINATOR,
+        instruction::Unwrap::DISCRIMINATOR,
+        instruction::WrapSol::DISCRIMINATOR,
+        instruction::UnwrapSol::DISCRIMINATOR,
+    ]
+    .iter()
+    .any(|d| call.data.starts_with(d))
+    {
+        call.data.splice(..0, b"custody-helper".iter().copied());
+    }
+    call
+}
+
 #[test]
 fn distinct_payer_funds_application_pda_and_unsigned_recipient_can_withdraw() {
     let mut h = Harness::new();

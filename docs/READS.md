@@ -72,6 +72,11 @@ read-only in that case; vault/wallet and payer remain writable for the unchanged
 native transfer path. For nonzero amounts, explicitly set the root writable in
 the client account metas, along with the Source, endpoint and changed ancestors.
 The generated `MoveTokens`/`MoveSol` account metas do not set this automatically.
+Application programs can use `ledger_cpi::{wrap, unwrap, wrap_sol, unwrap_sol}`
+with the crate's `cpi` feature to select the inner root permission from the amount.
+These helpers retain the supplied remaining-account privileges; the outer
+transaction must provide all required writes. See the
+[CPI example](../crates/cavalre-ledger-solana/README.md#instructions).
 
 `ledger_view::transfer_writable_accounts` in the core and the matching Solana
 `Reader` method reuse the original posting walk to return the Ledger records a

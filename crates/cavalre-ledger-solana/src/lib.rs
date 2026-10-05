@@ -2,6 +2,8 @@
 use anchor_lang::prelude::*;
 #[cfg(feature = "mutations")]
 pub mod ledger;
+#[cfg(feature = "cpi")]
+pub mod ledger_cpi;
 pub mod ledger_lib;
 pub mod ledger_view;
 #[cfg(feature = "mutations")]

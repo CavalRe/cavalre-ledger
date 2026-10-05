@@ -120,11 +120,11 @@ fn zero_sol_settlement_never_allocates_receiver_storage() {
 
 #[test]
 fn sol_custody_requires_root_writes_only_for_nonzero_amounts_direct_and_cpi() {
-    for cpi in [false, true] {
+    for mode in ["direct", "raw_cpi", "helper_cpi"] {
         let mut h = Harness::new();
         let sol = Sol::new(&mut h);
         let app = Address::new_from_array([82; 32]);
-        let authority = if cpi {
+        let authority = if mode != "direct" {
             h.svm
                 .add_program(
                     app,
@@ -143,12 +143,10 @@ fn sol_custody_requires_root_writes_only_for_nonzero_amounts_direct_and_cpi() {
         } else {
             h.key(0)
         };
-        let call = |h: &Harness, ix| {
-            if cpi {
-                proxy(h, app, authority, ix)
-            } else {
-                ix
-            }
+        let call = |h: &Harness, ix| match mode {
+            "helper_cpi" => custody_proxy(h, app, authority, ix),
+            "raw_cpi" => proxy(h, app, authority, ix),
+            _ => ix,
         };
         let parent = child(sol.root, authority);
         let create = call(
@@ -174,12 +172,21 @@ fn sol_custody_requires_root_writes_only_for_nonzero_amounts_direct_and_cpi() {
                 }
             }
             let missing_write = call(&h, missing_write);
-            rejects(
-                &mut h,
-                &[0, 1],
-                missing_write,
-                LedgerError::InvalidAccount.into(),
-            );
+            if mode == "helper_cpi" {
+                rejects_with_error(
+                    &mut h,
+                    &[0, 1],
+                    missing_write,
+                    InstructionError::PrivilegeEscalation,
+                );
+            } else {
+                rejects(
+                    &mut h,
+                    &[0, 1],
+                    missing_write,
+                    LedgerError::InvalidAccount.into(),
+                );
+            }
             let keys = [sol.root, sol.source, parent, leaf, sol.vault, h.key(1)];
             let before = keys.map(|key| h.svm.get_account(&key));
             let mut zero =
@@ -196,7 +203,11 @@ fn sol_custody_requires_root_writes_only_for_nonzero_amounts_direct_and_cpi() {
             assert_eq!(keys.map(|key| h.svm.get_account(&key)), before);
             assert_eq!(super::events::event_bytes(&result.logs).len(), 5);
             let movement = call(&h, movement);
-            succeeds(&mut h, &[0, 1], movement);
+            let result = run(&mut h, &[0, 1], movement).unwrap();
+            eprintln!(
+                "SOL custody {mode} deposit={deposit}: {} CUs",
+                result.compute_units_consumed
+            );
             assert_eq!(sol.custody(&h), if deposit { AMOUNT } else { 0 });
         }
     }

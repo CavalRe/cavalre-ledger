@@ -175,14 +175,33 @@ No rescaling occurs.
 wrap/unwrap, the client must explicitly mark the root writable: these postings
 cross Source credit and receiver debit and change both root balances. Generated
 Anchor account metas default the root to read-only; adjust the instruction's
-metas before signing or invoking through CPI. Existing transactions with writable
+metas before signing. Existing transactions with writable
 roots remain valid. A missing required root write rejects atomically at commit,
 including rollback of native token movement and new leaf allocation.
-Anchor's generated `cpi::wrap`/`unwrap`/`wrap_sol`/`unwrap_sol` wrappers also fix
-the root meta as read-only. Nonzero CPI callers must construct the instruction,
-mark the root writable, then use `invoke`/`invoke_signed`; making only the outer
-transaction root writable is insufficient. The test consumer demonstrates
-forwarding the explicitly selected inner-instruction permissions.
+
+For application CPI, enable this crate's `cpi` feature and use
+`ledger_cpi::{wrap, unwrap, wrap_sol, unwrap_sol}`. These helpers accept the same
+Anchor `CpiContext` and account structs as the generated wrappers. They select
+the inner root meta from the amount: writable for nonzero, read-only for zero.
+They preserve signer seeds and remaining-account privileges.
+
+```rust,ignore
+use anchor_lang::prelude::*;
+use cavalre_ledger_solana::ledger_cpi as cpi;
+
+// accounts: cpi::accounts::MoveTokens; records: the required Ledger records.
+let ctx = CpiContext::new_with_signer(ledger_program_id, accounts, signer_seeds)
+    .with_remaining_accounts(records);
+cpi::wrap(ctx, parent, relative, amount)?;
+```
+
+The outer transaction must still supply the required writable root, Source,
+endpoint and ancestors for nonzero settlement. Helpers cannot grant privileges
+missing from that transaction; Solana rejects such a call before entering Ledger.
+Anchor's generated `cpi::wrap`/`unwrap`/`wrap_sol`/`unwrap_sol` keep the root
+read-only, so use the `ledger_cpi` variants for custody. The
+[test consumer](../../tests/consumer/src/lib.rs) exercises the supported helpers
+with an application PDA signer.
 
 For zero amounts, all Ledger records can be read-only, including root, Source,
 receiver and ancestors. The full authorization, admission, backing and native
@@ -214,8 +233,9 @@ Tree mutations need write access to the parent whose child count changes,
 including the token root when modifying its direct children. With generated
 `LedgerAccounts` metas, explicitly mark that root writable for such operations
 and for mint/burn transfers. Matching no-op mutations require no record writes.
-Registration and custody settlement retain their writable root declarations.
-Zero-amount custody operations also avoid endpoint allocation, while retaining
+Ledger creation requires a writable global Root. Later operations require writes
+only to the Ledger records they change. Zero-amount custody operations avoid
+endpoint allocation and allow read-only Ledger records, while retaining
 their token/System calls, settlement checks and fixed account declarations.
 Existing clients that supply extra writable accounts still work, but retain
 those unnecessary transaction locks.

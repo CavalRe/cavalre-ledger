@@ -34,7 +34,7 @@ original runtime scenarios are in [ledger.rs](../tests/runtime/ledger.rs).
 | Token-2022 | Plain and metadata mints settle through direct calls and application CPI. Immutable-owner wallets work; UI-scaled tokens settle in raw units. Unsupported mint/account extensions reject, including on subsequent settlement. Mixed token programs and frozen accounts reject; late commit failure rolls back settlement and allocation. |
 | Native token identity | Wrong mints, wallets, vault PDAs, vault authorities, substituted token programs and wallet/vault aliasing reject. |
 | Settlement atomicity | Frozen token accounts reject. A late commit failure after token movement and new-leaf allocation rolls back token balances, ledger writes and rent allocation. |
-| Custody root access | Zero-amount classic SPL, Token-2022 and native SOL wrap/unwrap run with all Ledger records read-only, directly and through application CPI, for absent and funded endpoints. Nonzero calls with a read-only root reject at commit and roll back settlement/allocation; the same calls succeed when root writes are supplied. |
+| Custody root access | Zero-amount classic SPL, Token-2022 and native SOL wrap/unwrap run with all Ledger records read-only, directly and through both raw CPI and the typed `ledger_cpi` helpers, for absent and funded endpoints. Nonzero direct/raw calls with a read-only root reject at commit and roll back settlement/allocation; helper calls reject missing outer write privileges before entering Ledger. The same calls succeed when root writes are supplied. Helpers preserve application PDA signing and remaining records; a signed but incorrect token funder still rejects. |
 | Shared custody | Two application branches share one Source and root totals. Direct donations increase backing without claims; an empty payer cannot use existing custody surplus to fund a deposit. |
 | Withdrawal backing | A vault that covers an individual withdrawal but not all recorded claims rejects that withdrawal. |
 | Internal accounting | Authorized issuance and retirement support the full `u128` range; overflow rejects atomically and internal issuance changes no external-token claims. |
@@ -125,9 +125,36 @@ Measured classic SPL deposit/withdrawal calls cost 2 fewer CUs; other sampled
 operations are unchanged. The program artifact shrinks by 200 bytes to 401,160.
 There is a client compatibility change: generated account metas (including
 Anchor CPI wrappers) now mark the root read-only. Nonzero custody instructions
-must explicitly supply writable root metas; CPI callers must set this on the
-inner instruction too. Zero-amount tests separately exercise the newly allowed
+must explicitly supply writable root metas. The `ledger_cpi` custody helpers
+select the inner root permission from the amount; applications must supply
+the required privileges in the outer transaction. Zero-amount tests separately exercise the newly allowed
 read-only Ledger records with native vault/wallet writes retained.
+
+Adding the typed custody CPI helpers, compared with `0b8ec4e`, preserves all
+2,205 profiled transaction outcomes, packet sizes, account/write counts, fees
+and rent. Direct and internal compute costs are unchanged. Existing raw CPI
+cases cost 6 additional CUs from the test consumer's new dispatch branch; the
+Ledger program remains 401,160 bytes. The test consumer grows from 129,608 to
+158,432 bytes (+28,824) with all four helpers and their test dispatch code.
+That is caller-program code, not additional Ledger account storage or rent.
+
+The custody root-access tests compare the two CPI paths in the same consumer:
+
+| Asset / operation | Raw forwarding CUs | Typed helper CUs | Increase |
+| --- | ---: | ---: | ---: |
+| Classic SPL deposit | 74,361 | 77,545 | 3,184 (4.3%) |
+| Classic SPL withdrawal | 68,219 | 71,405 | 3,186 (4.7%) |
+| Token-2022 deposit | 76,628 | 79,812 | 3,184 (4.2%) |
+| Token-2022 withdrawal | 70,486 | 73,672 | 3,186 (4.5%) |
+| Native SOL deposit | 85,393 | 88,262 | 2,869 (3.4%) |
+| Native SOL withdrawal | 79,261 | 82,131 | 2,870 (3.6%) |
+
+These are complete transaction measurements for the tested application PDA and
+nested leaf. The helper path includes argument decoding, typed context assembly
+and reserialization in the consumer; raw forwarding reuses serialized input.
+The difference is not the cost of the root-permission assignment alone, nor a
+bound for every application. Reproduce after the sBPF build with
+`cargo test -p cavalre-ledger-runtime-tests --test ledger custody_requires_root_writes_only --locked -- --nocapture`.
 
 The [Token-2022 suite](../tests/runtime/token2022.rs) executes against LiteSVM's
 bundled Token-2022 11.0.0 sBPF. Its plain/metadata mints, metadata initialization,

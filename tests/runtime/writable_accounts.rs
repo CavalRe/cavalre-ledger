@@ -245,7 +245,7 @@ fn zero_token_settlement_keeps_absent_receiver_unallocated_and_checks_funder() {
 #[test]
 fn token_custody_requires_root_writes_only_for_nonzero_amounts_direct_and_cpi() {
     for token_program in [TOKEN, TOKEN_2022] {
-        for cpi in [false, true] {
+        for mode in ["direct", "raw_cpi", "helper_cpi"] {
             let mut h = Harness::new();
             let e = External::setup(&mut h, 225, 0, token_program);
             let mut wallet = h.svm.get_account(&e.wallet).unwrap();
@@ -255,7 +255,7 @@ fn token_custody_requires_root_writes_only_for_nonzero_amounts_direct_and_cpi() 
             let registration = e.registration(&h);
             succeeds(&mut h, &[0], registration);
             let app = Address::new_from_array([227; 32]);
-            let authority = if cpi {
+            let authority = if mode != "direct" {
                 h.svm
                     .add_program(
                         app,
@@ -274,12 +274,10 @@ fn token_custody_requires_root_writes_only_for_nonzero_amounts_direct_and_cpi() 
             } else {
                 h.key(0)
             };
-            let call = |h: &Harness, ix| {
-                if cpi {
-                    proxy(h, app, authority, ix)
-                } else {
-                    ix
-                }
+            let call = |h: &Harness, ix| match mode {
+                "helper_cpi" => custody_proxy(h, app, authority, ix),
+                "raw_cpi" => proxy(h, app, authority, ix),
+                _ => ix,
             };
             let parent = child(e.root, authority);
             let create = call(
@@ -296,12 +294,23 @@ fn token_custody_requires_root_writes_only_for_nonzero_amounts_direct_and_cpi() 
                 let missing_write = call(&h, missing_write);
                 // Real token movement and any leaf allocation must roll back
                 // when the eventual Ledger root write cannot be committed.
-                rejects(
-                    &mut h,
-                    &[0],
-                    missing_write,
-                    LedgerError::InvalidAccount.into(),
-                );
+                if mode == "helper_cpi" {
+                    // The helper requests the missing write in its inner CPI;
+                    // Solana must reject escalation beyond the outer privileges.
+                    rejects_with_error(
+                        &mut h,
+                        &[0],
+                        missing_write,
+                        InstructionError::PrivilegeEscalation,
+                    );
+                } else {
+                    rejects(
+                        &mut h,
+                        &[0],
+                        missing_write,
+                        LedgerError::InvalidAccount.into(),
+                    );
+                }
                 let keys = [e.root, e.source, parent, receiver, e.vault, e.wallet];
                 let before = keys.map(|key| h.svm.get_account(&key));
                 let mut zero = e.movement(&h, (authority, 0), (parent, relative), 0, deposit, &[]);
@@ -318,8 +327,24 @@ fn token_custody_requires_root_writes_only_for_nonzero_amounts_direct_and_cpi() 
                 assert_eq!(keys.map(|key| h.svm.get_account(&key)), before);
                 assert_eq!(events::event_bytes(&result.logs).len(), 5);
                 let movement = call(&h, movement);
-                succeeds(&mut h, &[0], movement);
+                let result = run(&mut h, &[0], movement).unwrap();
+                eprintln!(
+                    "token custody {token_program} {mode} deposit={deposit}: {} CUs",
+                    result.compute_units_consumed
+                );
                 assert_eq!(h.record(e.root).credit, if deposit { 17 } else { 0 });
+            }
+            if mode == "helper_cpi" {
+                let wrong_funder = call(
+                    &h,
+                    e.movement(&h, (authority, 1), (parent, relative), 0, true, &[]),
+                );
+                rejects(
+                    &mut h,
+                    &[0, 1],
+                    wrong_funder,
+                    LedgerError::Unauthorized.into(),
+                );
             }
         }
     }
