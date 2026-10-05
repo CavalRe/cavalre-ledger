@@ -91,12 +91,15 @@ largest sampled transaction rises from 232706 to 241286 CU. These are address
 samples, not a uniform per-operation surcharge. Clients must resimulate their
 new addresses instead of reusing draft compute estimates.
 
-The Ledger executable grows from 401160 to 411976 bytes (+10816, 2.7%). The
-reader now tracks supplied physical addresses separately from logical records
-so a mint and its Ledger record can coexist and duplicate physical inputs still
-reject. Record allocation sizes and their rent are unchanged. These measurements
-cover the identity fix; they do not include the experimental all-mutation
-backing check.
+The Ledger executable is 404048 bytes, versus 401160 before the identity fix
+(+2888, 0.72%). The initial correction used an additional `BTreeSet` solely for
+physical-input deduplication and grew to 411976 bytes. Replacing that collection
+with a flat input list removes 7928 bytes; all 2205 profile measurements remain
+identical. Duplicate checks scan the supplied snapshot's input list. Ledger
+queries retain their existing map indexes. A mint and its Ledger record can
+coexist, and duplicate physical inputs still reject. Record allocation sizes
+and rent are unchanged. These measurements cover the identity fix; they do not
+include the experimental all-mutation backing check.
 
 The tests submit signed **legacy transactions**, including both compute-limit
 and compute-price instructions. They enforce the 1232-byte packet limit before

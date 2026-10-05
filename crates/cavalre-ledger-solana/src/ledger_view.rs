@@ -16,7 +16,7 @@ use spl_token_2022_interface::{
     state::Mint,
 };
 use spl_token_metadata_interface::state::TokenMetadata;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 pub const METAPLEX_METADATA_PROGRAM: Pubkey =
     pubkey!("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s");
@@ -172,7 +172,8 @@ pub fn credit_balance_of(info: &AccountInfo) -> Result<u128> {
 pub struct Reader {
     // Physical inputs and logical records occupy different address spaces. A
     // token mint and its Ledger record may both be present in the same snapshot.
-    inputs: BTreeSet<Pubkey>,
+    // Deduplicate only this supplied input list; queries use the indexes below.
+    inputs: Vec<Pubkey>,
     records: BTreeMap<Pubkey, Option<Record>>,
     children: BTreeMap<Pubkey, ChildSlot>,
     mints: BTreeMap<Pubkey, MintMetadata>,
@@ -223,7 +224,7 @@ impl Reader {
             let metadata = mint_metadata(&address, owner, data)?;
             self.mints.insert(address, metadata);
         }
-        self.inputs.insert(address);
+        self.inputs.push(address);
         Ok(())
     }
 
@@ -235,7 +236,7 @@ impl Reader {
             LedgerError::InvalidAccount
         );
         self.records.insert(address, None);
-        self.inputs.insert(address);
+        self.inputs.push(address);
         Ok(())
     }
 
@@ -250,7 +251,7 @@ impl Reader {
             LedgerError::InvalidAccount
         );
         self.records.insert(address, None);
-        self.inputs.insert(storage);
+        self.inputs.push(storage);
         Ok(())
     }
 
