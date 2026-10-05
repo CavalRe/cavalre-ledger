@@ -54,8 +54,8 @@ LiteSVM's default setup. This is local execution evidence, not cluster throughpu
 The regression performs **2205 measured transactions** across 90 scenarios:
 leaf depths 4 through 13, three deterministic address sets, and three invocation
 modes: internal accounting, direct classic SPL Token calls, and an application
-PDA calling through the test consumer. Token-2022 functional coverage is separate
-from this resource profile. Roots, groups and registered endpoints use
+PDA calling through the test consumer. Token-2022 and native SOL functional
+coverage is separate from this resource profile. Roots, groups and registered endpoints use
 the maximum 64-byte names. The external direct deposit has separate fee payer,
 application authority and token payer; the CPI path uses its own program-signed
 authority and a separate token payer. Internal paths diverge at the root;
@@ -63,16 +63,16 @@ external paths diverge immediately below the shared application group.
 
 | Leaf depth | Maximum compute units | Maximum transaction bytes | Maximum account keys | Maximum writable keys |
 | --- | ---: | ---: | ---: | ---: |
-| 4 | 110316 | 793 | 15 | 7 |
-| 5 | 92413 | 826 | 16 | 8 |
-| 6 | 109423 | 859 | 17 | 10 |
-| 7 | 139511 | 892 | 18 | 12 |
-| 8 | 151950 | 925 | 19 | 14 |
-| 9 | 160007 | 967 | 20 | 16 |
-| 10 | 187037 | 1033 | 22 | 18 |
-| 11 | 191754 | 1099 | 24 | 20 |
-| 12 | 201161 | 1165 | 26 | 22 |
-| 13 | 214232 | 1231 | 28 | 24 |
+| 4 | 110406 | 793 | 15 | 7 |
+| 5 | 92427 | 826 | 16 | 8 |
+| 6 | 109514 | 859 | 17 | 10 |
+| 7 | 139525 | 892 | 18 | 12 |
+| 8 | 151965 | 925 | 19 | 14 |
+| 9 | 160021 | 967 | 20 | 16 |
+| 10 | 187051 | 1033 | 22 | 18 |
+| 11 | 191768 | 1099 | 24 | 20 |
+| 12 | 201175 | 1165 | 26 | 22 |
+| 13 | 214247 | 1231 | 28 | 24 |
 
 Each column is its own maximum across that depth's measured operations. Compute
 need not increase monotonically because PDA bump searches vary with addresses.
@@ -88,17 +88,17 @@ as test setup; all Ledger tree state is created through actual instructions.
 
 | Operation at depth 13 | Maximum compute units | Maximum bytes | New storage funding (SOL) |
 | --- | ---: | ---: | ---: |
-| Create group | 94860 | 858 | 0.0044544 |
-| Create registered leaf | 90109 | 890 | 0.0044544 |
-| First deposit / Source issuance | 154735 | 1090 | 0.0044544 |
-| Repeated deposit / Source issuance | 148302 | 1090 | 0 |
-| First transfer to implicit leaf | 206075 | 1231 | 0.0044544 |
-| Repeated transfer | 199545 | 1231 | 0 |
-| Transfer between registered leaves | 199639 | 1231 | 0 |
-| Withdraw / retire to Source | 146150 | 994 | 0 |
-| First issuance from deep credit leaf | 214232 | 1168 | 0.0044544 |
-| Issuance from registered deep credit leaf | 207833 | 1168 | 0 |
-| Retirement to deep credit leaf | 207930 | 1168 | 0 |
+| Create group | 94868 | 858 | 0.0044544 |
+| Create registered leaf | 90117 | 890 | 0.0044544 |
+| First deposit / Source issuance | 154825 | 1090 | 0.0044544 |
+| Repeated deposit / Source issuance | 148389 | 1090 | 0 |
+| First transfer to implicit leaf | 206090 | 1231 | 0.0044544 |
+| Repeated transfer | 199557 | 1231 | 0 |
+| Transfer between registered leaves | 199651 | 1231 | 0 |
+| Withdraw / retire to Source | 146201 | 994 | 0 |
+| First issuance from deep credit leaf | 214247 | 1168 | 0.0044544 |
+| Issuance from registered deep credit leaf | 207845 | 1168 | 0 |
+| Retirement to deep credit leaf | 207942 | 1168 | 0 |
 
 The complete generated report includes registration and removal measurements.
 The suite verifies final leaf, Source, root and custody balances. A separate

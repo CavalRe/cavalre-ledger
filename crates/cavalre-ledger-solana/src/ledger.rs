@@ -1,7 +1,7 @@
 //! Solana host for the shared Ledger service. Owns runtime authentication,
 //! account encoding/allocation, token calls and transaction rollback integration.
 pub use crate::ledger_lib::{decode, root_address, LedgerError, Record, SOURCE};
-use crate::ledger_lib::{to_address, MAGIC, SPACE};
+use crate::ledger_lib::{to_address, MAGIC, NATIVE_SOL, SPACE};
 use anchor_lang::{prelude::*, system_program};
 use anchor_spl::token_interface::{
     self as token, Mint, TokenAccount, TokenInterface, TransferChecked,
@@ -57,6 +57,39 @@ pub struct MoveTokens<'info> {
         constraint=wallet.key()!=vault.key() @ LedgerError::InvalidAccount)]
     pub wallet: InterfaceAccount<'info, TokenAccount>,
     pub token_program: Interface<'info, TokenInterface>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct RegisterSol<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    /// CHECK: canonical native root; initialized by the shared Ledger service.
+    #[account(mut, seeds=[b"ledger", Pubkey::default().as_ref(), NATIVE_SOL.as_ref()], bump)]
+    pub root: UncheckedAccount<'info>,
+    #[account(mut, seeds=[b"vault", root.key().as_ref()], bump,
+        constraint=vault.data_is_empty() @ LedgerError::InvalidAccount)]
+    pub vault: SystemAccount<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct MoveSol<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    pub authority: Signer<'info>,
+    // Deposit wallet signer; withdrawal may reuse the branch authority.
+    pub funding_authority: Signer<'info>,
+    /// CHECK: canonical native root; owner and record checked by the host.
+    #[account(mut, seeds=[b"ledger", Pubkey::default().as_ref(), NATIVE_SOL.as_ref()], bump)]
+    pub root: UncheckedAccount<'info>,
+    #[account(mut, seeds=[b"vault", root.key().as_ref()], bump,
+        constraint=vault.data_is_empty() @ LedgerError::InvalidAccount)]
+    pub vault: SystemAccount<'info>,
+    /// CHECK: deposit requires this address's signature and System transfer;
+    /// withdrawal pays the selected address without requiring its signature.
+    #[account(mut, constraint=wallet.key()!=vault.key() @ LedgerError::InvalidAccount)]
+    pub wallet: UncheckedAccount<'info>,
     pub system_program: Program<'info, System>,
 }
 
@@ -243,10 +276,18 @@ struct SolanaHost<'a, 'info> {
     payer: AccountInfo<'info>,
     authority: AccountInfo<'info>,
     system: AccountInfo<'info>,
-    native: Option<&'a mut MoveTokens<'info>>,
+    settlement: Option<Settlement<'a, 'info>>,
     root: service::Root<Pubkey>,
     initializing: bool,
     state: State,
+}
+enum Settlement<'a, 'info> {
+    Tokens(&'a mut MoveTokens<'info>),
+    Sol {
+        accounts: &'a MoveSol<'info>,
+        vault_bump: u8,
+        rent_reserve: u64,
+    },
 }
 struct HostError(anchor_lang::error::Error);
 impl From<anchor_lang::error::Error> for HostError {
@@ -313,7 +354,7 @@ impl<'a, 'info> SolanaHost<'a, 'info> {
             payer,
             authority,
             system,
-            native: None,
+            settlement: None,
             root,
             state,
             initializing: initialize.is_some(),
@@ -351,12 +392,13 @@ impl service::Host<Pubkey> for SolanaHost<'_, '_> {
     ) -> std::result::Result<Pubkey, HostError> {
         let account = match role {
             service::Role::Authority => self.authority.clone(),
-            service::Role::TokenPayer => self
-                .native
-                .as_ref()
-                .ok_or(core::Error::Unauthorized)?
-                .funding_authority
-                .to_account_info(),
+            service::Role::TokenPayer => match self.settlement.as_ref() {
+                Some(Settlement::Tokens(accounts)) => accounts.funding_authority.to_account_info(),
+                Some(Settlement::Sol { accounts, .. }) => {
+                    accounts.funding_authority.to_account_info()
+                }
+                None => return Err(core::Error::Unauthorized.into()),
+            },
         };
         if !account.is_signer {
             return Err(core::Error::Unauthorized.into());
@@ -401,6 +443,8 @@ impl service::Host<Pubkey> for SolanaHost<'_, '_> {
             token_kind: if is_root {
                 if self.root.authority.is_some() {
                     3
+                } else if identifier == NATIVE_SOL {
+                    1
                 } else {
                     2
                 }
@@ -450,18 +494,78 @@ impl service::Host<Pubkey> for SolanaHost<'_, '_> {
         Ok(())
     }
     fn token_balances(&mut self) -> std::result::Result<service::TokenBalances<Pubkey>, HostError> {
-        let native = self.native.as_mut().ok_or(core::Error::UnsupportedToken)?;
-        native.vault.reload()?;
-        native.wallet.reload()?;
-        Ok(service::TokenBalances {
-            asset: native.mint.key(),
-            owner: native.wallet.owner,
-            vault: u128::from(native.vault.amount),
-            wallet: u128::from(native.wallet.amount),
-        })
+        match self
+            .settlement
+            .as_mut()
+            .ok_or(core::Error::UnsupportedToken)?
+        {
+            Settlement::Tokens(native) => {
+                native.vault.reload()?;
+                native.wallet.reload()?;
+                Ok(service::TokenBalances {
+                    asset: native.mint.key(),
+                    owner: native.wallet.owner,
+                    vault: u128::from(native.vault.amount),
+                    wallet: u128::from(native.wallet.amount),
+                })
+            }
+            Settlement::Sol {
+                accounts,
+                rent_reserve,
+                ..
+            } => Ok(service::TokenBalances {
+                asset: NATIVE_SOL,
+                owner: accounts.wallet.key(),
+                vault: u128::from(
+                    accounts
+                        .vault
+                        .lamports()
+                        .checked_sub(*rent_reserve)
+                        .ok_or(core::Error::Undercollateralized)?,
+                ),
+                wallet: u128::from(accounts.wallet.lamports()),
+            }),
+        }
     }
     fn move_tokens(&mut self, deposit: bool, amount: u128) -> std::result::Result<(), HostError> {
-        let native = self.native.as_mut().ok_or(core::Error::UnsupportedToken)?;
+        let settlement = self
+            .settlement
+            .as_mut()
+            .ok_or(core::Error::UnsupportedToken)?;
+        let native = match settlement {
+            Settlement::Tokens(accounts) => accounts,
+            Settlement::Sol {
+                accounts,
+                vault_bump,
+                ..
+            } => {
+                let bump = [*vault_bump];
+                let seeds: &[&[u8]] = &[b"vault", self.root_info.key.as_ref(), &bump];
+                let signer = &[seeds];
+                let transfer = system_program::Transfer {
+                    from: if deposit {
+                        accounts.wallet.to_account_info()
+                    } else {
+                        accounts.vault.to_account_info()
+                    },
+                    to: if deposit {
+                        accounts.vault.to_account_info()
+                    } else {
+                        accounts.wallet.to_account_info()
+                    },
+                };
+                let cpi = CpiContext::new(accounts.system_program.key(), transfer);
+                system_program::transfer(
+                    if deposit {
+                        cpi
+                    } else {
+                        cpi.with_signer(signer)
+                    },
+                    u64::try_from(amount).map_err(|_| core::Error::Overflow)?,
+                )?;
+                return Ok(());
+            }
+        };
         let r = self.state.get(self.root_info.key)?;
         let bump = [r.bump];
         let seeds: &[&[u8]] = &[b"ledger", r.scope.as_ref(), r.identifier.as_ref(), &bump];
@@ -571,6 +675,31 @@ pub fn add_external_token<'info>(
     )?
     .run(service::Command::Initialize { name })
 }
+pub fn add_native_sol<'info>(ctx: Context<'info, RegisterSol<'info>>) -> Result<()> {
+    let reserve = Rent::get()?.minimum_balance(0);
+    let required = reserve.saturating_sub(ctx.accounts.vault.lamports());
+    if required > 0 {
+        system_program::transfer(
+            CpiContext::new(
+                ctx.accounts.system_program.key(),
+                system_program::Transfer {
+                    from: ctx.accounts.payer.to_account_info(),
+                    to: ctx.accounts.vault.to_account_info(),
+                },
+            ),
+            required,
+        )?;
+    }
+    SolanaHost::new(
+        ctx.accounts.root.to_account_info(),
+        ctx.remaining_accounts,
+        ctx.accounts.payer.to_account_info(),
+        ctx.accounts.payer.to_account_info(),
+        ctx.accounts.system_program.to_account_info(),
+        Some((Pubkey::default(), NATIVE_SOL)),
+    )?
+    .run(service::Command::Initialize { name: "SOL".into() })
+}
 pub fn add_account<'info>(
     ctx: &Context<'info, LedgerAccounts<'info>>,
     parent: Pubkey,
@@ -642,7 +771,34 @@ pub fn move_tokens<'info>(
         ctx.accounts.system_program.to_account_info(),
         None,
     )?;
-    host.native = Some(ctx.accounts);
+    host.settlement = Some(Settlement::Tokens(ctx.accounts));
+    host.run(service::Command::MoveTokens {
+        child: service::Child { parent, relative },
+        amount: u128::from(amount),
+        deposit,
+    })
+}
+
+pub fn move_sol<'info>(
+    ctx: Context<'info, MoveSol<'info>>,
+    parent: Pubkey,
+    relative: Pubkey,
+    amount: u64,
+    deposit: bool,
+) -> Result<()> {
+    let mut host = SolanaHost::new(
+        ctx.accounts.root.to_account_info(),
+        ctx.remaining_accounts,
+        ctx.accounts.payer.to_account_info(),
+        ctx.accounts.authority.to_account_info(),
+        ctx.accounts.system_program.to_account_info(),
+        None,
+    )?;
+    host.settlement = Some(Settlement::Sol {
+        accounts: ctx.accounts,
+        vault_bump: ctx.bumps.vault,
+        rent_reserve: Rent::get()?.minimum_balance(0),
+    });
     host.run(service::Command::MoveTokens {
         child: service::Child { parent, relative },
         amount: u128::from(amount),

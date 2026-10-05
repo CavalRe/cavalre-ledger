@@ -82,6 +82,9 @@ introduced by this change.
 
 ## Compatibility limits
 
+Native SOL roots are identified by `NATIVE_SOL` and report `TokenKind::Native`.
+Their gross/net balances and supply are expressed in lamports.
+
 The current stored format includes names but not token symbols or presentation
 decimals. External decimals remain in the mint; token symbols require their
 metadata source, and accounting-only precision remains application policy.

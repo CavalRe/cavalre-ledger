@@ -19,7 +19,8 @@ validated account snapshot without invoking Ledger. Existing exports from
 
 Each entry point invokes the shared core service through `SolanaHost`. The host
 authenticates runtime signers, validates and serializes accounts, derives PDAs,
-allocates rent-funded storage and performs classic SPL Token or Token-2022 movement. Custodian,
+allocates rent-funded storage and moves native SOL, classic SPL Token or
+Token-2022 assets. Custodian,
 lifecycle, admission, posting, backing and exact-settlement rules live in the
 core. Its `atomic` contract uses Solana transaction rollback: every error is
 propagated directly to the entry point. The host is consumed by each call.
@@ -65,6 +66,7 @@ registration, retaining storage; rent reclamation is not implemented.
 ## Instructions
 
 - `add_ledger`: create an accounting-only root and Source.
+- `add_native_sol`: permissionlessly create the shared SOL root, Source and vault.
 - `add_external_token`: permissionlessly create a supported mint's root,
   Source and vault. The initializer acquires no special spending authority.
 - `add_sub_account`, `add_sub_account_group`: register accounts with custodian
@@ -79,6 +81,8 @@ registration, retaining storage; rent reclamation is not implemented.
 - `unwrap`: the branch authority selects a funded debit leaf and recipient token
   account. Check backing for all claims, credit the leaf, debit Source and pay
   the recipient atomically. Recipient registration/signature is unnecessary.
+- `wrap_sol`, `unwrap_sol`: apply the same funding and withdrawal rules to native
+  lamports using `MoveSol` accounts.
 
 `MoveTokens.funding_authority` signs for the depositing wallet. On withdrawal,
 it may be the already-required branch authority; no recipient signature is needed.
@@ -95,6 +99,46 @@ Clients can deserialize public `Record` data after its eight-byte `CVLEDG01`
 header. Parent is at byte offset 40 for RPC filtering; filter registered records
 when listing registered children. `AccountChanged` reports updated balances and
 registration after mutations; this new schema is not ERC20 event compatibility.
+
+## Native SOL
+
+`NATIVE_SOL` is the zero public key, also the System Program address. It cannot
+be a token mint. SOL has one root `["ledger", zero, NATIVE_SOL]`, one protected
+Source, and a System-owned, empty-data vault at `["vault", root]`. Only Ledger
+can sign for that vault PDA. The root reports `TokenKind::Native`; existing
+Ledger record layouts are unchanged.
+
+`add_native_sol` initializes the fixed name `SOL` and funds the vault to the
+runtime's rent-exempt minimum for a zero-data account. An already-funded vault
+is accepted. Any excess funding is surplus custody and creates no claim.
+Root/Source storage funding and vault rent are separate from customer balances.
+Repeated registration fails without changing existing state.
+
+`wrap_sol` and `unwrap_sol` take `parent`, `relative` and a `u64` lamport amount.
+Supply `payer`, `authority`, `funding_authority`, `root`, `vault`, `wallet` and
+`system_program`, followed by the usual Ledger account paths:
+
+- On deposit, `wallet` is the funding address and `funding_authority` must sign
+  for that same address. System Program transfer requires a System-owned source
+  with no data. The branch authority independently authorizes the receiver.
+- On withdrawal, `wallet` is the selected writable recipient and needs no
+  signature. `funding_authority` may reuse the branch authority. The vault signs
+  its System transfer using Ledger's PDA seeds.
+- The fee/rent payer may also be the funding wallet or payout recipient. Exact
+  settlement is measured around the SOL transfer; later account allocation and
+  transaction fees do not become customer claims.
+
+Available backing is `vault.lamports - Rent::minimum_balance(0)`. Withdrawals
+check that amount against all outstanding SOL claims and preserve the rent
+reserve, including when the last customer withdraws. Deposits must observe a
+fresh wallet debit and matching vault increase; donations cannot fund them.
+Ledger uses raw lamports (1 SOL = 1e9 lamports), with `u128` internal balances.
+The recipient is subject to normal runtime account/rent rules.
+
+Native SOL uses System transfers directly. Wrapped SOL mint ledgers, if admitted
+through the token interface, remain separate assets; there is no automatic
+conversion or shared accounting between them. See the executable
+[native SOL examples](../../tests/runtime/native_sol.rs).
 
 ## Token compatibility
 
@@ -127,18 +171,15 @@ completing metadata queries is separate work.
 
 Both token programs retain their own mint/freeze authority behavior. Runtime
 settlement failures roll back token movement, accounting and new allocations.
-The Ledger instruction arguments, account order and stored record layout are
-unchanged; clients select the appropriate token program.
+Existing token instruction arguments, account order and stored record layout
+are unchanged; clients select the appropriate token program.
 
 References: [Anchor token interface](https://www.anchor-lang.com/docs/tokens/basics/transfer-tokens)
 and [Token-2022 extensions](https://solana.com/docs/tokens/extensions).
 
 ## Supported scope and release status
 
-- Classic SPL Token and the Token-2022 configurations above are supported.
-  Direct native SOL deposits and withdrawals are a required next feature, not
-  implemented by this change. Native SOL must not be advertised as supported
-  merely because a client can separately wrap it into a token account.
+- Native SOL, classic SPL Token and the Token-2022 configurations above are supported.
 - Cross-custodian external-token transfers, off-chain intents, delegated app
   authority, upgrades/migration policy and rent reclamation are not implemented.
 - Group cancellation preserves the original accounting walk; the current

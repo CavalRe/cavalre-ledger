@@ -25,6 +25,9 @@ pub mod cavalre_ledger_solana {
     ) -> Result<()> {
         ledger::add_external_token(ctx, name)
     }
+    pub fn add_native_sol<'info>(ctx: Context<'info, RegisterSol<'info>>) -> Result<()> {
+        ledger::add_native_sol(ctx)
+    }
     pub fn add_sub_account<'info>(
         ctx: Context<'info, LedgerAccounts<'info>>,
         parent: Pubkey,
@@ -83,5 +86,21 @@ pub mod cavalre_ledger_solana {
         amount: u64,
     ) -> Result<()> {
         ledger::move_tokens(ctx, parent, relative, amount, false)
+    }
+    pub fn wrap_sol<'info>(
+        ctx: Context<'info, MoveSol<'info>>,
+        parent: Pubkey,
+        relative: Pubkey,
+        amount: u64,
+    ) -> Result<()> {
+        ledger::move_sol(ctx, parent, relative, amount, true)
+    }
+    pub fn unwrap_sol<'info>(
+        ctx: Context<'info, MoveSol<'info>>,
+        parent: Pubkey,
+        relative: Pubkey,
+        amount: u64,
+    ) -> Result<()> {
+        ledger::move_sol(ctx, parent, relative, amount, false)
     }
 }

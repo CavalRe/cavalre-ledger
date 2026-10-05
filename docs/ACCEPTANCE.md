@@ -5,9 +5,9 @@ artifacts before running tests. Runtime tests load those artifacts into LiteSVM;
 they do not substitute native Rust handlers. This is local runtime validation,
 not a deployed-cluster test or a security audit.
 
-There are 58 test functions: 23 core tests (including eight independent host
+There are 64 test functions: 23 core tests (including eight independent host
 tests and eight view tests), six Solana address/effective-flag tests, four Solana
-view tests and 25 runtime tests. View suites also run with mutations excluded;
+view tests and 31 runtime tests. View suites also run with mutations excluded;
 those repeat executions are not additional test functions.
 One core test replays all 162 saved Solidity posting
 cases, including expected rejections and every node's resulting gross balances.
@@ -28,6 +28,7 @@ original runtime scenarios are in [ledger.rs](../tests/runtime/ledger.rs).
 | Parent admission | Registered-only parents reject implicit endpoints in deposits, withdrawals and both transfer directions, including zero amounts. A registered subgroup can allow its own implicit children. |
 | Parent validation | No-op removal still requires a registered group parent in the selected ledger. A valid no-op removal remains allowed beneath a registered-only parent. |
 | Account authentication | Wrong addresses, owners, headers, lengths, duplicate records and omitted parents reject without partial state changes. |
+| Native SOL | Direct and application-CPI round trips enforce separate custodian/payer authority and allow unsigned recipients. Fee payer/wallet aliasing works. Prefunding and donations create no claims; rent is excluded from backing and retained after full withdrawal. Invalid authority, admission, vault identity/owner/data and insufficient total backing reject. Late initialization, deposit and withdrawal failures roll back lamports, records and rent allocation. |
 | Token-2022 | Plain and metadata mints settle through direct calls and application CPI. Immutable-owner wallets work; UI-scaled tokens settle in raw units. Unsupported mint/account extensions reject, including on subsequent settlement. Mixed token programs and frozen accounts reject; late commit failure rolls back settlement and allocation. |
 | Native token identity | Wrong mints, wallets, vault PDAs, vault authorities, substituted token programs and wallet/vault aliasing reject. |
 | Settlement atomicity | Frozen token accounts reject. A late commit failure after token movement and new-leaf allocation rolls back token balances, ledger writes and rent allocation. |
@@ -77,7 +78,9 @@ immutable-owner accounts, supply and freeze/thaw operations use actual token
 instructions. Additional extension/substitution fixtures inject state to test
 admission and validation; they do not imply applications can alter token-owned
 accounts. The depth/compute profile above still measures classic SPL Token;
-it is not a Token-2022 resource guarantee.
+it is not a Token-2022 or native SOL resource guarantee. The
+[native SOL suite](../tests/runtime/native_sol.rs) executes Ledger and the System
+Program, including program-signed vault withdrawals through the test consumer.
 
 ## Regression fixed
 
@@ -101,9 +104,8 @@ apply monetary admission policy to removal.
   lock the root writable, serializing mutations that share a root.
 - Production identity, upgrade authority, deployment tooling and a deployed
   release rehearsal remain unfinished.
-- Direct native SOL is a required next feature. Unsupported Token-2022
-  extensions, cross-custodian transfers, off-chain intents, authority recovery
-  and EVM execution remain outside the implemented scope.
+- Unsupported Token-2022 extensions, cross-custodian transfers, off-chain
+  intents, authority recovery and EVM execution remain outside the implemented scope.
 
 The product specification still needs reconciliation with concrete Solana
 interfaces, including accounting-only root ownership and distinct-payer signer

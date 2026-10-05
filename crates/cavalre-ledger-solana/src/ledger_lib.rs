@@ -38,6 +38,8 @@ pub fn effective_flags(
 }
 
 pub const SOURCE: Pubkey = Pubkey::new_from_array([83; 32]);
+/// Native SOL asset identity; this System Program address cannot be a token mint.
+pub const NATIVE_SOL: Pubkey = Pubkey::new_from_array([0; 32]);
 pub(crate) const MAGIC: &[u8; 8] = b"CVLEDG01";
 pub(crate) const SPACE: usize = 512;
 
@@ -73,7 +75,11 @@ impl Record {
             },
             token_kind: if self.depth == 2 {
                 if self.scope == Pubkey::default() {
-                    core::TokenKind::External
+                    if self.identifier == NATIVE_SOL {
+                        core::TokenKind::Native
+                    } else {
+                        core::TokenKind::External
+                    }
                 } else {
                     core::TokenKind::Internal
                 }

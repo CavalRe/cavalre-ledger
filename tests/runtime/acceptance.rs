@@ -7,6 +7,8 @@ use solana_instruction_error::InstructionError;
 use solana_transaction_error::TransactionError;
 #[path = "execution_limits.rs"]
 mod execution_limits;
+#[path = "native_sol.rs"]
+mod native_sol;
 #[path = "token2022.rs"]
 mod token2022;
 
