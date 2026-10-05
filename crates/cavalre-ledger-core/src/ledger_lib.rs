@@ -13,6 +13,8 @@ pub struct Account<A, Name = String> {
     pub registered: bool,
     pub implicit_allowed: bool,
     pub children: u32,
+    /// One-based position in the parent's registered children; zero when unregistered.
+    pub sub_index: u32,
     pub balances: Balances,
     pub name: Name,
 }
@@ -27,6 +29,7 @@ impl<A: Copy, Name: AsRef<str>> Account<A, Name> {
             registered: self.registered,
             implicit_allowed: self.implicit_allowed,
             children: self.children,
+            sub_index: self.sub_index,
             balances: self.balances,
             name: self.name.as_ref(),
         }
@@ -43,6 +46,7 @@ impl<A, Name> Account<A, Name> {
             registered: self.registered,
             implicit_allowed: self.implicit_allowed,
             children: self.children,
+            sub_index: self.sub_index,
             balances: self.balances,
             name,
         }

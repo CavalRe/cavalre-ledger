@@ -47,8 +47,7 @@ fn all_ledger_kinds_are_discovered_as_root_children() {
         &[child(native, sa(SOURCE))],
     );
     succeeds(&mut h, &[0], i);
-    let mut expected = vec![internal, classic.root, token2022.root, native];
-    expected.sort();
+    let expected = vec![internal, classic.root, token2022.root, native];
     let global = sa(global_root_address().0);
     assert_eq!(count(&h), 4);
     let before = h.svm.get_account(&global).unwrap();
@@ -56,7 +55,12 @@ fn all_ledger_kinds_are_discovered_as_root_children() {
     reader
         .insert(ap(global), &ap(before.owner), &before.data)
         .unwrap();
-    for address in &expected {
+    for (index, address) in expected.iter().enumerate() {
+        let slot = sa(ledger::ledger_lib::child_index_address(&ap(global), index as u32).0);
+        let bytes = h.svm.get_account(&slot).unwrap();
+        reader
+            .insert(ap(slot), &ap(bytes.owner), &bytes.data)
+            .unwrap();
         let r = h.record(*address);
         assert_eq!(r.parent, ap(global));
         assert_eq!(r.custodian, ap(global));
@@ -100,15 +104,18 @@ fn all_ledger_kinds_are_discovered_as_root_children() {
     assert_eq!(h.record(internal).credit, 20);
 }
 #[test]
-fn root_child_creation_is_atomic_and_needs_no_client_index() {
+fn root_child_creation_is_atomic_and_stale_append_positions_are_rejected() {
     let mut h = Harness::new();
     let id = h.key(2);
     let i = add_internal(&h, id, false); // Source missing: allocation fails at commit.
     rejects(&mut h, &[0], i, LedgerError::MissingAccount as u32 + 6000);
     assert!(h.svm.get_account(&sa(global_root_address().0)).is_none());
-    let stale = add_internal(&h, Address::new_from_array([98; 32]), true);
+    let stale = h.indexed(add_internal(&h, Address::new_from_array([98; 32]), true));
     h.internal();
-    // Prepared before another creation, still valid: no stale index to retry.
+    // Root changed after account discovery. The stale instruction must fail
+    // atomically, then succeed with the current append slot supplied.
+    assert!(run_raw(&mut h, &[0], stale.clone()).is_err());
+    assert_eq!(count(&h), 1);
     succeeds(&mut h, &[0], stale);
     assert_eq!(count(&h), 2);
     let duplicate = add_internal(&h, id, true);

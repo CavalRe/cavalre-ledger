@@ -57,6 +57,7 @@ fn addr(parent: u64, relative: u64) -> u64 {
 #[derive(Clone)]
 struct Snapshot {
     records: BTreeMap<u64, Option<Account<u64>>>,
+    children: BTreeMap<(u64, u32), u64>,
 }
 impl AddressDerivation<u64> for Snapshot {
     fn to_address(&self, parent: &u64, relative: &u64) -> u64 {
@@ -72,16 +73,11 @@ impl ReadStore<u64> for Snapshot {
     }
 }
 impl ChildIndex<u64> for Snapshot {
-    fn child_addresses(&self, parent: &u64) -> Result<Vec<u64>, Error> {
-        Ok(self
-            .records
-            .iter()
-            .filter_map(|(k, a)| {
-                a.as_ref()
-                    .filter(|a| a.registered && a.flags.depth > 1 && a.flags.parent == *parent)
-                    .map(|_| *k)
-            })
-            .collect())
+    fn child_at(&self, parent: &u64, index: u32) -> Result<u64, Error> {
+        self.children
+            .get(&(*parent, index))
+            .copied()
+            .ok_or(Error::IncompleteIndex)
     }
 }
 fn record(
@@ -109,6 +105,7 @@ fn record(
         registered,
         implicit_allowed: true,
         children: 0,
+        sub_index: u32::from(registered),
         balances: if kind.is_credit() {
             Balances {
                 debit: 0,
@@ -138,6 +135,12 @@ fn snapshot() -> Snapshot {
     let mut global = record(0, 0, AccountKind::DebitGroup, 1, 0, 0, true);
     global.children = 1;
     Snapshot {
+        children: BTreeMap::from([
+            ((0, 0), ROOT),
+            ((ROOT, 0), SOURCE),
+            ((ROOT, 1), APP),
+            ((app, 0), 20),
+        ]),
         records: BTreeMap::from([
             (0, Some(global)),
             (ROOT, Some(root)),
@@ -323,6 +326,8 @@ fn children_exclude_implicit_leaves_and_reject_incomplete_snapshots() {
         Err(Error::InvalidIndex)
     );
     state.records.remove(&addr(app, 20));
+    assert_eq!(view::sub_account(&state, &ROOT, &app, 0), Ok(20));
+    state.children.remove(&(app, 0));
     assert_eq!(
         view::sub_accounts(&state, &ROOT, &app, 0, 10),
         Err(Error::IncompleteIndex)
@@ -348,6 +353,8 @@ fn ledger_discovery_is_root_child_enumeration_with_the_same_page_bounds() {
     assert!(view::ledgers(&state, &0, usize::MAX, 1).unwrap().is_empty());
     assert!(view::ledgers(&state, &0, 0, 0).unwrap().is_empty());
     state.records.remove(&ROOT);
+    assert_eq!(view::ledger_at(&state, &0, 0), Ok(ROOT));
+    state.children.remove(&(0, 0));
     assert_eq!(view::ledger_count(&state, &0), Ok(1));
     assert_eq!(view::ledgers(&state, &0, 0, 1), Err(Error::IncompleteIndex));
 }
@@ -417,42 +424,28 @@ fn metadata_queries_validate_roots_and_preserve_undefined_zero_and_errors() {
 }
 
 #[test]
-fn root_children_reject_duplicate_and_invalid_child_indexes() {
-    struct Index {
-        state: Snapshot,
-        children: Vec<u64>,
-    }
-    impl AddressDerivation<u64> for Index {
-        fn to_address(&self, parent: &u64, relative: &u64) -> u64 {
-            self.state.to_address(parent, relative)
-        }
-    }
-    impl ReadStore<u64> for Index {
-        fn account(&self, address: &u64) -> Result<Option<Account<u64, &str>>, Error> {
-            self.state.account(address)
-        }
-    }
-    impl ChildIndex<u64> for Index {
-        fn child_addresses(&self, _: &u64) -> Result<Vec<u64>, Error> {
-            Ok(self.children.clone())
-        }
-    }
-    let mut index = Index {
-        state: snapshot(),
-        children: vec![ROOT, ROOT],
-    };
-    assert_eq!(view::ledgers(&index, &0, 0, 2), Err(Error::InvalidIndex));
-    index.children = vec![addr(ROOT, APP)];
-    assert_eq!(view::ledgers(&index, &0, 0, 1), Err(Error::InvalidIndex));
-    index.children = vec![ROOT];
-    index
-        .state
+fn page_reads_touch_only_requested_slots_even_for_a_large_parent() {
+    let mut state = snapshot();
+    state
         .records
-        .get_mut(&ROOT)
+        .get_mut(&0)
         .unwrap()
         .as_mut()
         .unwrap()
-        .flags
-        .account_kind = AccountKind::CreditGroup;
-    assert_eq!(view::ledger_at(&index, &0, 0), Err(Error::InvalidIndex));
+        .children = u32::MAX;
+    state.records.remove(&ROOT); // No child records supplied.
+    state.children.clear();
+    state.children.insert((0, 2_000_000), 99);
+    state.children.insert((0, 2_000_001), 77);
+    assert_eq!(view::ledgers(&state, &0, 2_000_000, 2), Ok(vec![99, 77]));
+    assert_eq!(view::ledger_at(&state, &0, 2_000_001), Ok(77));
+    assert_eq!(
+        view::ledgers(&state, &0, 2_000_000, 3),
+        Err(Error::IncompleteIndex)
+    );
+    assert_eq!(view::ledgers(&state, &0, 0, 0), Ok(vec![]));
+    assert_eq!(
+        view::ledgers(&state, &0, usize::MAX, usize::MAX),
+        Ok(vec![])
+    );
 }

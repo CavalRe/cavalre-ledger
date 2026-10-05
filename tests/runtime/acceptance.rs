@@ -5,6 +5,8 @@ use ledger::ledger::LedgerError;
 use litesvm::types::{FailedTransactionMetadata, TransactionMetadata};
 use solana_instruction_error::InstructionError;
 use solana_transaction_error::TransactionError;
+#[path = "children.rs"]
+mod children;
 #[path = "events.rs"]
 mod events;
 #[path = "execution_limits.rs"]
@@ -17,6 +19,14 @@ mod root;
 mod token2022;
 
 fn run(
+    h: &mut Harness,
+    signers: &[usize],
+    instruction: Instruction,
+) -> Result<TransactionMetadata, Box<FailedTransactionMetadata>> {
+    run_raw(h, signers, h.indexed(instruction))
+}
+
+fn run_raw(
     h: &mut Harness,
     signers: &[usize],
     instruction: Instruction,
@@ -51,12 +61,13 @@ fn rejects_with_error(
     instruction: Instruction,
     error: InstructionError,
 ) {
+    let instruction = h.indexed(instruction);
     let before: Vec<_> = instruction
         .accounts
         .iter()
         .map(|m| (m.pubkey, h.svm.get_account(&m.pubkey)))
         .collect();
-    let failure = run(h, signers, instruction).expect_err("expected rejection");
+    let failure = run_raw(h, signers, instruction).expect_err("expected rejection");
     assert_eq!(
         failure.err,
         TransactionError::InstructionError(0, error),

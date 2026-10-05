@@ -66,8 +66,8 @@ issuance, implicit receipts, parent admission, account lifecycle, token custody,
 application isolation, PDA authority, and transaction rollback. This is not the
 full original Solidity test suite or a security audit.
 
-The suite contains **79 test functions**, including **35 sBPF runtime tests**,
-**12 independent host tests**, and **19 read-interface tests**. The read suites
+The suite contains **90 test functions**, including **40 sBPF runtime tests**,
+**14 independent host tests**, and **23 read-interface tests**. The read suites
 also run with mutation modules excluded; these repeat runs are not extra tests.
 One core test replays the 162 saved posting cases; those are not 162 separate
 test functions. See [acceptance coverage](docs/ACCEPTANCE.md) for the exercised

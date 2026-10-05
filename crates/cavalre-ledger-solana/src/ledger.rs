@@ -1,5 +1,8 @@
 //! Solana host for the shared Ledger service. Owns runtime authentication,
 //! account encoding/allocation, token calls and transaction rollback integration.
+use crate::ledger_lib::{
+    child_index_address, decode_child_data, ChildSlot, CHILD_MAGIC, CHILD_SPACE,
+};
 pub use crate::ledger_lib::{decode, root_address, LedgerError, Record, SOURCE};
 use crate::ledger_lib::{global_root_address, to_address, MAGIC, NATIVE_SOL, ROOT_NAME, SPACE};
 use anchor_lang::{prelude::*, system_program};
@@ -160,8 +163,15 @@ struct StoredAccount {
     changed: bool,
     new: bool,
 }
+struct StoredChild {
+    key: Pubkey,
+    slot: ChildSlot,
+    changed: bool,
+    new: bool,
+}
 struct State {
     records: Vec<StoredAccount>,
+    children: Vec<StoredChild>,
 }
 impl State {
     fn get(&self, key: &Pubkey) -> Result<&Record> {
@@ -203,6 +213,7 @@ fn load(root: &AccountInfo, rest: &[AccountInfo]) -> Result<State> {
         LedgerError::InvalidAccount
     );
     let mut records = Vec::with_capacity(rest.len() + 1);
+    let mut children = Vec::new();
     records.push(StoredAccount {
         key: *root.key,
         record: r,
@@ -211,10 +222,20 @@ fn load(root: &AccountInfo, rest: &[AccountInfo]) -> Result<State> {
     });
     for a in rest {
         require!(
-            !records.iter().any(|record| record.key == *a.key),
+            !records.iter().any(|record| record.key == *a.key)
+                && !children.iter().any(|slot: &StoredChild| slot.key == *a.key),
             LedgerError::InvalidAccount
         );
         if a.owner == &crate::ID {
+            if a.try_borrow_data()?.get(..8) == Some(CHILD_MAGIC) {
+                children.push(StoredChild {
+                    key: *a.key,
+                    slot: decode_child_data(a.key, a.owner, &a.try_borrow_data()?)?,
+                    changed: false,
+                    new: false,
+                });
+                continue;
+            }
             let r = decode(a)?;
             require_keys_eq!(r.root, *root.key, LedgerError::InvalidAccount);
             require!(r.depth > 2, LedgerError::InvalidAccount);
@@ -226,7 +247,7 @@ fn load(root: &AccountInfo, rest: &[AccountInfo]) -> Result<State> {
             });
         }
     }
-    Ok(State { records })
+    Ok(State { records, children })
 }
 fn save(info: &AccountInfo, r: &Record) -> Result<()> {
     require!(info.is_writable, LedgerError::InvalidAccount);
@@ -241,6 +262,7 @@ fn allocate<'info>(
     account: &AccountInfo<'info>,
     system: &AccountInfo<'info>,
     seeds: &[&[u8]],
+    space: usize,
 ) -> Result<()> {
     require!(
         account.is_writable && account.data_is_empty(),
@@ -252,7 +274,7 @@ fn allocate<'info>(
         LedgerError::InvalidAccount
     );
     let required = Rent::get()?
-        .minimum_balance(SPACE)
+        .minimum_balance(space)
         .saturating_sub(account.lamports());
     if required > 0 {
         system_program::transfer(
@@ -275,7 +297,7 @@ fn allocate<'info>(
             },
             signer,
         ),
-        SPACE as u64,
+        space as u64,
     )?;
     system_program::assign(
         CpiContext::new_with_signer(
@@ -351,6 +373,7 @@ impl<'a, 'info> SolanaHost<'a, 'info> {
             (
                 State {
                     records: Vec::with_capacity(rest.len() + 2),
+                    children: Vec::new(),
                 },
                 scope,
                 identifier,
@@ -426,6 +449,18 @@ impl<'a, 'info> SolanaHost<'a, 'info> {
     }
     fn run(mut self, command: service::Command<Pubkey>) -> Result<()> {
         service::execute(&mut self, command).map_err(|error| error.0)
+    }
+}
+impl cavalre_ledger_core::ledger_view::ChildIndex<Pubkey> for SolanaHost<'_, '_> {
+    fn child_at(&self, parent: &Pubkey, index: u32) -> std::result::Result<Pubkey, core::Error> {
+        self.state
+            .children
+            .iter()
+            .find(|a| a.slot.parent == *parent && a.slot.index == index)
+            .ok_or(core::Error::MissingAccount)?
+            .slot
+            .relative
+            .ok_or(core::Error::InvalidIndex)
     }
 }
 impl service::Host<Pubkey> for SolanaHost<'_, '_> {
@@ -512,6 +547,7 @@ impl service::Host<Pubkey> for SolanaHost<'_, '_> {
             scope,
             identifier,
             bump,
+            sub_index: account.sub_index,
         };
         if let Some(existing) = self.state.records.iter_mut().find(|a| a.key == key) {
             existing.changed |= existing.record != r;
@@ -542,6 +578,47 @@ impl service::Host<Pubkey> for SolanaHost<'_, '_> {
         let entry = self.state.entry_mut(&key)?;
         entry.changed |= entry.record.children != children;
         entry.record.children = children;
+        Ok(())
+    }
+    fn set_sub_index(&mut self, key: Pubkey, index: u32) -> std::result::Result<(), HostError> {
+        let entry = self.state.entry_mut(&key)?;
+        entry.changed |= entry.record.sub_index != index;
+        entry.record.sub_index = index;
+        Ok(())
+    }
+    fn set_child(
+        &mut self,
+        parent: Pubkey,
+        index: u32,
+        relative: Option<Pubkey>,
+    ) -> std::result::Result<(), HostError> {
+        let key = child_index_address(&parent, index).0;
+        if let Some(entry) = self.state.children.iter_mut().find(|a| a.key == key) {
+            entry.changed |= entry.slot.relative != relative;
+            entry.slot.relative = relative;
+        } else {
+            let target = self.account_info(&key)?;
+            let new = target.data_is_empty();
+            if !new {
+                decode_child_data(
+                    &key,
+                    target.owner,
+                    &target
+                        .try_borrow_data()
+                        .map_err(anchor_lang::error::Error::from)?,
+                )?;
+            }
+            self.state.children.push(StoredChild {
+                key,
+                slot: ChildSlot {
+                    parent,
+                    index,
+                    relative,
+                },
+                changed: true,
+                new,
+            });
+        }
         Ok(())
     }
     fn token_balances(&mut self) -> std::result::Result<service::TokenBalances<Pubkey>, HostError> {
@@ -674,8 +751,32 @@ impl service::Host<Pubkey> for SolanaHost<'_, '_> {
                         &bump,
                     ]
                 };
-                allocate(&self.payer, target, &self.system, seeds)?;
+                allocate(&self.payer, target, &self.system, seeds, SPACE)?;
             }
+        }
+        for entry in &self.state.children {
+            if !entry.changed {
+                continue;
+            }
+            let target = self.account_info(&entry.key)?;
+            if entry.new {
+                let bump = [child_index_address(&entry.slot.parent, entry.slot.index).1];
+                let index = entry.slot.index.to_le_bytes();
+                let seeds: &[&[u8]] = &[b"subs", entry.slot.parent.as_ref(), &index, &bump];
+                allocate(&self.payer, target, &self.system, seeds, CHILD_SPACE)?;
+            }
+            if !target.is_writable {
+                return Err(core::Error::InvalidAccount.into());
+            }
+            let mut data = target
+                .try_borrow_mut_data()
+                .map_err(anchor_lang::error::Error::from)?;
+            data.fill(0);
+            data[..8].copy_from_slice(CHILD_MAGIC);
+            entry
+                .slot
+                .serialize(&mut &mut data[8..])
+                .map_err(|_| error!(LedgerError::InvalidAccount))?;
         }
         for entry in &self.state.records {
             if entry.changed {

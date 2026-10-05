@@ -3,8 +3,8 @@
 use crate::ledger_lib::{self as lib, AccountKind, Balances, Error, Flags, TokenKind};
 use alloc::{string::String, vec::Vec};
 
+use lib::StoreView as View;
 pub use lib::{Account, Child, Root};
-use lib::{ReadStore, StoreView as View};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Role {
@@ -85,7 +85,7 @@ pub enum Event<A> {
 /// On any error all effects except transaction fees must roll back. A runtime
 /// with transaction-wide rollback must propagate errors out of its entry point;
 /// it must not catch an error and commit the surrounding transaction.
-pub trait Host<A: Copy + Eq>: ReadStore<A> + Sized {
+pub trait Host<A: Copy + Eq>: crate::ledger_view::ChildIndex<A> + Sized {
     type Error: From<Error>;
     fn root(&self) -> Root<A>;
     fn authenticate(&self, role: Role, command: &Command<A>) -> Result<A, Self::Error>;
@@ -93,6 +93,9 @@ pub trait Host<A: Copy + Eq>: ReadStore<A> + Sized {
     /// Update existing fields without reading/copying unrelated metadata.
     fn set_balances(&mut self, address: A, balances: Balances) -> Result<(), Self::Error>;
     fn set_children(&mut self, address: A, children: u32) -> Result<(), Self::Error>;
+    fn set_sub_index(&mut self, address: A, index: u32) -> Result<(), Self::Error>;
+    /// Write a zero-based child slot; None clears a popped slot for later reuse.
+    fn set_child(&mut self, parent: A, index: u32, relative: Option<A>) -> Result<(), Self::Error>;
     fn token_balances(&mut self) -> Result<TokenBalances<A>, Self::Error>;
     fn move_tokens(&mut self, deposit: bool, amount: u128) -> Result<(), Self::Error>;
     /// Events belong to the enclosing transaction. Hosts must roll back buffered
@@ -242,6 +245,7 @@ fn implicit<A: Copy + Eq, H: Host<A>>(host: &mut H, child: Child<A>) -> Result<A
             registered: false,
             implicit_allowed: true,
             children: 0,
+            sub_index: 0,
             balances: Balances::default(),
             name: String::new(),
         };
@@ -263,7 +267,7 @@ fn initialize<A: Copy + Eq, H: Host<A>>(
         return Err(Error::InvalidAccount.into());
     }
     // Root is the parent account. Creating a ledger uses the same stored
-    // child count as any other group; there is no second discovery registry.
+    // child index as any other group; there is no second discovery registry.
     if root.address == root.parent {
         return Err(Error::InvalidAccount.into());
     }
@@ -282,6 +286,7 @@ fn initialize<A: Copy + Eq, H: Host<A>>(
                 registered: true,
                 implicit_allowed: false,
                 children: 0,
+                sub_index: 0,
                 balances: Balances::default(),
                 name: lib::ROOT_NAME.into(),
             },
@@ -314,6 +319,7 @@ fn initialize<A: Copy + Eq, H: Host<A>>(
         registered: true,
         implicit_allowed: true,
         children: 1,
+        sub_index: children,
         balances: Balances::default(),
         name: name.clone(),
     };
@@ -333,10 +339,13 @@ fn initialize<A: Copy + Eq, H: Host<A>>(
             registered: true,
             implicit_allowed: true,
             children: 0,
+            sub_index: 1,
             balances: Balances::default(),
             name: "Source".into(),
         },
     )?;
+    host.set_child(root.parent, children - 1, Some(root.address))?;
+    host.set_child(root.address, 0, Some(root.source))?;
     host.set_children(root.parent, children)?;
     host.emit(Event::SubAccountAdded {
         ledger: root.address,
@@ -409,8 +418,10 @@ fn add_account<A: Copy + Eq, H: Host<A>>(
             is_credit: kind.is_credit(),
         }
     };
+    account.sub_index = children;
     let account = account.with_name(name);
     host.put(key, account)?;
+    host.set_child(child.parent, children - 1, Some(child.relative))?;
     host.set_children(child.parent, children)?;
     host.emit(event)
 }
@@ -433,7 +444,7 @@ fn remove_account<A: Copy + Eq, H: Host<A>>(
     )
     .map_err(|_| Error::InvalidAccount)?;
     let key = host.to_address(&child.parent, &child.relative);
-    let Some(mut account) = host.account(&key)? else {
+    let Some(account) = host.account(&key)? else {
         return Ok(());
     };
     if !account.registered {
@@ -445,14 +456,39 @@ fn remove_account<A: Copy + Eq, H: Host<A>>(
     if account.balances != Balances::default() || account.children != 0 {
         return Err(Error::NonemptyAccount.into());
     }
-    account.registered = false;
-    let account = account.with_name(String::new());
-    let children = get(host, &child.parent)?
+    let last_index = get(host, &child.parent)?
         .children
         .checked_sub(1)
-        .ok_or(Error::InvalidAccount)?;
+        .ok_or(Error::InvalidIndex)?;
+    let index = account
+        .sub_index
+        .checked_sub(1)
+        .ok_or(Error::InvalidIndex)?;
+    if index > last_index || host.child_at(&child.parent, index)? != child.relative {
+        return Err(Error::InvalidIndex.into());
+    }
+    if index != last_index {
+        let last = host.child_at(&child.parent, last_index)?;
+        let last_key = host.to_address(&child.parent, &last);
+        let last_account = get(host, &last_key)?;
+        if !last_account.registered
+            || last_account.flags.parent != child.parent
+            || last_account.sub_index != last_index + 1
+            || last_account.relative != last
+        {
+            return Err(Error::InvalidIndex.into());
+        }
+        host.set_child(child.parent, index, Some(last))?;
+        host.set_sub_index(last_key, index + 1)?;
+    }
+    host.set_child(child.parent, last_index, None)?;
+    // Re-read after mutating the host; no name or unrelated metadata is copied.
+    let mut account = get(host, &key)?;
+    account.registered = false;
+    account.sub_index = 0;
+    let account = account.with_name(String::new());
     host.put(key, account)?;
-    host.set_children(child.parent, children)?;
+    host.set_children(child.parent, last_index)?;
     host.emit(if group {
         Event::SubAccountGroupRemoved {
             ledger: host.root().address,

@@ -45,6 +45,7 @@ fn root(scope: Pubkey, mint: Pubkey) -> (Pubkey, Vec<u8>) {
         scope,
         identifier: mint,
         bump,
+        sub_index: 1,
     };
     let mut data = vec![0; 512];
     data[..8].copy_from_slice(b"CVLEDG01");

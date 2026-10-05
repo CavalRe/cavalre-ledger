@@ -6,7 +6,7 @@ and transaction-size limits, including all instructions and CPI calls. A depth
 cap cannot guarantee that a composed transaction will fit its shared budget.
 
 Depth remains a checked `u8`, with root depth 2. Overflow, malformed trees,
-unauthorized operations and invalid accounting still reject. The 512-byte ledger record format and posting instruction arguments are unchanged. Resource exhaustion fails execution;
+unauthorized operations and invalid accounting still reject. Ledger records remain 512 bytes; child indexes use separate 80-byte slots. Posting instruction arguments are unchanged. Resource exhaustion fails execution;
 Solana rolls back the failed transaction's state changes apart from fees.
 Successful account creation does not guarantee that every later operation on
 that account will fit: applications must validate their intended workflows.
@@ -62,16 +62,16 @@ external paths diverge immediately below the shared application group.
 
 | Leaf depth | Maximum compute units | Maximum transaction bytes | Maximum account keys | Maximum writable keys |
 | --- | ---: | ---: | ---: | ---: |
-| 4 | 120052 | 793 | 15 | 7 |
-| 5 | 101841 | 826 | 16 | 8 |
-| 6 | 119204 | 859 | 17 | 10 |
-| 7 | 148855 | 892 | 18 | 12 |
-| 8 | 161409 | 925 | 19 | 14 |
-| 9 | 169463 | 967 | 20 | 16 |
-| 10 | 196549 | 1033 | 22 | 18 |
-| 11 | 201322 | 1099 | 24 | 20 |
-| 12 | 210785 | 1165 | 26 | 22 |
-| 13 | 224401 | 1231 | 28 | 24 |
+| 4 | 120340 | 793 | 15 | 7 |
+| 5 | 102209 | 826 | 16 | 8 |
+| 6 | 119675 | 859 | 17 | 10 |
+| 7 | 149537 | 892 | 18 | 12 |
+| 8 | 162367 | 925 | 19 | 14 |
+| 9 | 170461 | 967 | 20 | 16 |
+| 10 | 197705 | 1033 | 22 | 18 |
+| 11 | 202636 | 1099 | 24 | 20 |
+| 12 | 212257 | 1165 | 26 | 22 |
+| 13 | 226190 | 1231 | 28 | 24 |
 
 Each column is its own maximum across that depth's measured operations. Compute
 need not increase monotonically because PDA bump searches vary with addresses.
@@ -79,7 +79,7 @@ These are sampled measurements, not universal worst-case CU promises. The
 measurements include the current structural and debit/credit events emitted
 through Anchor logs and validation of the global Root parent; see [event delivery](EVENTS.md).
 Ledger creation is setup outside this profile. Only creation writes the global
-Root child count; measured postings do not need Root as an account input.
+Root child index and count; measured postings do not need Root as an account input.
 
 The tests submit signed **legacy transactions**, including both compute-limit
 and compute-price instructions. They enforce the 1232-byte packet limit before
@@ -91,17 +91,19 @@ as test setup; all Ledger tree state is created through actual instructions.
 
 | Operation at depth 13 | Maximum compute units | Maximum bytes | New storage funding (SOL) |
 | --- | ---: | ---: | ---: |
-| Create group | 103820 | 858 | 0.0044544 |
-| Create registered leaf | 98837 | 890 | 0.0044544 |
-| First deposit / Source issuance | 164696 | 1090 | 0.0044544 |
-| Repeated deposit / Source issuance | 158238 | 1090 | 0 |
-| First transfer to implicit leaf | 215814 | 1231 | 0.0044544 |
-| Repeated transfer | 209259 | 1231 | 0 |
-| Transfer between registered leaves | 209353 | 1231 | 0 |
-| Withdraw / retire to Source | 156109 | 994 | 0 |
-| First issuance from deep credit leaf | 224401 | 1168 | 0.0044544 |
-| Issuance from registered deep credit leaf | 217977 | 1168 | 0 |
-| Retirement to deep credit leaf | 218062 | 1168 | 0 |
+| Create group | 117731 | 891 | 0.00590208 |
+| Create registered leaf | 112813 | 923 | 0.00590208 |
+| Register funded leaf | 109665 | 923 | 0.00144768 |
+| Remove registered leaf | 104866 | 853 | 0 |
+| First deposit / Source issuance | 165696 | 1090 | 0.0044544 |
+| Repeated deposit / Source issuance | 159253 | 1090 | 0 |
+| First transfer to implicit leaf | 217562 | 1231 | 0.0044544 |
+| Repeated transfer | 211012 | 1231 | 0 |
+| Transfer between registered leaves | 211108 | 1231 | 0 |
+| Withdraw / retire to Source | 157126 | 994 | 0 |
+| First issuance from deep credit leaf | 226190 | 1168 | 0.0044544 |
+| Issuance from registered deep credit leaf | 219772 | 1168 | 0 |
+| Retirement to deep credit leaf | 219857 | 1168 | 0 |
 
 The complete generated report includes registration and removal measurements.
 The suite verifies final leaf, Source, root and custody balances. A separate
@@ -113,16 +115,19 @@ sibling implicit leaves. It verifies their balances and the Source/root totals.
 ## Funding and client construction
 
 Each new 512-byte Ledger record requires 0.0044544 SOL in the pinned simulator's
-rent configuration. First receipt pays this once without registering the leaf;
-later movements and registration of that existing record require no new rent.
-Unregistration retains the record and does not refund rent. The test compares
-the actual payer debit, minus transaction fees, with the runtime's minimum
-balance for every new record.
+rent configuration. Each new 80-byte child slot requires 0.00144768 SOL. A new
+registered leaf or group therefore requires 0.00590208 SOL when its slot is also
+new. First receipt allocates only the record and does not register the leaf;
+registering it later may allocate a child slot. Repeated movements need no new
+storage. Unregistration retains records and cleared slots; later appends reuse
+those slots. The test compares the payer debit, minus fees, with the runtime's
+minimum balance for each allocation's actual size.
 
-At the same rent setting, root plus Source funding is 0.0089088 SOL; adding a
-165-byte classic SPL vault gives 0.01094808 SOL for external-ledger storage.
-Those initialization totals are calculated from account sizes, not timed samples
-in the table. Mint creation, wallet creation, application state and transaction
+At the same rent setting, a new ledger and Source plus their two child slots
+require 0.01180416 SOL. A 165-byte classic SPL vault adds 0.00203928 SOL, for
+0.01384344 SOL in external-ledger storage. The first ledger also allocates global
+Root for 0.0044544 SOL. These initialization totals are calculated from account
+sizes, not timed samples in the table. Mint creation, wallet creation, application state and transaction
 fees are separate. Clients must query the target cluster's
 `getMinimumBalanceForRentExemption` rather than hard-code these amounts.
 

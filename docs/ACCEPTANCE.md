@@ -5,9 +5,9 @@ artifacts before running tests. Runtime tests load those artifacts into LiteSVM;
 they do not substitute native Rust handlers. This is local runtime validation,
 not a deployed-cluster test or a security audit.
 
-There are 86 test functions: 30 core tests (including 13 independent host
-tests and ten view tests), six Solana address/effective-flag tests, twelve Solana
-view/metadata/Root tests and 38 runtime tests. View suites also run with mutations excluded;
+There are 90 test functions: 31 core tests (including 14 independent host
+tests and ten view tests), six Solana address/effective-flag tests, thirteen Solana
+view/metadata/Root tests and 40 runtime tests. View suites also run with mutations excluded;
 those repeat executions are not additional test functions.
 One core test replays all 162 saved Solidity posting
 cases, including expected rejections and every node's resulting gross balances.
@@ -19,13 +19,14 @@ original runtime scenarios are in [ledger.rs](../tests/runtime/ledger.rs).
 
 | Area | Runtime evidence |
 | --- | --- |
-| Global Root | Internal, classic SPL, Token-2022 and native SOL ledgers are discovered through ordinary Root child queries. Failed first/later initialization, duplicate creation, fake/readonly Root and child-count overflow reject atomically. Requests prepared before another creation remain valid without an insertion index. Posting leaves Root unchanged and does not need it as an input. |
+| Global Root | Internal, classic SPL, Token-2022 and native SOL ledgers are discovered through ordinary Root child queries. Failed first/later initialization, duplicate creation, fake/readonly Root and child-count overflow reject atomically. Stale append-slot inputs reject atomically and succeed after refreshing the required slot. Posting leaves Root unchanged and does not need it as an input. |
 | Application authentication | An application PDA creates its branch through CPI; another program cannot sign for it; its administrator wallet cannot substitute for it when withdrawing. |
 | Distinct token payer | The application PDA and a separate token owner authorize funding together. Missing payer signatures and a generic SPL delegation do not authorize the deposit. Withdrawal needs no recipient signature. |
 | Tree authority | Another branch cannot be created, captured, mutated or removed by an unrelated authority. Applications cannot create external-token credits or mutate reserved Source metadata. |
 | Transfer boundaries | Cross-custodian destinations, credit/group endpoints, wrong-ledger accounts, unauthorized callers and underfunded self-transfers reject. An authorized funded self-transfer preserves balances. |
 | Account lifecycle | Registering a funded implicit debit leaf preserves its balance; repeated matching registration is idempotent; conflicting metadata, unauthorized repetition, funded group conversion and nonempty removal reject. Empty removal updates child counts. |
 | Implicit leaves | Receipt allocates storage without registering the receiver or requiring its signature. Removing a funded implicit leaf is a no-op. Prefunding a PDA does not capture it or block allocation. |
+| Child indexes | Maintained insertion order, indexed pages without sibling records, one-based reverse indexes, swap-and-pop removal, slot reuse and atomic rejection of missing/readonly/forged inputs. Root uses the same slots. |
 | Parent admission | Registered-only parents reject implicit endpoints in deposits, withdrawals and both transfer directions, including zero amounts. A registered subgroup can allow its own implicit children. |
 | Parent validation | No-op removal still requires a registered group parent in the selected ledger. A valid no-op removal remains allowed beneath a registered-only parent. |
 | Account authentication | Wrong addresses, owners, headers, lengths, duplicate records and omitted parents reject without partial state changes. |

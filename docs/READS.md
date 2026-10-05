@@ -11,7 +11,7 @@ the same storage. The Rust implementation preserves that boundary.
 | `ledger_lib.rs` | Shared identities, account types, record format and accounting helpers |
 
 The core view uses `ReadStore` and address derivation. The mutating `Host`
-extends `ReadStore`; queries never require `Host`, a signature, a fee payer,
+extends `ReadStore` and `ChildIndex`; queries never require `Host`, a signature, a fee payer,
 token movement or commit. The host may remove mutation dispatch while its query
 service continues reading committed snapshots. No pause mechanism is added.
 
@@ -48,6 +48,7 @@ remain available for reads.
 | `total_supply` | Root gross debits, as in the original Solidity view; not root net balance |
 | `ledger` | Address-only lookup for registered accounts/roots; implicit leaves require their parent context |
 | `sub_account_count`, `sub_accounts`, `sub_account` | Stored child count and registered child identifiers; Root children are ledger addresses, other children are relative identifiers |
+| `sub_account_index` | One-based position in the parent's child array; zero for a confirmed unregistered account |
 | `ledger_count`, `ledger_at`, `ledgers` | Thin wrappers over Root's child count, child lookup and child pagination |
 
 Unsigned negative net balances return an error, preserving Solidity subtraction
@@ -70,17 +71,32 @@ prove absence: querying unknown input returns `MissingAccount`, never a guessed
 zero. An allocated implicit leaf retains its actual balances while its effective
 flags come from its registered parent.
 
-Supply the root, parent, custody ancestor, endpoint and any children needed by
-the query. Read one consistent snapshot; RPC provenance and commitment are the
-client's responsibility. Duplicate entries are rejected. For registered-child
-enumeration, the supplied records must match the parent's stored child count;
-otherwise the query returns `IncompleteIndex`. Child order is absolute-PDA order
-within the snapshot, rather than Solidity's insertion/swap-removal order.
+For account and balance queries, supply the root, parent, custody ancestor and
+endpoint. Read one consistent snapshot; RPC provenance and commitment are the
+client's responsibility. Duplicate entries are rejected.
 
-Ledger discovery is ordinary child enumeration on global `Root`. Root uses the
-same account record and `children` field as every other group. A ledger's
-`parent` points to Root; there is no separate ledger list, `LedgerIndex` provider
-or index-entry account. `global_root_address().0` derives Root from `["Root"]`.
+Child enumeration uses a maintained index, matching Solidity's `subs[parent]`
+and `subIndex[child]`. Creation appends; removal moves the last child into the
+removed position and updates its reverse index. Implicit leaves are excluded.
+No account scan or sorting occurs. Positions are zero-based for reads; stored
+`sub_index` is one-based, with zero reserved for unregistered accounts.
+
+On Solana, `child_index_address(&parent, index)` derives the ordinary child slot
+PDA from `["subs", parent, index.to_le_bytes()]`. Each 80-byte slot authenticates
+its parent and position and stores the relative identity. Root slots instead
+store the ledger's absolute address, as in Solidity. `Reader::insert` and
+`from_account_infos` validate slot ownership, discriminator, length and PDA.
+
+For `sub_accounts(ledger, parent, start, limit)`, provide the usual ledger/parent
+context and **only the requested slots**. Child records and other sibling slots
+are unnecessary. A missing requested slot returns `IncompleteIndex`; a cleared
+slot within the recorded count is `InvalidIndex`. A zero limit or a page beyond
+the end returns an empty page without requiring any slots. `sub_account` loads
+one slot and rejects positions outside the stored count.
+
+Ledger discovery uses this same index on global `Root`. There is no separate
+ledger registry or ledger-specific indexing mechanism. `global_root_address().0`
+derives Root from `["Root"]`.
 
 | Discovery query | Shared query |
 | --- | --- |
@@ -94,16 +110,13 @@ has no token balances; posting still stops at the selected ledger. Root's name
 is read through the ordinary `name` query. Root is initialized when its first
 ledger is created; an unknown Root is `MissingAccount`.
 
-The count is Root's stored `u32` child count and requires no child records.
-Indexed lookup and pagination have the existing child-reader semantics: supply
-Root and all its registered immediate children at a consistent snapshot. They
-are sorted by absolute address, and their count must match Root's `children`;
-missing records return `IncompleteIndex`. Token Sources and deeper descendants
-are not needed. On a complete snapshot, out-of-range lookup is `InvalidIndex`,
-a page beyond the end is empty, and a zero limit returns an empty page.
-Pagination slices that complete snapshot; it does not fetch missing records.
-This is the same order/completeness behavior as other Solana child enumeration,
-and differs from Solidity's insertion/swap-removal order.
+The count is Root's stored `u32` child count and requires only Root. To fetch
+`ledgers(100, 10)`, read Root and slots 100 through 109 (clipped to its count),
+then insert those bytes into a Reader. No ledger records or other slots are
+required. `ledger_at(i)` requires only Root and slot `i`.
+
+Use a consistent snapshot for counts and slots. Like Solidity swap-and-pop,
+removal can change a position; positions are not permanent account identities.
 
 `Reader::known_ledgers` remains a separate partial-snapshot utility: it lists
 only supplied ledger records and does not claim to discover all Root children.

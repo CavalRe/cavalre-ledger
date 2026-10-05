@@ -21,9 +21,10 @@ kernel crate for now. Core `ledger::execute` requires host authentication and
 transactional storage/settlement, and enforces lifecycle and custodian policy.
 The Solana `ledger.rs` implements those capabilities. Global Root is a canonical
 PDA using the same 512-byte record format as other accounts. Its children are
-ledger groups; discovery uses the shared child queries, with Solana's current
-address-order enumeration documented in READS.md. Creation updates Root's child
-count atomically; ordinary posting still stops at the selected depth-2 ledger.
+ledger groups; discovery uses the same maintained child slots as other groups.
+Insertion order, one-based reverse indexes and swap-and-pop removal follow the
+original Solidity `subs`/`subIndex` behavior. Solana slot storage is documented in
+READS.md. Creation updates Root's child index and count atomically; ordinary posting still stops at the selected depth-2 ledger.
 
 The `mutations` feature controls each crate's mutating `ledger` module. Queries
 and shared account types remain available with that feature disabled. Record

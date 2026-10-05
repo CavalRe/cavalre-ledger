@@ -51,6 +51,7 @@ impl Profile {
     }
 
     fn run(&mut self, operation: &str, inner: Instruction, funding: bool) -> bool {
+        let inner = self.h.indexed(inner);
         let instruction = if let Some(app) = self.app {
             proxy(&self.h, app, self.authority, inner)
         } else {
@@ -119,7 +120,7 @@ impl Profile {
             .lamports;
         let rent = old_payer - self.h.svm.get_account(&self.h.key(0)).unwrap().lamports - meta.fee;
         row["rent_lamports"] = rent.into();
-        let mut new_records = 0;
+        let mut allocated_rent = 0;
         for (key, old) in before {
             let mut new = self.h.svm.get_account(&key);
             if result.is_err() {
@@ -128,14 +129,13 @@ impl Profile {
                 }
                 assert_eq!(new, old, "failed profile changed {key}");
             } else if old.is_none() && new.as_ref().is_some_and(|a| a.owner == sa(ledger::ID)) {
-                new_records += 1;
+                let space = new.as_ref().unwrap().data.len();
+                assert!(space == 512 || space == ledger::ledger_lib::CHILD_SPACE);
+                allocated_rent += self.h.svm.minimum_balance_for_rent_exemption(space);
             }
         }
         if result.is_ok() {
-            assert_eq!(
-                rent,
-                new_records * self.h.svm.minimum_balance_for_rent_exemption(512)
-            );
+            assert_eq!(rent, allocated_rent);
         }
         self.rows.push(row);
         result.is_ok()

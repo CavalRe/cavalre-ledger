@@ -64,7 +64,82 @@ impl Harness {
     fn key(&self, n: usize) -> Address {
         self.keys[n].pubkey()
     }
+    // Test client: derive the exact ordinary child slots required by a tree
+    // mutation from a current snapshot. Never append them to posting operations.
+    fn indexed(&self, mut instruction: Instruction) -> Instruction {
+        use anchor_lang::Discriminator;
+        use ledger::ledger_lib::{
+            child_index_address, decode_child_data, decode_data, global_root_address,
+        };
+        let offset = if instruction.program_id == sa(ledger::ID) {
+            0
+        } else {
+            2
+        };
+        let data = &instruction.data;
+        let get = |key: Address| {
+            self.svm
+                .get_account(&key)
+                .and_then(|a| decode_data(&ap(key), &ap(a.owner), &a.data).ok())
+        };
+        let mut extra = Vec::new();
+        if data.starts_with(instruction::AddLedger::DISCRIMINATOR)
+            || data.starts_with(instruction::AddExternalToken::DISCRIMINATOR)
+            || data.starts_with(instruction::AddNativeSol::DISCRIMINATOR)
+        {
+            let root_position = if data.starts_with(instruction::AddLedger::DISCRIMINATOR) {
+                2
+            } else {
+                1
+            };
+            let root = instruction.accounts[offset + root_position].pubkey;
+            let global = sa(global_root_address().0);
+            let count = get(global).map_or(0, |a| a.children);
+            extra.push(sa(child_index_address(&ap(global), count).0));
+            extra.push(sa(child_index_address(&ap(root), 0).0));
+        } else if data.starts_with(instruction::AddSubAccount::DISCRIMINATOR)
+            || data.starts_with(instruction::AddSubAccountGroup::DISCRIMINATOR)
+            || data.starts_with(instruction::RemoveSubAccount::DISCRIMINATOR)
+            || data.starts_with(instruction::RemoveSubAccountGroup::DISCRIMINATOR)
+        {
+            let parent = Address::new_from_array(data[8..40].try_into().unwrap());
+            let relative = Address::new_from_array(data[40..72].try_into().unwrap());
+            let account = get(child(parent, relative));
+            let removing = data.starts_with(instruction::RemoveSubAccount::DISCRIMINATOR)
+                || data.starts_with(instruction::RemoveSubAccountGroup::DISCRIMINATOR);
+            if let Some(group) = get(parent) {
+                if removing {
+                    if let Some(account) = account.filter(|a| a.registered && a.sub_index > 0) {
+                        let position = account.sub_index - 1;
+                        if let Some(last) = group.children.checked_sub(1) {
+                            extra.push(sa(child_index_address(&ap(parent), position).0));
+                            let last_key = sa(child_index_address(&ap(parent), last).0);
+                            extra.push(last_key);
+                            if last != position {
+                                if let Some(slot) = self.svm.get_account(&last_key).and_then(|a| {
+                                    decode_child_data(&ap(last_key), &ap(a.owner), &a.data).ok()
+                                }) {
+                                    if let Some(relative) = slot.relative {
+                                        extra.push(child(parent, sa(relative)));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else if !account.is_some_and(|a| a.registered) {
+                    extra.push(sa(child_index_address(&ap(parent), group.children).0));
+                }
+            }
+        }
+        for key in extra {
+            if !instruction.accounts.iter().any(|a| a.pubkey == key) {
+                instruction.accounts.push(AccountMeta::new(key, false));
+            }
+        }
+        instruction
+    }
     fn run(&mut self, n: usize, mut ix: Instruction) -> bool {
+        ix = self.indexed(ix);
         self.svm.expire_blockhash();
         for a in &mut ix.accounts {
             if a.pubkey == self.key(n) {

@@ -34,6 +34,7 @@ struct MemoryHost {
     root: Root<u64>,
     accounts: BTreeMap<u64, Account<u64>>,
     events: Vec<Event<u64>>,
+    children: BTreeMap<(u64, u32), u64>,
     tokens: TokenBalances<u64>,
     // Trusted execution context. These are verified runtime identities, not
     // command arguments or a suggested implementation of cryptography.
@@ -57,6 +58,7 @@ impl MemoryHost {
             },
             accounts: BTreeMap::new(),
             events: Vec::new(),
+            children: BTreeMap::new(),
             tokens: TokenBalances {
                 asset: 99,
                 owner: PAYER,
@@ -156,6 +158,21 @@ impl Host<u64> for MemoryHost {
             .children = children;
         Ok(())
     }
+    fn set_sub_index(&mut self, address: u64, index: u32) -> Result<(), Failure> {
+        self.accounts
+            .get_mut(&address)
+            .ok_or(Error::MissingAccount)?
+            .sub_index = index;
+        Ok(())
+    }
+    fn set_child(&mut self, parent: u64, index: u32, relative: Option<u64>) -> Result<(), Failure> {
+        if let Some(relative) = relative {
+            self.children.insert((parent, index), relative);
+        } else {
+            self.children.remove(&(parent, index));
+        }
+        Ok(())
+    }
     fn move_tokens(&mut self, deposit: bool, amount: u128) -> Result<(), Failure> {
         assert!(self.active);
         if deposit {
@@ -194,12 +211,14 @@ impl Host<u64> for MemoryHost {
     ) -> Result<(), Failure> {
         assert!(!self.active);
         let accounts = self.accounts.clone();
+        let children = self.children.clone();
         let tokens = self.tokens;
         let events = self.events.len();
         self.active = true;
         let result = operation(self);
         if result.is_err() {
             self.accounts = accounts;
+            self.children = children;
             self.tokens = tokens;
             self.events.truncate(events);
         }
@@ -865,4 +884,82 @@ fn root_child_count_is_atomic_with_ledger_and_source_creation() {
             .count(),
         2
     );
+}
+
+impl cavalre_ledger_core::ledger_view::ChildIndex<u64> for MemoryHost {
+    fn child_at(&self, parent: &u64, index: u32) -> Result<u64, Error> {
+        self.children
+            .get(&(*parent, index))
+            .copied()
+            .ok_or(Error::IncompleteIndex)
+    }
+}
+
+#[test]
+fn maintained_children_follow_solidity_insertion_swap_pop_and_reregistration() {
+    use cavalre_ledger_core::ledger_view as view;
+    let mut host = MemoryHost::new(true);
+    let parent = host.initialize(true);
+    assert_eq!(view::ledgers(&host, &0, 0, 10), Ok(vec![ROOT]));
+    assert_eq!(
+        view::sub_accounts(&host, &ROOT, &ROOT, 0, 10),
+        Ok(vec![SOURCE, APP])
+    );
+    let add = |relative| Command::Add {
+        child: child(parent, relative),
+        name: "Leaf".into(),
+        kind: AccountKind::DebitLedger,
+        implicit_allowed: true,
+    };
+    for relative in [50, 20, 90, 10] {
+        execute(&mut host, add(relative)).unwrap();
+    }
+    assert_eq!(
+        view::sub_accounts(&host, &ROOT, &parent, 0, 10),
+        Ok(vec![50, 20, 90, 10])
+    );
+    execute(&mut host, add(20)).unwrap(); // Idempotent registration does not append.
+    assert_eq!(host.accounts[&parent].children, 4);
+    let before = host.children.clone();
+    host.fail_commit = true;
+    let remove = || Command::Remove {
+        child: child(parent, 20),
+        group: false,
+    };
+    assert_eq!(execute(&mut host, remove()), Err(Failure::Commit));
+    assert_eq!(host.children, before);
+    assert_eq!(view::sub_account_index(&host, &address(parent, 10)), Ok(4));
+    host.fail_commit = false;
+    execute(&mut host, remove()).unwrap();
+    assert_eq!(
+        view::sub_accounts(&host, &ROOT, &parent, 0, 10),
+        Ok(vec![50, 10, 90])
+    );
+    assert_eq!(view::sub_account_index(&host, &address(parent, 10)), Ok(2));
+    assert_eq!(view::sub_account_index(&host, &address(parent, 20)), Ok(0));
+    assert!(!host.children.contains_key(&(parent, 3)));
+    execute(&mut host, add(20)).unwrap();
+    assert_eq!(
+        view::sub_accounts(&host, &ROOT, &parent, 1, 2),
+        Ok(vec![10, 90])
+    );
+    assert_eq!(view::sub_account_index(&host, &address(parent, 20)), Ok(4));
+    for relative in [50, 20, 10, 90] {
+        execute(
+            &mut host,
+            Command::Remove {
+                child: child(parent, relative),
+                group: false,
+            },
+        )
+        .unwrap();
+        let values = view::sub_accounts(&host, &ROOT, &parent, 0, 10).unwrap();
+        for (i, value) in values.iter().enumerate() {
+            assert_eq!(
+                view::sub_account_index(&host, &address(parent, *value)),
+                Ok(i as u32 + 1)
+            );
+        }
+    }
+    assert_eq!(host.accounts[&parent].children, 0);
 }

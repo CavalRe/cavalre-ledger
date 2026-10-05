@@ -14,8 +14,9 @@ account's custodian; it does not authorize spending.
 ## Independent read interface
 
 `ledger_view.rs` corresponds to `LedgerView.sol`. It depends only on the shared
-`ReadStore` and address derivation in `ledger_lib.rs`, with optional child/root
-indexes for enumeration. It has no dependency on `ledger.rs`, authentication,
+`ReadStore` and address derivation in `ledger_lib.rs`, with maintained child
+slots for indexed lookup and pagination. It has no dependency on `ledger.rs`,
+authentication,
 token settlement or commit. The mutation `Host` extends that read interface.
 
 Read queries resolve names, effective account flags, custody, gross/net balances,
@@ -97,14 +98,18 @@ walk is needed. See [event semantics](../../docs/EVENTS.md).
 Host implementors provide borrowed `account` reads and field updates inside the
 same atomic boundary. Ledger creation initializes global Root if absent and
 increments its ordinary child count through `put` and `set_children`. There is
-no separate registry hook or state. Hosts must authenticate the global Root
-identity supplied by `root().parent`; storage absence must be confirmed.
+no separate registry hook or state. `Host::set_child` writes ordinary child slots,
+and `set_sub_index` maintains the original one-based reverse index. Registration
+appends; removal swaps in the last child and clears the last slot. `ChildIndex`
+reads one position, so a page never requires unrelated siblings. Hosts must
+authenticate the global Root identity supplied by `root().parent`; storage absence must be confirmed.
 
 `ledger_count`, `ledger_at` and `ledgers` delegate to Root's shared child queries.
-`ChildIndex` enumerates registered immediate children from the same snapshot;
-the shared query checks membership, uniqueness and the stored child count.
-At global Root it returns ledger addresses; beneath ledgers it returns relative
-identifiers. Solana read ordering and completeness are documented in READS.md.
+`ChildIndex::child_at` reads an authenticated stored position from the same
+snapshot; the shared query checks bounds against the parent's child count. At
+global Root it returns ledger addresses; beneath ledgers it returns relative
+identifiers. The host authenticates slot ownership and identity. Solana account
+requirements are documented in READS.md.
 
 The Solana implementation uses runtime signer checks, PDA derivation, program
 accounts and SPL calls. `tests/host.rs` implements the same interface using

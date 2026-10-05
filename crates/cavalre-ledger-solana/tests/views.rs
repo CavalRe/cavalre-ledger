@@ -24,6 +24,26 @@ fn stored(key: Pubkey, record: Record) -> Stored {
         data,
     }
 }
+fn child_slot(parent: Pubkey, index: u32, relative: Option<Pubkey>) -> Stored {
+    use cavalre_ledger_solana::ledger_lib::{
+        child_index_address, ChildSlot, CHILD_MAGIC, CHILD_SPACE,
+    };
+    let mut data = vec![0; CHILD_SPACE];
+    data[..8].copy_from_slice(CHILD_MAGIC);
+    ChildSlot {
+        parent,
+        index,
+        relative,
+    }
+    .serialize(&mut &mut data[8..])
+    .unwrap();
+    Stored {
+        key: child_index_address(&parent, index).0,
+        owner: ID,
+        lamports: 10_000_000,
+        data,
+    }
+}
 struct Fixture {
     records: Vec<Stored>,
     root: Pubkey,
@@ -55,6 +75,7 @@ impl Fixture {
             scope: Pubkey::default(),
             identifier: mint,
             bump,
+            sub_index: 1,
         };
         let mut records = vec![stored(root, base.clone())];
         let (source, bump) = to_address(&ID, &root, &SOURCE);
@@ -88,6 +109,7 @@ impl Fixture {
                 implicit_allowed: false,
                 credit: 0,
                 name: "Application".into(),
+                sub_index: 2,
                 identifier: Pubkey::default(),
                 bump,
                 ..base.clone()
@@ -104,6 +126,7 @@ impl Fixture {
                 token_kind: 0,
                 depth: 4,
                 registered: false,
+                sub_index: 0,
                 children: 0,
                 credit: 0,
                 name: String::new(),
@@ -112,6 +135,8 @@ impl Fixture {
                 ..base
             },
         ));
+        records.push(child_slot(root, 0, Some(SOURCE)));
+        records.push(child_slot(root, 1, Some(authority)));
         Self {
             records,
             root,
@@ -207,15 +232,15 @@ fn rpc_reader_distinguishes_unknown_absent_and_allocated_implicit_accounts() {
 }
 
 #[test]
-fn registered_child_listing_requires_all_children_but_excludes_implicit_balances() {
+fn registered_child_listing_uses_slots_without_child_records() {
     let fixture = Fixture::new();
     let reader = fixture.reader();
     assert!(reader
         .sub_accounts(&fixture.root, &fixture.app, 0, 10)
         .unwrap()
         .is_empty());
-    let mut expected = vec![SOURCE, fixture.authority];
-    expected.sort_by_key(|relative| to_address(&ID, &fixture.root, relative).0);
+    let expected = vec![SOURCE, fixture.authority];
+
     assert_eq!(
         reader
             .sub_accounts(&fixture.root, &fixture.root, 0, 10)
@@ -228,7 +253,7 @@ fn registered_child_listing_requires_all_children_but_excludes_implicit_balances
     }
     assert_eq!(
         partial.sub_accounts(&fixture.root, &fixture.root, 0, 10),
-        Err(CoreError::IncompleteIndex)
+        Ok(expected)
     );
 }
 
@@ -258,4 +283,48 @@ fn readers_reject_wrong_owners_addresses_headers_duplicates_and_root_context() {
     let leaf = fixture.records.last().unwrap();
     partial.insert(leaf.key, &ID, &leaf.data).unwrap();
     assert_eq!(partial.name(&fixture.leaf), Err(CoreError::MissingAccount));
+}
+
+#[test]
+fn partial_pages_authenticate_slots_and_need_no_sibling_records() {
+    use cavalre_ledger_solana::ledger_lib::child_index_address;
+    let fixture = Fixture::new();
+    let root = &fixture.records[0];
+    let slot = child_slot(fixture.root, 1, Some(fixture.authority));
+    let mut reader = Reader::new();
+    reader.insert(root.key, &root.owner, &root.data).unwrap();
+    reader.insert(slot.key, &slot.owner, &slot.data).unwrap();
+    assert_eq!(
+        reader.sub_accounts(&fixture.root, &fixture.root, 1, 1),
+        Ok(vec![fixture.authority])
+    );
+    assert_eq!(
+        reader.sub_account(&fixture.root, &fixture.root, 1),
+        Ok(fixture.authority)
+    );
+    assert_eq!(
+        reader.sub_accounts(&fixture.root, &fixture.root, 0, 2),
+        Err(CoreError::IncompleteIndex)
+    );
+    assert_eq!(
+        reader.sub_accounts(&fixture.root, &fixture.root, usize::MAX, usize::MAX),
+        Ok(vec![])
+    );
+    assert_eq!(
+        reader.sub_accounts(&fixture.root, &fixture.root, 0, 0),
+        Ok(vec![])
+    );
+    assert!(Reader::new()
+        .insert(slot.key, &Pubkey::default(), &slot.data)
+        .is_err());
+    assert!(Reader::new()
+        .insert(child_index_address(&fixture.root, 0).0, &ID, &slot.data)
+        .is_err());
+    assert!(Reader::new()
+        .insert(child_index_address(&fixture.app, 1).0, &ID, &slot.data)
+        .is_err());
+    assert!(Reader::new()
+        .insert(slot.key, &ID, &slot.data[..slot.data.len() - 1])
+        .is_err());
+    assert!(reader.insert(slot.key, &ID, &slot.data).is_err());
 }

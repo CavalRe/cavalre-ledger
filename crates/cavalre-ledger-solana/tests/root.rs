@@ -31,6 +31,7 @@ fn root(children: u32) -> Record {
         scope: Pubkey::default(),
         identifier: Pubkey::default(),
         bump,
+        sub_index: 0,
     }
 }
 fn ledger(tag: u8) -> (Pubkey, Record) {
@@ -41,6 +42,7 @@ fn ledger(tag: u8) -> (Pubkey, Record) {
     record.relative = identifier;
     record.identifier = identifier;
     record.depth = 2;
+    record.sub_index = 1;
     record.token_kind = 2;
     record.implicit_allowed = true;
     record.name = "Token".into();
@@ -48,7 +50,7 @@ fn ledger(tag: u8) -> (Pubkey, Record) {
     (address, record)
 }
 #[test]
-fn discovery_is_exactly_root_child_enumeration_and_requires_a_complete_snapshot() {
+fn discovery_reads_only_requested_root_child_slots() {
     let mut reader = Reader::new();
     let global = global_root_address().0;
     assert_eq!(reader.ledger_count(), Err(Error::MissingAccount));
@@ -65,8 +67,28 @@ fn discovery_is_exactly_root_child_enumeration_and_requires_a_complete_snapshot(
     assert_eq!(reader.ledger_at(0), Err(Error::IncompleteIndex));
     let (second, record) = ledger(10);
     reader.insert(second, &ID, &bytes(&record)).unwrap();
-    let mut expected = vec![first, second];
-    expected.sort();
+    use cavalre_ledger_solana::ledger_lib::{
+        child_index_address, ChildSlot, CHILD_MAGIC, CHILD_SPACE,
+    };
+    for (index, relative) in [first, second].into_iter().enumerate() {
+        let mut data = vec![0; CHILD_SPACE];
+        data[..8].copy_from_slice(CHILD_MAGIC);
+        ChildSlot {
+            parent: global,
+            index: index as u32,
+            relative: Some(relative),
+        }
+        .serialize(&mut &mut data[8..])
+        .unwrap();
+        reader
+            .insert(child_index_address(&global, index as u32).0, &ID, &data)
+            .unwrap();
+        if index == 0 {
+            assert_eq!(reader.ledgers(0, 1), Ok(vec![first]));
+            assert_eq!(reader.ledgers(0, 2), Err(Error::IncompleteIndex));
+        }
+    }
+    let expected = vec![first, second];
     assert_eq!(reader.ledgers(0, usize::MAX), Ok(expected.clone()));
     assert_eq!(
         reader.ledgers(0, usize::MAX),

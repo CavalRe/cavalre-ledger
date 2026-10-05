@@ -1,5 +1,6 @@
 //! Read helpers corresponding to LedgerView.sol. Public record data can be read
 //! directly by RPC clients; on-program readers validate ownership and identity.
+use crate::ledger_lib::{child_index_address, decode_child_data, ChildSlot, CHILD_MAGIC};
 use crate::ledger_lib::{
     decode, decode_data, global_root_address, to_address, LedgerError, Record,
 };
@@ -159,6 +160,7 @@ pub fn credit_balance_of(info: &AccountInfo) -> Result<u128> {
 #[derive(Default)]
 pub struct Reader {
     records: BTreeMap<Pubkey, Option<Record>>,
+    children: BTreeMap<Pubkey, ChildSlot>,
     mints: BTreeMap<Pubkey, MintMetadata>,
     symbols: BTreeMap<Pubkey, String>,
 }
@@ -185,7 +187,10 @@ impl Reader {
     /// Metadata is a snapshot, so use a fresh reader after source updates.
     pub fn insert(&mut self, address: Pubkey, owner: &Pubkey, data: &[u8]) -> Result<()> {
         require!(!self.contains(&address), LedgerError::InvalidAccount);
-        if *owner == crate::ID {
+        if *owner == crate::ID && data.get(..8) == Some(CHILD_MAGIC) {
+            let slot = decode_child_data(&address, owner, data)?;
+            self.children.insert(address, slot);
+        } else if *owner == crate::ID {
             let record = decode_data(&address, owner, data)?;
             self.records.insert(address, Some(record));
         } else if *owner == METAPLEX_METADATA_PROGRAM {
@@ -225,6 +230,7 @@ impl Reader {
 
     fn contains(&self, address: &Pubkey) -> bool {
         self.records.contains_key(address)
+            || self.children.contains_key(address)
             || self.mints.contains_key(address)
             || self.symbols.contains_key(address)
     }
@@ -297,6 +303,9 @@ impl Reader {
         index: usize,
     ) -> std::result::Result<Pubkey, core::Error> {
         view::sub_account(self, ledger, parent, index)
+    }
+    pub fn sub_account_index(&self, absolute: &Pubkey) -> std::result::Result<u32, core::Error> {
+        view::sub_account_index(self, absolute)
     }
     /// Ledger discovery uses the same count and enumeration as Root's children.
     pub fn ledger_count(&self) -> std::result::Result<u32, core::Error> {
@@ -401,16 +410,11 @@ impl core::ReadStore<Pubkey> for Reader {
     }
 }
 impl view::ChildIndex<Pubkey> for Reader {
-    fn child_addresses(&self, parent: &Pubkey) -> std::result::Result<Vec<Pubkey>, core::Error> {
-        Ok(self
-            .records
-            .iter()
-            .filter_map(|(key, record)| {
-                record
-                    .as_ref()
-                    .filter(|r| r.depth > 1 && r.registered && r.parent == *parent)
-                    .map(|_| *key)
-            })
-            .collect())
+    fn child_at(&self, parent: &Pubkey, index: u32) -> std::result::Result<Pubkey, core::Error> {
+        self.children
+            .get(&child_index_address(parent, index).0)
+            .ok_or(core::Error::IncompleteIndex)?
+            .relative
+            .ok_or(core::Error::InvalidIndex)
     }
 }

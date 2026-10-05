@@ -25,10 +25,11 @@ lifecycle, admission, posting, backing and exact-settlement rules live in the
 core. Its `atomic` contract uses Solana transaction rollback: every error is
 propagated directly to the entry point. The host is consumed by each call.
 
-The 512-byte `Record` field layout and existing ledger PDA derivation are
-preserved. Ledger records now use the canonical global Root as their parent.
-The earlier draft's zero-parent records are rejected; use fresh initialization
-for this draft. No deployed-state migration or deployment is included.
+Ledger PDA derivation and the 512-byte record allocation are unchanged. The
+record now appends a one-based `sub_index` in previously reserved space. Earlier
+draft records without reverse indexes and child slots require fresh initialization;
+they are not a supported upgrade target. No deployed-state migration or deployment
+is included.
 
 The host decodes each supplied record once and borrows its metadata for core
 reads. It updates balances and child counts directly and tracks changed records
@@ -53,7 +54,7 @@ PDA signer through CPI; its administrator wallet cannot substitute for that PDA.
 Tree operations use runtime signatures, not off-chain intents.
 
 `Record` stores identity, flags, custody ancestry, current `u128` debit and
-credit balances, registration, parent admission, child count and name. Metadata
+credit balances, registration, parent admission, child count, reverse index and name. Metadata
 and balances share a 512-byte account; logical registration is independent of
 storage allocation. First receipt allocates the destination with the transaction's
 rent payer, without requiring the recipient's signature or registration.
@@ -81,17 +82,44 @@ for other groups. Root, ledger, Source and any vault initialization commit
 together. Failed or duplicate creation changes none of them.
 
 `add_ledger` uses `RegisterLedger`; `RegisterToken` and `RegisterSol` also include
-a writable `global_root` account. Supply the writable Source PDA as a remaining
-account. There is no index-entry account or client-supplied insertion index.
-Creations serialize on Root and use its current count at execution. Ordinary
-account mutations, transfers and settlement do not read or write Root.
+a writable `global_root` account. The remaining accounts include writable Source,
+Root's next child slot, and the new ledger's slot zero for Source. Creation uses
+the current Root count; if another creation changes it after accounts are chosen,
+the transaction rejects atomically and the client retries with the current slot.
+Ordinary account mutations, transfers and settlement do not use global Root.
 
-Ledger discovery delegates to Root's child queries. As with other child queries,
-the reader validates a complete snapshot of immediate children against the
-parent's count, then returns children in address order. Count alone needs only
-Root. See [read semantics](../../docs/READS.md). The separate registry format from
-the preceding draft is removed; this draft uses fresh initialization and does
-not migrate deployed accounts.
+Ledger discovery delegates to Root's ordinary child index. Count needs only Root;
+lookup needs one slot; pagination needs only the requested slots. Order follows
+insertion and swap-and-pop removal, matching Solidity. See [read semantics](../../docs/READS.md).
+
+## Child index accounts
+
+Every group uses the same maintained child array. `child_index_address(parent, i)`
+derives its zero-based slot PDA from `["subs", parent, i.to_le_bytes()]`. An 80-byte
+slot stores the parent, position and optional child identity. Each registered
+child record stores its one-based `sub_index`; implicit leaves have zero and do
+not occupy slots. Root slots hold absolute ledger addresses; other slots hold
+relative identities.
+
+Supply these writable accounts in addition to the existing tree-mutation inputs:
+
+| Operation | Index accounts |
+| --- | --- |
+| Create ledger | Root slot `Root.children`, ledger slot zero, and Source record |
+| Register leaf/group | Parent slot `parent.children`; matching repeat registration needs no slot |
+| Remove registered child | Its slot `child.sub_index - 1`, the last slot `parent.children - 1`, and the last child's record if different |
+| Remove implicit leaf | None |
+| Transfer, deposit, withdrawal | None |
+
+Supply each account once. Removing a child swaps the last entry into its position,
+updates that child's reverse index, clears the last slot and decrements the count
+atomically. Empty slots retain their rent-funded allocation and are reused on
+later appends; this draft does not reclaim their rent. Index storage costs one
+80-byte account per allocated child position, in addition to child records.
+
+Counts and reverse indexes must come from a current snapshot. A concurrent tree
+mutation can change the required accounts; stale transactions fail atomically
+and must be rebuilt. Readers need only their requested slots, not all siblings.
 
 ## Instructions
 

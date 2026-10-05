@@ -68,6 +68,8 @@ pub struct Record {
     pub scope: Pubkey,
     pub identifier: Pubkey,
     pub bump: u8,
+    /// One-based child position, zero for unregistered leaves and global Root.
+    pub sub_index: u32,
 }
 impl Record {
     pub fn flags(&self) -> core::Flags<Pubkey> {
@@ -129,7 +131,14 @@ pub fn decode_data(address: &Pubkey, owner: &Pubkey, data: &[u8]) -> Result<Reco
     let r =
         Record::deserialize(&mut &data[8..]).map_err(|_| error!(LedgerError::InvalidAccount))?;
     require!(
-        r.kind <= 3 && r.depth >= 1 && r.name.len() <= 64,
+        r.kind <= 3
+            && r.depth >= 1
+            && r.name.len() <= 64
+            && if r.registered && r.depth > 1 {
+                r.sub_index > 0
+            } else {
+                r.sub_index == 0
+            },
         LedgerError::InvalidAccount
     );
     let key = if r.depth == 1 {
@@ -178,6 +187,7 @@ impl Record {
             registered: self.registered,
             implicit_allowed: self.implicit_allowed,
             children: self.children,
+            sub_index: self.sub_index,
             balances: core::Balances {
                 debit: self.debit,
                 credit: self.credit,
@@ -185,4 +195,36 @@ impl Record {
             name: &self.name,
         }
     }
+}
+
+/// One ordinary child-array slot. All parents, including global Root, use this
+/// layout. A separate PDA per slot permits reads without loading other siblings.
+pub const CHILD_SPACE: usize = 80;
+pub const CHILD_MAGIC: &[u8; 8] = b"CVCHLD01";
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug, PartialEq, Eq)]
+pub struct ChildSlot {
+    pub parent: Pubkey,
+    pub index: u32,
+    pub relative: Option<Pubkey>,
+}
+pub fn child_index_address(parent: &Pubkey, index: u32) -> (Pubkey, u8) {
+    Pubkey::find_program_address(
+        &[b"subs", parent.as_ref(), &index.to_le_bytes()],
+        &crate::ID,
+    )
+}
+pub fn decode_child_data(address: &Pubkey, owner: &Pubkey, data: &[u8]) -> Result<ChildSlot> {
+    require_keys_eq!(*owner, crate::ID, LedgerError::InvalidAccount);
+    require!(
+        data.len() == CHILD_SPACE && data.get(..8) == Some(CHILD_MAGIC),
+        LedgerError::InvalidAccount
+    );
+    let slot =
+        ChildSlot::deserialize(&mut &data[8..]).map_err(|_| error!(LedgerError::InvalidAccount))?;
+    require_keys_eq!(
+        child_index_address(&slot.parent, slot.index).0,
+        *address,
+        LedgerError::InvalidAccount
+    );
+    Ok(slot)
 }
