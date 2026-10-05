@@ -180,7 +180,7 @@ impl State {
             .iter()
             .find(|a| a.key == *key)
             .map(|a| &a.record)
-            .ok_or(error!(LedgerError::MissingAccount))
+            .ok_or_else(|| error!(LedgerError::MissingAccount))
     }
     fn optional(&self, key: &Pubkey) -> Option<&Record> {
         self.records
@@ -192,7 +192,7 @@ impl State {
         self.records
             .iter_mut()
             .find(|a| a.key == *key)
-            .ok_or(error!(LedgerError::MissingAccount))
+            .ok_or_else(|| error!(LedgerError::MissingAccount))
     }
 }
 fn info<'a, 'info>(
@@ -205,7 +205,7 @@ fn info<'a, 'info>(
     }
     rest.iter()
         .find(|i| i.key == key)
-        .ok_or(error!(LedgerError::MissingAccount))
+        .ok_or_else(|| error!(LedgerError::MissingAccount))
 }
 fn load(root: &AccountInfo, rest: &[AccountInfo]) -> Result<State> {
     let r = decode(root)?;
@@ -928,20 +928,10 @@ pub fn add_ledger<'info>(
 pub fn add_external_token<'info>(ctx: Context<'info, RegisterToken<'info>>) -> Result<()> {
     validate_mint(&ctx.accounts.mint.to_account_info())?;
     validate_token_account(&ctx.accounts.vault.to_account_info())?;
-    let mint = ctx.accounts.mint.to_account_info();
-    let mut metadata = crate::ledger_view::Reader::new();
-    metadata.insert(*mint.key, mint.owner, &mint.try_borrow_data()?)?;
-    let metadata_address = crate::ledger_view::metadata_address(mint.key);
-    if let Some(account) = ctx
-        .remaining_accounts
-        .iter()
-        .find(|a| *a.key == metadata_address)
-    {
-        metadata.insert(*account.key, account.owner, &account.try_borrow_data()?)?;
-    }
-    let (name, symbol, decimals) = metadata
-        .external_metadata(mint.key)
-        .map_err(|e| HostError::from(e).0)?;
+    let (name, symbol, decimals) = crate::ledger_view::registration_metadata(
+        &ctx.accounts.mint.to_account_info(),
+        ctx.remaining_accounts,
+    )?;
     SolanaHost::new(
         ctx.accounts.root.to_account_info(),
         ctx.remaining_accounts,
@@ -1147,6 +1137,16 @@ pub struct Debit {
 
 impl core::AddressDerivation<Pubkey> for SolanaHost<'_, '_> {
     fn to_address(&self, parent: &Pubkey, relative: &Pubkey) -> Pubkey {
+        // load() authenticates stored PDAs; put() derives every new record.
+        // Reuse those identities without another bump search. Absent children
+        // still require canonical derivation, and roots use separate seeds.
+        if let Some(entry) = self.state.records.iter().find(|entry| {
+            entry.record.depth > 2
+                && entry.record.parent == *parent
+                && entry.record.relative == *relative
+        }) {
+            return entry.key;
+        }
         to_address(&crate::ID, parent, relative).0
     }
 }

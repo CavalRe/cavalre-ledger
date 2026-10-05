@@ -5,8 +5,8 @@ artifacts before running tests. Runtime tests load those artifacts into LiteSVM;
 they do not substitute native Rust handlers. This is local runtime validation,
 not a deployed-cluster test or a security audit.
 
-There are 124 test functions: 37 core tests, 25 Solana library tests and
-62 runtime tests. View suites also run with mutations excluded;
+There are 125 test functions: 37 core tests, 25 Solana library tests and
+63 runtime tests. View suites also run with mutations excluded;
 those repeat executions are not additional test functions.
 One core test replays all 162 saved Solidity posting
 cases, including expected rejections and every node's resulting gross balances.

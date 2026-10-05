@@ -207,6 +207,56 @@ fn token2022_inline_names_are_issuer_authenticated_and_obey_original_string_limi
 }
 
 #[test]
+fn registration_obeys_metadata_pointer_instead_of_stale_inline_labels() {
+    for selection in ["inline", "metaplex", "missing", "undefined", "unsupported"] {
+        let mut h = Harness::new();
+        let e = token2022::initialized(&mut h, true);
+        h.metadata(e.mint, "Selected issuer name", "ISSUER");
+        let canonical = metadata_address(&ap(e.mint));
+        let target = match selection {
+            "inline" => Some(ap(e.mint)),
+            "metaplex" | "missing" => Some(canonical),
+            "undefined" => None,
+            "unsupported" => Some(ap(h.key(2))),
+            _ => unreachable!(),
+        };
+        let update = spl_token_2022_interface::extension::metadata_pointer::instruction::update(
+            &ap(TOKEN_2022),
+            &ap(e.mint),
+            &ap(h.key(0)),
+            &[],
+            target,
+        )
+        .unwrap();
+        succeeds(&mut h, &[0], update);
+        let mut registration = e.registration(&h);
+        if selection == "missing" {
+            registration.accounts.retain(|m| m.pubkey != sa(canonical));
+        }
+        if matches!(selection, "inline" | "metaplex") {
+            succeeds(&mut h, &[0], registration.clone());
+            let record = h.record(e.root);
+            let expected = if selection == "inline" {
+                ("Metadata token", "META")
+            } else {
+                ("Selected issuer name", "ISSUER")
+            };
+            assert_eq!((record.name.as_str(), record.symbol.as_str()), expected);
+            assert_noop(&mut h, registration);
+        } else {
+            let error = if selection == "missing" {
+                LedgerError::MissingAccount
+            } else {
+                LedgerError::InvalidAccount
+            };
+            rejects(&mut h, &[0], registration, error.into());
+            assert!(h.svm.get_account(&e.root_storage).is_none());
+            assert!(h.svm.get_account(&e.vault).is_none());
+        }
+    }
+}
+
+#[test]
 fn accounting_ledger_metadata_is_explicit_and_matching_creation_is_idempotent() {
     let mut h = Harness::new();
     let root = sa(ledger::ledger_lib::root_storage_address(&ap(h.key(0)), &ap(h.key(2))).0);

@@ -152,6 +152,39 @@ fn metaplex_labels(address: &Pubkey, data: &[u8]) -> Result<Labels> {
     })
 }
 
+// Registration needs only the mint and its issuer metadata. Share the Reader's
+// decoders without constructing its general-purpose account indexes.
+#[cfg(feature = "mutations")]
+pub(crate) fn registration_metadata(
+    mint: &AccountInfo,
+    accounts: &[AccountInfo],
+) -> Result<(String, String, u8)> {
+    let parsed = mint_metadata(mint.key, mint.owner, &mint.try_borrow_data()?)?;
+    let canonical = metadata_address(mint.key);
+    let labels = if let Some(info) = accounts.iter().find(|a| *a.key == canonical) {
+        require_keys_eq!(
+            *info.owner,
+            METAPLEX_METADATA_PROGRAM,
+            LedgerError::InvalidAccount
+        );
+        Some(metaplex_labels(info.key, &info.try_borrow_data()?)?)
+    } else {
+        None
+    };
+    let selected = match parsed
+        .labels
+        .map_err(|_| error!(LedgerError::InvalidAccount))?
+    {
+        MetadataSource::Inline(labels) => labels,
+        MetadataSource::Metaplex(address) => {
+            require_keys_eq!(address, canonical, LedgerError::InvalidAccount);
+            labels.ok_or_else(|| error!(LedgerError::MissingAccount))?
+        }
+        MetadataSource::Undefined => return err!(LedgerError::InvalidAccount),
+    };
+    Ok((selected.name, selected.symbol, parsed.decimals))
+}
+
 pub fn account(info: &AccountInfo) -> Result<Record> {
     decode(info)
 }
