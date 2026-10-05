@@ -64,6 +64,7 @@ fn ix(a: impl ToAccountMetas, d: impl InstructionData, rest: &[Address]) -> Inst
 struct Harness {
     svm: LiteSVM,
     keys: [Keypair; 3],
+    roots: std::collections::BTreeMap<Address, Address>,
 }
 impl Harness {
     fn new() -> Self {
@@ -79,10 +80,22 @@ impl Harness {
         for k in &keys {
             svm.airdrop(&k.pubkey(), 10_000_000_000).unwrap();
         }
-        Self { svm, keys }
+        Self {
+            svm,
+            keys,
+            roots: Default::default(),
+        }
     }
     fn key(&self, n: usize) -> Address {
         self.keys[n].pubkey()
+    }
+    fn external_root(&mut self, mint: Address) -> Address {
+        let storage = sa(ledger::ledger_lib::root_storage_address(&ap(SYSTEM), &ap(mint)).0);
+        self.roots.insert(mint, storage);
+        mint
+    }
+    fn storage(&self, address: Address) -> Address {
+        self.roots.get(&address).copied().unwrap_or(address)
     }
     // Test client: derive the exact ordinary child slots required by a tree
     // mutation from a current snapshot. Never append them to posting operations.
@@ -99,8 +112,8 @@ impl Harness {
         let data = &instruction.data;
         let get = |key: Address| {
             self.svm
-                .get_account(&key)
-                .and_then(|a| decode_data(&ap(key), &ap(a.owner), &a.data).ok())
+                .get_account(&self.storage(key))
+                .and_then(|a| decode_data(&ap(self.storage(key)), &ap(a.owner), &a.data).ok())
         };
         let mut extra = Vec::new();
         if data.starts_with(instruction::AddLedger::DISCRIMINATOR)
@@ -112,7 +125,13 @@ impl Harness {
             } else {
                 1
             };
-            let root = instruction.accounts[offset + root_position].pubkey;
+            let root = if data.starts_with(instruction::AddExternalToken::DISCRIMINATOR) {
+                instruction.accounts[offset + 2].pubkey
+            } else if data.starts_with(instruction::AddNativeSol::DISCRIMINATOR) {
+                sa(ledger::ledger_lib::NATIVE_SOL)
+            } else {
+                instruction.accounts[offset + root_position].pubkey
+            };
             let global = sa(global_root_address().0);
             let count = get(global).map_or(0, |a| a.children);
             extra.push(sa(child_index_address(&ap(global), count).0));
@@ -193,14 +212,14 @@ impl Harness {
         }
     }
     fn record(&self, key: Address) -> Record {
-        let a = self.svm.get_account(&key).unwrap();
+        let a = self.svm.get_account(&self.storage(key)).unwrap();
         Record::deserialize(&mut &a.data[8..]).unwrap()
     }
     fn base(&self, n: usize, root: Address) -> accounts::LedgerAccounts {
         accounts::LedgerAccounts {
             payer: ap(self.key(n)),
             authority: ap(self.key(n)),
-            root: ap(root),
+            root: ap(self.storage(root)),
             system_program: ap(SYSTEM),
         }
     }
@@ -261,7 +280,7 @@ impl Harness {
         accounts::RegisterLedger {
             payer: ap(self.key(n)),
             authority: ap(self.key(n)),
-            root: ap(root),
+            root: ap(self.storage(root)),
             system_program: ap(SYSTEM),
             global_root: ledger::ledger_lib::global_root_address().0,
         }
@@ -270,7 +289,7 @@ impl Harness {
         self.internal_named("Scale")
     }
     fn internal_named(&mut self, name: &str) -> (Address, Address) {
-        let root = sa(ledger::ledger::root_address(&ap(self.key(0)), &ap(self.key(2))).0);
+        let root = sa(ledger::ledger::root_storage_address(&ap(self.key(0)), &ap(self.key(2))).0);
         let source = child(root, sa(SOURCE));
         let mut i = ix(
             self.registration(0, root),
@@ -436,10 +455,10 @@ fn external_token_deposit_transfer_withdraw_and_isolation() {
         },
     );
     let metadata = h.metadata(mint, "Token", "TOK");
-    let root = sa(ledger::ledger::root_address(&ap(SYSTEM), &ap(mint)).0);
+    let root = h.external_root(mint);
     let source = child(root, sa(SOURCE));
     let vault = sa(anchor_lang::prelude::Pubkey::find_program_address(
-        &[b"vault", root.as_ref()],
+        &[b"vault", h.storage(root).as_ref()],
         &ledger::ID,
     )
     .0);
@@ -449,7 +468,7 @@ fn external_token_deposit_transfer_withdraw_and_isolation() {
             accounts::RegisterToken {
                 global_root: ledger::ledger_lib::global_root_address().0,
                 payer: ap(h.key(0)),
-                root: ap(root),
+                root: ap(h.storage(root)),
                 mint: ap(mint),
                 vault: ap(vault),
                 token_program: ap(TOKEN),
@@ -479,7 +498,7 @@ fn external_token_deposit_transfer_withdraw_and_isolation() {
         payer: ap(h.key(n)),
         authority: ap(h.key(n)),
         funding_authority: ap(h.key(n)),
-        root: ap(root),
+        root: ap(h.storage(root)),
         mint: ap(mint),
         vault: ap(vault),
         wallet: ap(wallet),
@@ -615,9 +634,9 @@ fn external_token_deposit_transfer_withdraw_and_isolation() {
     // withdrawal. Inspection has no signer, token settlement or mutation gate.
     let mut reader = ledger::ledger_view::Reader::new();
     for key in [root, source, group, a, b] {
-        let snapshot = h.svm.get_account(&key).unwrap();
+        let snapshot = h.svm.get_account(&h.storage(key)).unwrap();
         reader
-            .insert(ap(key), &ap(snapshot.owner), &snapshot.data)
+            .insert(ap(h.storage(key)), &ap(snapshot.owner), &snapshot.data)
             .unwrap();
     }
     assert_eq!(
@@ -644,10 +663,10 @@ fn application_pda_can_create_its_branch_but_another_application_cannot() {
         },
     );
     let metadata = h.metadata(mint, "Token", "TOK");
-    let root = sa(ledger::ledger::root_address(&ap(SYSTEM), &ap(mint)).0);
+    let root = h.external_root(mint);
     let source = child(root, sa(SOURCE));
     let vault = sa(anchor_lang::prelude::Pubkey::find_program_address(
-        &[b"vault", root.as_ref()],
+        &[b"vault", h.storage(root).as_ref()],
         &ledger::ID,
     )
     .0);
@@ -657,7 +676,7 @@ fn application_pda_can_create_its_branch_but_another_application_cannot() {
             accounts::RegisterToken {
                 global_root: ledger::ledger_lib::global_root_address().0,
                 payer: ap(h.key(0)),
-                root: ap(root),
+                root: ap(h.storage(root)),
                 mint: ap(mint),
                 vault: ap(vault),
                 token_program: ap(TOKEN),

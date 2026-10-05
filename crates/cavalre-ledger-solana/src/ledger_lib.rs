@@ -142,7 +142,20 @@ pub enum LedgerError {
     Undercollateralized,
 }
 
-pub fn root_address(scope: &Pubkey, id: &Pubkey) -> (Pubkey, u8) {
+/// Logical ledger identity. External tokens use the mint itself; native SOL
+/// uses NATIVE_SOL. Accounting-only ledgers retain their authority-scoped IDs.
+/// An identity does not imply a Solana account, owner or signing capability.
+pub fn ledger_address(scope: &Pubkey, id: &Pubkey) -> Pubkey {
+    if *scope == Pubkey::default() {
+        *id
+    } else {
+        root_storage_address(scope, id).0
+    }
+}
+
+/// Physical storage for a ledger root. This PDA is also the token-vault authority;
+/// its address is not the external token's logical ledger identity.
+pub fn root_storage_address(scope: &Pubkey, id: &Pubkey) -> (Pubkey, u8) {
     Pubkey::find_program_address(&[b"ledger", scope.as_ref(), id.as_ref()], &crate::ID)
 }
 pub fn decode(info: &AccountInfo) -> Result<Record> {
@@ -196,7 +209,15 @@ pub fn decode_data(address: &Pubkey, owner: &Pubkey, data: &[u8]) -> Result<Reco
             global_root_address().0,
             LedgerError::InvalidAccount
         );
-        root_address(&r.scope, &r.identifier).0
+        let storage = root_storage_address(&r.scope, &r.identifier).0;
+        let logical = if r.scope == Pubkey::default() {
+            r.identifier
+        } else {
+            storage
+        };
+        require_keys_eq!(r.root, logical, LedgerError::InvalidAccount);
+        require_keys_eq!(r.relative, r.identifier, LedgerError::InvalidAccount);
+        storage
     } else {
         to_address(&crate::ID, &r.parent, &r.relative).0
     };

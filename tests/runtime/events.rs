@@ -85,7 +85,7 @@ fn initialization_and_account_lifecycle_emit_original_event_families() {
     let mut h = Harness::new();
     let scope = h.key(0);
     let identifier = h.key(2);
-    let root = sa(ledger::ledger_lib::root_address(&ap(scope), &ap(identifier)).0);
+    let root = sa(ledger::ledger_lib::root_storage_address(&ap(scope), &ap(identifier)).0);
     let i = ix(
         h.registration(0, root),
         instruction::AddLedger {
@@ -162,11 +162,11 @@ fn initialization_and_account_lifecycle_emit_original_event_families() {
     );
     assert_events(&mut h, &[0], remove_group, vec![]);
 
-    // Native SOL has a root distinct from its zero asset identity.
+    // Native SOL uses its zero asset identity with separate root storage.
     let native = sa(ledger::ledger_lib::NATIVE_SOL);
-    let root = sa(ledger::ledger_lib::root_address(&ap(SYSTEM), &ap(native)).0);
+    let root = h.external_root(native);
     let vault = sa(anchor_lang::prelude::Pubkey::find_program_address(
-        &[b"vault", root.as_ref()],
+        &[b"vault", h.storage(root).as_ref()],
         &ledger::ID,
     )
     .0);
@@ -174,7 +174,7 @@ fn initialization_and_account_lifecycle_emit_original_event_families() {
         accounts::RegisterSol {
             global_root: ledger::ledger_lib::global_root_address().0,
             payer: ap(scope),
-            root: ap(root),
+            root: ap(h.storage(root)),
             vault: ap(vault),
             system_program: ap(SYSTEM),
         },
@@ -327,7 +327,7 @@ fn failed_transactions_retain_speculative_logs_but_commit_no_event_effects() {
     let parent = branch(&mut h, e.root, 0, true);
     let user = h.key(1);
     let valid = e.movement(&h, (h.key(0), 0), (parent, user), 10, true, &[]);
-    let before_root = h.svm.get_account(&e.root).unwrap();
+    let before_root = h.svm.get_account(&e.root_storage).unwrap();
     let before_parent = h.svm.get_account(&parent).unwrap();
     let mut late_failure = valid.clone();
     for account in &mut late_failure.accounts {
@@ -348,7 +348,7 @@ fn failed_transactions_retain_speculative_logs_but_commit_no_event_effects() {
         5,
         "Solana retains logs emitted before a late commit failure"
     );
-    assert_eq!(h.svm.get_account(&e.root).unwrap(), before_root);
+    assert_eq!(h.svm.get_account(&e.root_storage).unwrap(), before_root);
     assert_eq!(h.svm.get_account(&parent).unwrap(), before_parent);
     assert!(h.svm.get_account(&child(parent, user)).is_none());
     assert_eq!((h.token(e.wallet), h.token(e.vault)), (1000, 0));
@@ -371,7 +371,7 @@ fn failed_transactions_retain_speculative_logs_but_commit_no_event_effects() {
         TransactionError::InstructionError(1, _)
     ));
     assert_eq!(event_bytes(&failed.meta.logs).len(), 5);
-    assert_eq!(h.svm.get_account(&e.root).unwrap(), before_root);
+    assert_eq!(h.svm.get_account(&e.root_storage).unwrap(), before_root);
     assert_eq!(h.svm.get_account(&parent).unwrap(), before_parent);
     assert!(h.svm.get_account(&child(parent, user)).is_none());
     assert_eq!((h.token(e.wallet), h.token(e.vault)), (1000, 0));

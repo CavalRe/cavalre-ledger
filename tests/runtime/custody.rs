@@ -68,7 +68,7 @@ fn replays_all_original_solidity_custody_steps_with_classic_and_token2022() {
                 .unwrap(),
                 _ => panic!("unknown custody fixture kind {kind}"),
             };
-            let ledger_keys = [token.root, token.source, positions[0], positions[1]];
+            let ledger_keys = [token.root_storage, token.source, positions[0], positions[1]];
             let before = ledger_keys.map(|key| h.svm.get_account(&key));
             if step["success"].as_bool().unwrap() {
                 let result = run(&mut h, &[0, user + 1], instruction);

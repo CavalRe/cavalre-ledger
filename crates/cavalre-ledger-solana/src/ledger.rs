@@ -3,7 +3,7 @@
 use crate::ledger_lib::{
     child_index_address, decode_child_data, ChildSlot, CHILD_MAGIC, CHILD_SPACE,
 };
-pub use crate::ledger_lib::{decode, root_address, LedgerError, Record, SOURCE};
+pub use crate::ledger_lib::{decode, root_storage_address, LedgerError, Record, SOURCE};
 use crate::ledger_lib::{global_root_address, to_address, MAGIC, NATIVE_SOL, ROOT_NAME, SPACE};
 use anchor_lang::{prelude::*, system_program};
 use anchor_spl::token_interface::{
@@ -19,8 +19,8 @@ pub struct LedgerAccounts<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
     pub authority: Signer<'info>,
-    /// CHECK: load authenticates identity, ownership and data. Commit requires
-    /// write access only when this operation changes the root.
+    /// CHECK: physical root storage, not the logical ledger address. load
+    /// authenticates ownership and identity. Write access only when changed.
     pub root: UncheckedAccount<'info>,
     pub system_program: Program<'info, System>,
     // Remaining: endpoint records, parents, custody ancestors and changed ancestors.
@@ -210,24 +210,26 @@ fn info<'a, 'info>(
 fn load(root: &AccountInfo, rest: &[AccountInfo]) -> Result<State> {
     let r = decode(root)?;
     require!(
-        r.depth == 2 && r.registered && r.kind == 0 && r.root == *root.key,
+        r.depth == 2 && r.registered && r.kind == 0,
         LedgerError::InvalidAccount
     );
     let mut records = Vec::with_capacity(rest.len() + 1);
     let mut children = Vec::new();
+    let ledger = r.root;
     records.push(StoredAccount {
-        key: *root.key,
+        key: ledger,
         record: r,
         changed: false,
         new: false,
     });
     for a in rest {
-        require!(
-            !records.iter().any(|record| record.key == *a.key)
-                && !children.iter().any(|slot: &StoredChild| slot.key == *a.key),
-            LedgerError::InvalidAccount
-        );
         if a.owner == &crate::ID {
+            require!(
+                a.key != root.key
+                    && !records.iter().any(|record| record.key == *a.key)
+                    && !children.iter().any(|slot: &StoredChild| slot.key == *a.key),
+                LedgerError::InvalidAccount
+            );
             if a.try_borrow_data()?.get(..8) == Some(CHILD_MAGIC) {
                 children.push(StoredChild {
                     key: *a.key,
@@ -238,7 +240,7 @@ fn load(root: &AccountInfo, rest: &[AccountInfo]) -> Result<State> {
                 continue;
             }
             let r = decode(a)?;
-            require_keys_eq!(r.root, *root.key, LedgerError::InvalidAccount);
+            require_keys_eq!(r.root, ledger, LedgerError::InvalidAccount);
             require!(r.depth > 2, LedgerError::InvalidAccount);
             records.push(StoredAccount {
                 key: *a.key,
@@ -367,7 +369,7 @@ impl<'a, 'info> SolanaHost<'a, 'info> {
     ) -> Result<Self> {
         let (state, scope, identifier) = if let Some((scope, identifier)) = initialize {
             require_keys_eq!(
-                root_address(&scope, &identifier).0,
+                root_storage_address(&scope, &identifier).0,
                 *root_info.key,
                 LedgerError::InvalidAccount
             );
@@ -385,15 +387,20 @@ impl<'a, 'info> SolanaHost<'a, 'info> {
             )
         } else {
             let state = load(&root_info, rest)?;
-            let r = state.get(root_info.key)?;
+            let r = &state.records[0].record;
             let (scope, identifier) = (r.scope, r.identifier);
             (state, scope, identifier)
         };
+        let address = if scope == Pubkey::default() {
+            identifier
+        } else {
+            *root_info.key
+        };
         let root = service::Root {
-            address: *root_info.key,
+            address,
             // load() already authenticated this parent for existing ledgers.
             parent: state
-                .optional(root_info.key)
+                .optional(&address)
                 .map_or_else(|| global_root_address().0, |record| record.parent),
             identifier,
             source: SOURCE,
@@ -447,6 +454,9 @@ impl<'a, 'info> SolanaHost<'a, 'info> {
         Ok(self)
     }
     fn account_info(&self, key: &Pubkey) -> Result<&AccountInfo<'info>> {
+        if *key == self.root.address {
+            return Ok(&self.root_info);
+        }
         if let Some(global) = self.global_root_info.as_ref().filter(|a| a.key == key) {
             return Ok(global);
         }
@@ -513,11 +523,16 @@ impl service::Host<Pubkey> for SolanaHost<'_, '_> {
         let (expected, bump) = if is_global {
             global_root_address()
         } else if is_root {
-            root_address(&scope, &identifier)
+            root_storage_address(&scope, &identifier)
         } else {
             to_address(&crate::ID, &account.flags.parent, &account.relative)
         };
-        if expected != key {
+        let logical = if is_root && scope == Pubkey::default() {
+            identifier
+        } else {
+            expected
+        };
+        if logical != key {
             return Err(core::Error::InvalidAccount.into());
         }
         let r = Record {
@@ -701,7 +716,7 @@ impl service::Host<Pubkey> for SolanaHost<'_, '_> {
                 return Ok(());
             }
         };
-        let r = self.state.get(self.root_info.key)?;
+        let r = self.state.get(&self.root.address)?;
         let bump = [r.bump];
         let seeds: &[&[u8]] = &[b"ledger", r.scope.as_ref(), r.identifier.as_ref(), &bump];
         let signer = &[seeds];

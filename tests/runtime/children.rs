@@ -5,9 +5,9 @@ use ledger::ledger_view::Reader;
 
 fn page(h: &Harness, root: Address, start: u32, limit: u32) -> Vec<Address> {
     let mut reader = Reader::new();
-    let record = h.svm.get_account(&root).unwrap();
+    let record = h.svm.get_account(&h.storage(root)).unwrap();
     reader
-        .insert(ap(root), &ap(record.owner), &record.data)
+        .insert(ap(h.storage(root)), &ap(record.owner), &record.data)
         .unwrap();
     let count = h.record(root).children;
     for index in start..start.saturating_add(limit).min(count) {

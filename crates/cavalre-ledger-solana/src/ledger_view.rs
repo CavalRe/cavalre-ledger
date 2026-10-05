@@ -2,7 +2,8 @@
 //! directly by RPC clients; on-program readers validate ownership and identity.
 use crate::ledger_lib::{child_index_address, decode_child_data, ChildSlot, CHILD_MAGIC};
 use crate::ledger_lib::{
-    decode, decode_data, global_root_address, to_address, LedgerError, Record,
+    decode, decode_data, global_root_address, ledger_address, root_storage_address, to_address,
+    LedgerError, Record,
 };
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::program_pack::Pack;
@@ -15,7 +16,7 @@ use spl_token_2022_interface::{
     state::Mint,
 };
 use spl_token_metadata_interface::state::TokenMetadata;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub const METAPLEX_METADATA_PROGRAM: Pubkey =
     pubkey!("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s");
@@ -169,6 +170,9 @@ pub fn credit_balance_of(info: &AccountInfo) -> Result<u128> {
 /// runtime readers can supply an empty System-owned account for an absent PDA.
 #[derive(Default)]
 pub struct Reader {
+    // Physical inputs and logical records occupy different address spaces. A
+    // token mint and its Ledger record may both be present in the same snapshot.
+    inputs: BTreeSet<Pubkey>,
     records: BTreeMap<Pubkey, Option<Record>>,
     children: BTreeMap<Pubkey, ChildSlot>,
     mints: BTreeMap<Pubkey, MintMetadata>,
@@ -202,7 +206,16 @@ impl Reader {
             self.children.insert(address, slot);
         } else if *owner == crate::ID {
             let record = decode_data(&address, owner, data)?;
-            self.records.insert(address, Some(record));
+            let logical = if record.depth == 2 {
+                record.root
+            } else {
+                address
+            };
+            require!(
+                !self.records.contains_key(&logical),
+                LedgerError::InvalidAccount
+            );
+            self.records.insert(logical, Some(record));
         } else if *owner == METAPLEX_METADATA_PROGRAM {
             let labels = metaplex_labels(&address, data)?;
             self.metadata.insert(address, labels);
@@ -210,13 +223,34 @@ impl Reader {
             let metadata = mint_metadata(&address, owner, data)?;
             self.mints.insert(address, metadata);
         }
+        self.inputs.insert(address);
         Ok(())
     }
 
     /// Use only after confirming absence in the same snapshot as other records.
     pub fn insert_missing(&mut self, address: Pubkey) -> Result<()> {
         require!(!self.contains(&address), LedgerError::InvalidAccount);
+        require!(
+            !self.records.contains_key(&address),
+            LedgerError::InvalidAccount
+        );
         self.records.insert(address, None);
+        self.inputs.insert(address);
+        Ok(())
+    }
+
+    /// Mark a ledger absent only after its physical root storage was confirmed
+    /// absent. The mint itself may exist and may be present in this reader.
+    pub fn insert_missing_ledger(&mut self, scope: &Pubkey, identifier: &Pubkey) -> Result<()> {
+        let address = ledger_address(scope, identifier);
+        let storage = root_storage_address(scope, identifier).0;
+        require!(!self.contains(&storage), LedgerError::InvalidAccount);
+        require!(
+            !self.records.contains_key(&address),
+            LedgerError::InvalidAccount
+        );
+        self.records.insert(address, None);
+        self.inputs.insert(storage);
         Ok(())
     }
 
@@ -266,7 +300,15 @@ impl Reader {
         to: crate::ledger_lib::Child,
         amount: u128,
     ) -> std::result::Result<Vec<Pubkey>, core::Error> {
-        view::transfer_writable_accounts(self, ledger, from, to, amount)
+        let mut addresses = view::transfer_writable_accounts(self, ledger, from, to, amount)?;
+        for address in &mut addresses {
+            if let Some(Some(record)) = self.records.get(address) {
+                if record.depth == 2 {
+                    *address = root_storage_address(&record.scope, &record.identifier).0;
+                }
+            }
+        }
+        Ok(addresses)
     }
     pub fn name(&self, absolute: &Pubkey) -> std::result::Result<String, core::Error> {
         view::name(self, absolute)
@@ -279,10 +321,7 @@ impl Reader {
     }
 
     fn contains(&self, address: &Pubkey) -> bool {
-        self.records.contains_key(address)
-            || self.children.contains_key(address)
-            || self.mints.contains_key(address)
-            || self.metadata.contains_key(address)
+        self.inputs.contains(address)
     }
 
     fn mint(&self, address: &Pubkey) -> std::result::Result<&MintMetadata, core::Error> {

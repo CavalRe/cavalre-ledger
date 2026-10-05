@@ -2,7 +2,7 @@
 use anchor_lang::{prelude::*, AnchorSerialize};
 use cavalre_ledger_core::ledger_lib::Error as CoreError;
 use cavalre_ledger_solana::{
-    ledger_lib::{root_address, to_address, Record, SOURCE},
+    ledger_lib::{root_storage_address, to_address, Record, SOURCE},
     ledger_view::Reader,
     ID,
 };
@@ -57,7 +57,8 @@ impl Fixture {
         let mint = Pubkey::new_from_array([20; 32]);
         let authority = Pubkey::new_from_array([21; 32]);
         let relative = Pubkey::new_from_array([22; 32]);
-        let (root, bump) = root_address(&Pubkey::default(), &mint);
+        let (storage, bump) = root_storage_address(&Pubkey::default(), &mint);
+        let root = mint;
         let base = Record {
             root,
             parent: cavalre_ledger_solana::ledger_lib::global_root_address().0,
@@ -79,7 +80,7 @@ impl Fixture {
             symbol: "UNIT".into(),
             decimals: 6,
         };
-        let mut records = vec![stored(root, base.clone())];
+        let mut records = vec![stored(storage, base.clone())];
         let (source, bump) = to_address(&ID, &root, &SOURCE);
         records.push(stored(
             source,
@@ -306,11 +307,14 @@ fn readers_reject_wrong_owners_addresses_headers_duplicates_and_root_context() {
         let mut reader = Reader::new();
         reader.insert(bad.key, &bad.owner, &bad.data).unwrap();
         assert_eq!(
-            reader.total_supply(&bad.key),
+            reader.total_supply(&fixture.root),
             Err(CoreError::InvalidAccount)
         );
-        assert_eq!(reader.symbol(&bad.key), Err(CoreError::InvalidAccount));
-        assert_eq!(reader.decimals(&bad.key), Err(CoreError::InvalidAccount));
+        assert_eq!(reader.symbol(&fixture.root), Err(CoreError::InvalidAccount));
+        assert_eq!(
+            reader.decimals(&fixture.root),
+            Err(CoreError::InvalidAccount)
+        );
         assert_eq!(reader.known_ledgers(), Err(CoreError::InvalidAccount));
     }
 }

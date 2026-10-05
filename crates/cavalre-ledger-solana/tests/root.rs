@@ -2,7 +2,7 @@
 use anchor_lang::{prelude::Pubkey, AnchorSerialize};
 use cavalre_ledger_core::ledger_lib::Error;
 use cavalre_ledger_solana::{
-    ledger_lib::{decode_data, global_root_address, root_address, Record, ROOT_NAME},
+    ledger_lib::{decode_data, global_root_address, root_storage_address, Record, ROOT_NAME},
     ledger_view::Reader,
     ID,
 };
@@ -38,9 +38,9 @@ fn root(children: u32) -> Record {
 }
 fn ledger(tag: u8) -> (Pubkey, Record) {
     let identifier = Pubkey::new_from_array([tag; 32]);
-    let (address, bump) = root_address(&Pubkey::default(), &identifier);
+    let (_, bump) = root_storage_address(&Pubkey::default(), &identifier);
     let mut record = root(1);
-    record.root = address;
+    record.root = identifier;
     record.relative = identifier;
     record.identifier = identifier;
     record.depth = 2;
@@ -50,7 +50,7 @@ fn ledger(tag: u8) -> (Pubkey, Record) {
     record.implicit_allowed = true;
     record.name = "Token".into();
     record.bump = bump;
-    (address, record)
+    (identifier, record)
 }
 #[test]
 fn discovery_reads_only_requested_root_child_slots() {
@@ -65,11 +65,23 @@ fn discovery_reads_only_requested_root_child_slots() {
         reader.sub_account_count(&global, &global)
     );
     let (first, record) = ledger(90);
-    reader.insert(first, &ID, &bytes(&record)).unwrap();
+    reader
+        .insert(
+            root_storage_address(&Pubkey::default(), &first).0,
+            &ID,
+            &bytes(&record),
+        )
+        .unwrap();
     assert_eq!(reader.ledgers(0, 2), Err(Error::IncompleteIndex));
     assert_eq!(reader.ledger_at(0), Err(Error::IncompleteIndex));
     let (second, record) = ledger(10);
-    reader.insert(second, &ID, &bytes(&record)).unwrap();
+    reader
+        .insert(
+            root_storage_address(&Pubkey::default(), &second).0,
+            &ID,
+            &bytes(&record),
+        )
+        .unwrap();
     use cavalre_ledger_solana::ledger_lib::{
         child_index_address, ChildSlot, CHILD_MAGIC, CHILD_SPACE,
     };

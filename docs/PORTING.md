@@ -33,6 +33,16 @@ Insertion order, one-based reverse indexes and swap-and-pop removal follow the
 original Solidity `subs`/`subIndex` behavior. Solana slot storage is documented in
 READS.md. Creation updates Root's child index and count atomically; ordinary posting still stops at the selected depth-2 ledger.
 
+External-token ledger identity is the token mint itself, matching Solidity's
+`addLedger(token, ...)`. The root's Solana storage PDA is separate: the adapter
+maps between logical identifiers and physical accounts without changing core
+accounting or custody rules. Native SOL likewise uses its reserved asset
+identifier. Root discovery, parent links, views and events return logical
+identities. Solana account ownership validates backing storage; it does not
+impose an ownership or signer requirement on a Ledger identifier. The earlier
+draft conflated the root PDA with this identity. The correction changes
+external/native descendants' addresses and requires fresh draft state.
+
 The `mutations` feature controls each crate's mutating `ledger` module. Queries
 and shared account types remain available with that feature disabled. Record
 encoding/decoding is shared in the Solana `ledger_lib.rs`; readers do not depend

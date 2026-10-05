@@ -13,6 +13,8 @@ mod custody;
 mod events;
 #[path = "execution_limits.rs"]
 mod execution_limits;
+#[path = "identities.rs"]
+mod identities;
 #[path = "metadata.rs"]
 mod metadata;
 #[path = "names.rs"]
@@ -112,6 +114,7 @@ struct External {
     mint: Address,
     wallet: Address,
     root: Address,
+    root_storage: Address,
     source: Address,
     vault: Address,
 }
@@ -155,10 +158,11 @@ impl External {
             token_program,
         );
         h.metadata(mint, "Token", "TOK");
-        let root = sa(ledger::ledger::root_address(&ap(SYSTEM), &ap(mint)).0);
+        let root = h.external_root(mint);
+        let root_storage = h.storage(root);
         let source = child(root, sa(SOURCE));
         let vault = sa(anchor_lang::prelude::Pubkey::find_program_address(
-            &[b"vault", root.as_ref()],
+            &[b"vault", root_storage.as_ref()],
             &ledger::ID,
         )
         .0);
@@ -167,6 +171,7 @@ impl External {
             mint,
             wallet,
             root,
+            root_storage,
             source,
             vault,
         }
@@ -176,7 +181,7 @@ impl External {
             accounts::RegisterToken {
                 global_root: ledger::ledger_lib::global_root_address().0,
                 payer: ap(h.key(0)),
-                root: ap(self.root),
+                root: ap(self.root_storage),
                 mint: ap(self.mint),
                 vault: ap(self.vault),
                 token_program: ap(self.token_program),
@@ -207,7 +212,7 @@ impl External {
             payer: ap(h.key(0)),
             authority: ap(authority),
             funding_authority: ap(h.key(funder)),
-            root: ap(self.root),
+            root: ap(self.root_storage),
             mint: ap(self.mint),
             vault: ap(self.vault),
             wallet: ap(self.wallet),
@@ -245,7 +250,7 @@ fn base(h: &Harness, root: Address, authority: Address) -> accounts::LedgerAccou
     accounts::LedgerAccounts {
         payer: ap(h.key(0)),
         authority: ap(authority),
-        root: ap(root),
+        root: ap(h.storage(root)),
         system_program: ap(SYSTEM),
     }
 }
@@ -925,7 +930,7 @@ fn direct_implicit_holder_and_prefunded_storage_do_not_require_registration() {
 fn internal_u128_overflow_rolls_back_and_does_not_affect_external_claims() {
     let mut h = Harness::new();
     let e = External::new(&mut h, 60, 0);
-    let external_before = h.svm.get_account(&e.root).unwrap();
+    let external_before = h.svm.get_account(&e.root_storage).unwrap();
     let (root, source) = h.internal();
     let user = h.key(1);
     let i = transfer(
@@ -965,6 +970,6 @@ fn internal_u128_overflow_rolls_back_and_does_not_affect_external_claims() {
     );
     succeeds(&mut h, &[0], i);
     assert_eq!((h.record(root).debit, h.record(root).credit), (0, 0));
-    assert_eq!(h.svm.get_account(&e.root).unwrap(), external_before);
+    assert_eq!(h.svm.get_account(&e.root_storage).unwrap(), external_before);
     assert_eq!(h.token(e.vault), 0);
 }

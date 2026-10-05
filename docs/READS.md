@@ -38,6 +38,20 @@ remain available for reads.
 
 ## Query behavior
 
+Ledger addresses are logical identifiers. An external-token root uses the mint
+address; native SOL uses `NATIVE_SOL`. Query these identities, not their storage
+PDAs. Fetch root records with `root_storage_address(scope, identifier)` and pass
+the physical address to `Reader::insert`; the decoder authenticates storage and
+the reader indexes the record under its logical identity. Mint metadata and the
+Ledger record can coexist in one reader. Accounting-only roots retain their
+authority-scoped identity through `ledger_address(authority, identifier)`.
+
+`insert_missing_ledger(scope, identifier)` records confirmed absence of that
+root's storage. An existing mint alone says nothing about whether its Ledger
+record exists. `insert_missing(address)` remains the helper for confirmed absent
+ordinary child records. Every absence observation must come from the same
+snapshot as the supplied records.
+
 `ledger_lib::name_to_address(name)` derives a relative identity;
 `to_address_by_name(program, parent, name)` derives its absolute child PDA and
 bump. Both are available without mutations and require no account reads. These
@@ -90,6 +104,12 @@ the outer transaction must provide all required writes. See the
 transfer changes. Both work with mutations disabled. The inputs are the ledger,
 two `(parent, relative)` endpoints and the amount; effective flags determine
 polarity, including inheritance for unregistered leaves.
+
+The core returns logical record identities. The Solana `Reader` translates a
+changed root to its physical storage PDA before returning the write set, so its
+output can be applied directly to transaction account metas. This never makes
+the token mint writable. Instruction arguments such as `parent` still use the
+logical ledger address.
 
 For same-polarity transfers, both paths stop below their lowest common ancestor.
 That ancestor and everything above it remain read-only. For opposite-polarity

@@ -6,17 +6,20 @@ use ledger::ledger_lib::{TokenKind, NATIVE_SOL};
 const AMOUNT: u64 = 100_000_000;
 struct Sol {
     root: Address,
+    root_storage: Address,
     source: Address,
     vault: Address,
 }
 impl Sol {
     fn addresses() -> Self {
-        let root = sa(ledger::ledger_lib::root_address(&ap(SYSTEM), &NATIVE_SOL).0);
+        let root = sa(NATIVE_SOL);
+        let root_storage = sa(ledger::ledger_lib::root_storage_address(&ap(SYSTEM), &NATIVE_SOL).0);
         Self {
             root,
+            root_storage,
             source: child(root, sa(SOURCE)),
             vault: sa(anchor_lang::prelude::Pubkey::find_program_address(
-                &[b"vault", root.as_ref()],
+                &[b"vault", root_storage.as_ref()],
                 &ledger::ID,
             )
             .0),
@@ -27,7 +30,7 @@ impl Sol {
             accounts::RegisterSol {
                 global_root: ledger::ledger_lib::global_root_address().0,
                 payer: ap(h.key(0)),
-                root: ap(self.root),
+                root: ap(self.root_storage),
                 vault: ap(self.vault),
                 system_program: ap(SYSTEM),
             },
@@ -36,6 +39,7 @@ impl Sol {
         )
     }
     fn new(h: &mut Harness) -> Self {
+        h.external_root(sa(NATIVE_SOL));
         let sol = Self::addresses();
         succeeds(h, &[0], sol.registration(h));
         sol
@@ -56,7 +60,7 @@ impl Sol {
             payer: ap(h.key(0)),
             authority: ap(auth.0),
             funding_authority: ap(h.key(auth.1)),
-            root: ap(self.root),
+            root: ap(self.root_storage),
             vault: ap(self.vault),
             wallet: ap(wallet),
             system_program: ap(SYSTEM),
@@ -98,11 +102,11 @@ fn zero_sol_settlement_never_allocates_receiver_storage() {
     let receiver = h.key(2);
     let leaf = child(app, receiver);
     let before =
-        [sol.root, sol.source, app, sol.vault, h.key(1)].map(|key| h.svm.get_account(&key));
+        [sol.root_storage, sol.source, app, sol.vault, h.key(1)].map(|key| h.svm.get_account(&key));
     for deposit in [true, false] {
         let mut ix = sol.movement(&h, (h.key(0), 1), h.key(1), (app, receiver), 0, deposit);
         for meta in &mut ix.accounts {
-            if [sol.root, sol.source, app, leaf].contains(&meta.pubkey) {
+            if [sol.root_storage, sol.source, app, leaf].contains(&meta.pubkey) {
                 meta.is_writable = false;
             }
         }
@@ -111,7 +115,8 @@ fn zero_sol_settlement_never_allocates_receiver_storage() {
         assert_eq!(lamports(&h, h.key(0)) + result.fee, payer_before);
         assert!(h.svm.get_account(&leaf).is_none());
         assert_eq!(
-            [sol.root, sol.source, app, sol.vault, h.key(1)].map(|key| h.svm.get_account(&key)),
+            [sol.root_storage, sol.source, app, sol.vault, h.key(1)]
+                .map(|key| h.svm.get_account(&key)),
             before
         );
         assert_eq!(super::events::event_bytes(&result.logs).len(), 5);
@@ -167,7 +172,7 @@ fn sol_custody_requires_root_writes_only_for_nonzero_amounts_direct_and_cpi() {
             );
             let mut missing_write = movement.clone();
             for meta in &mut missing_write.accounts {
-                if meta.pubkey == sol.root {
+                if meta.pubkey == sol.root_storage {
                     meta.is_writable = false;
                 }
             }
@@ -187,12 +192,19 @@ fn sol_custody_requires_root_writes_only_for_nonzero_amounts_direct_and_cpi() {
                     LedgerError::InvalidAccount.into(),
                 );
             }
-            let keys = [sol.root, sol.source, parent, leaf, sol.vault, h.key(1)];
+            let keys = [
+                sol.root_storage,
+                sol.source,
+                parent,
+                leaf,
+                sol.vault,
+                h.key(1),
+            ];
             let before = keys.map(|key| h.svm.get_account(&key));
             let mut zero =
                 sol.movement(&h, (authority, 1), h.key(1), (parent, receiver), 0, deposit);
             for meta in &mut zero.accounts {
-                if [sol.root, sol.source, parent, leaf].contains(&meta.pubkey) {
+                if [sol.root_storage, sol.source, parent, leaf].contains(&meta.pubkey) {
                     meta.is_writable = false;
                 }
             }
@@ -321,6 +333,7 @@ fn native_sol_fee_payer_can_also_fund_and_receive() {
 fn native_sol_prefunding_and_donations_create_no_claims() {
     let mut h = Harness::new();
     let sol = Sol::addresses();
+    h.external_root(sol.root);
     // Failure after funding the new vault and allocating the root must undo both.
     let mut failed = sol.registration(&h);
     for account in &mut failed.accounts {
@@ -329,7 +342,7 @@ fn native_sol_prefunding_and_donations_create_no_claims() {
         }
     }
     rejects(&mut h, &[0], failed, LedgerError::InvalidAccount.into());
-    for address in [sol.root, sol.source, sol.vault] {
+    for address in [sol.root_storage, sol.source, sol.vault] {
         assert!(h.svm.get_account(&address).is_none());
     }
     let reserve = h.svm.minimum_balance_for_rent_exemption(0);
@@ -413,7 +426,7 @@ fn native_sol_permissions_admission_and_account_substitutions_reject() {
     rejects(&mut h, &[0, 1], i, LedgerError::InvalidKind.into());
     let i = sol.movement(&h, (h.key(0), 0), sol.vault, (parent, user), 0, false);
     rejects(&mut h, &[0], i, LedgerError::InvalidAccount.into());
-    for target in [sol.root, sol.vault] {
+    for target in [sol.root_storage, sol.vault] {
         let mut i = valid.clone();
         for account in &mut i.accounts {
             if account.pubkey == target {

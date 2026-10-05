@@ -6,7 +6,7 @@ fn count(h: &Harness) -> u32 {
     h.record(sa(global_root_address().0)).children
 }
 fn add_internal(h: &Harness, id: Address, source: bool) -> Instruction {
-    let root = sa(ledger::ledger_lib::root_address(&ap(h.key(0)), &ap(id)).0);
+    let root = sa(ledger::ledger_lib::root_storage_address(&ap(h.key(0)), &ap(id)).0);
     ix(
         h.registration(0, root),
         instruction::AddLedger {
@@ -30,17 +30,16 @@ fn all_ledger_kinds_are_discovered_as_root_children() {
     let token2022 = External::setup(&mut h, 61, 0, TOKEN_2022);
     let registration = token2022.registration(&h);
     succeeds(&mut h, &[0], registration);
-    let native =
-        sa(ledger::ledger_lib::root_address(&ap(SYSTEM), &ledger::ledger_lib::NATIVE_SOL).0);
+    let native = h.external_root(sa(ledger::ledger_lib::NATIVE_SOL));
     let vault = sa(anchor_lang::prelude::Pubkey::find_program_address(
-        &[b"vault", native.as_ref()],
+        &[b"vault", h.storage(native).as_ref()],
         &ledger::ID,
     )
     .0);
     let i = ix(
         accounts::RegisterSol {
             payer: ap(h.key(0)),
-            root: ap(native),
+            root: ap(h.storage(native)),
             vault: ap(vault),
             system_program: ap(SYSTEM),
             global_root: global_root_address().0,
@@ -67,8 +66,10 @@ fn all_ledger_kinds_are_discovered_as_root_children() {
         assert_eq!(r.parent, ap(global));
         assert_eq!(r.custodian, ap(global));
         assert_eq!(r.depth, 2);
-        let a = h.svm.get_account(address).unwrap();
-        reader.insert(ap(*address), &ap(a.owner), &a.data).unwrap();
+        let a = h.svm.get_account(&h.storage(*address)).unwrap();
+        reader
+            .insert(ap(h.storage(*address)), &ap(a.owner), &a.data)
+            .unwrap();
     }
     assert_eq!(
         reader.ledgers(0, usize::MAX).unwrap(),

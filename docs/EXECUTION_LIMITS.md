@@ -63,16 +63,16 @@ external paths diverge immediately below the shared application group.
 
 | Leaf depth | Maximum compute units | Maximum transaction bytes | Maximum account keys | Maximum writable keys |
 | --- | ---: | ---: | ---: | ---: |
-| 4 | 121556 | 793 | 15 | 7 |
-| 5 | 103671 | 826 | 16 | 8 |
-| 6 | 121562 | 859 | 17 | 10 |
-| 7 | 152014 | 892 | 18 | 12 |
-| 8 | 165680 | 925 | 19 | 14 |
-| 9 | 173926 | 967 | 20 | 16 |
-| 10 | 201664 | 1033 | 22 | 18 |
-| 11 | 207089 | 1099 | 24 | 20 |
-| 12 | 217204 | 1165 | 26 | 22 |
-| 13 | 232104 | 1231 | 28 | 24 |
+| 4 | 94271 | 793 | 15 | 7 |
+| 5 | 100610 | 826 | 16 | 8 |
+| 6 | 133665 | 859 | 17 | 10 |
+| 7 | 161962 | 892 | 18 | 12 |
+| 8 | 165664 | 925 | 19 | 14 |
+| 9 | 160446 | 967 | 20 | 16 |
+| 10 | 161249 | 1033 | 22 | 18 |
+| 11 | 205739 | 1099 | 24 | 20 |
+| 12 | 211419 | 1165 | 26 | 22 |
+| 13 | 241286 | 1231 | 28 | 24 |
 
 Each column is its own maximum across that depth's measured operations. Compute
 need not increase monotonically because PDA bump searches vary with addresses.
@@ -81,6 +81,22 @@ measurements include the current structural and debit/credit events emitted
 through Anchor logs and validation of the global Root parent; see [event delivery](EVENTS.md).
 Ledger creation is setup outside this profile. Only creation writes the global
 Root child index and count; measured postings do not need Root as an account input.
+
+The logical-identity correction uses the mint (or `NATIVE_SOL`) as the parent
+of external/native descendants. Against the saved pre-change 2205-case profile,
+all packet lengths, account/write counts, fees and rent amounts are identical.
+Derived addresses differ, so bump-search costs move in both directions. One
+direct depth-7 repeat transfer rises from 86937 to 155647 CU (+68710); the
+largest sampled transaction rises from 232706 to 241286 CU. These are address
+samples, not a uniform per-operation surcharge. Clients must resimulate their
+new addresses instead of reusing draft compute estimates.
+
+The Ledger executable grows from 401160 to 411976 bytes (+10816, 2.7%). The
+reader now tracks supplied physical addresses separately from logical records
+so a mint and its Ledger record can coexist and duplicate physical inputs still
+reject. Record allocation sizes and their rent are unchanged. These measurements
+cover the identity fix; they do not include the experimental all-mutation
+backing check.
 
 The tests submit signed **legacy transactions**, including both compute-limit
 and compute-price instructions. They enforce the 1232-byte packet limit before
@@ -92,19 +108,19 @@ as test setup; all Ledger tree state is created through actual instructions.
 
 | Operation at depth 13 | Maximum compute units | Maximum bytes | New storage funding (SOL) |
 | --- | ---: | ---: | ---: |
-| Create group | 119183 | 891 | 0.00590208 |
-| Create registered leaf | 114380 | 923 | 0.00590208 |
-| Register funded leaf | 111311 | 923 | 0.00144768 |
-| Remove registered leaf | 106597 | 853 | 0 |
-| First deposit / Source issuance | 169134 | 1090 | 0.0044544 |
-| Repeated deposit / Source issuance | 162794 | 1090 | 0 |
-| First transfer to implicit leaf | 223345 | 1231 | 0.0044544 |
-| Repeated transfer | 216898 | 1231 | 0 |
-| Transfer between registered leaves | 216970 | 1231 | 0 |
-| Withdraw / retire to Source | 160661 | 994 | 0 |
-| First issuance from deep credit leaf | 232104 | 1168 | 0.0044544 |
-| Issuance from registered deep credit leaf | 225777 | 1168 | 0 |
-| Retirement to deep credit leaf | 225862 | 1168 | 0 |
+| Create group | 133791 | 891 | 0.00590208 |
+| Create registered leaf | 112350 | 923 | 0.00590208 |
+| Register funded leaf | 107123 | 923 | 0.00144768 |
+| Remove registered leaf | 107651 | 853 | 0 |
+| First deposit / Source issuance | 176666 | 1090 | 0.0044544 |
+| Repeated deposit / Source issuance | 170349 | 1090 | 0 |
+| First transfer to implicit leaf | 241286 | 1231 | 0.0044544 |
+| Repeated transfer | 234889 | 1231 | 0 |
+| Transfer between registered leaves | 234961 | 1231 | 0 |
+| Withdraw / retire to Source | 155374 | 994 | 0 |
+| First issuance from deep credit leaf | 232498 | 1168 | 0.0044544 |
+| Issuance from registered deep credit leaf | 226189 | 1168 | 0 |
+| Retirement to deep credit leaf | 226274 | 1168 | 0 |
 
 The complete generated report includes registration and removal measurements.
 The suite verifies final leaf, Source, root and custody balances. A separate

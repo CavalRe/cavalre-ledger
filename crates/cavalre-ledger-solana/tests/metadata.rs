@@ -2,7 +2,7 @@
 use anchor_lang::{prelude::*, solana_program::program_pack::Pack};
 use cavalre_ledger_core::ledger_lib::Error as CoreError;
 use cavalre_ledger_solana::{
-    ledger_lib::{root_address, Record, NATIVE_SOL},
+    ledger_lib::{root_storage_address, Record, NATIVE_SOL},
     ledger_view::{
         metadata_address, native_decimals, native_symbol, Reader, METAPLEX_METADATA_PROGRAM,
     },
@@ -21,9 +21,9 @@ fn key(byte: u8) -> Pubkey {
     Pubkey::new_from_array([byte; 32])
 }
 fn root(scope: Pubkey, mint: Pubkey) -> (Pubkey, Vec<u8>) {
-    let (address, bump) = root_address(&scope, &mint);
+    let (address, bump) = root_storage_address(&scope, &mint);
     let record = Record {
-        root: address,
+        root: cavalre_ledger_solana::ledger_lib::ledger_address(&scope, &mint),
         parent: cavalre_ledger_solana::ledger_lib::global_root_address().0,
         relative: mint,
         custodian: Pubkey::default(),
@@ -62,7 +62,7 @@ fn reader(mint: Pubkey) -> (Reader, Pubkey) {
     let (root, data) = root(Pubkey::default(), mint);
     let mut reader = Reader::new();
     reader.insert(root, &ID, &data).unwrap();
-    (reader, root)
+    (reader, mint)
 }
 fn plain_mint(decimals: u8) -> Vec<u8> {
     let mut data = vec![0; Mint::LEN];
@@ -346,8 +346,28 @@ fn runtime_account_infos_read_metadata_with_no_signers_writes_or_mutation_module
         })
         .collect();
     let reader = Reader::from_account_infos(&infos).unwrap();
-    assert_eq!(reader.symbol(&root), Ok(Some("CACHED".into())));
-    assert_eq!(reader.decimals(&root), Ok(Some(3)));
+    assert_eq!(reader.symbol(&mint), Ok(Some("CACHED".into())));
+    assert_eq!(reader.decimals(&mint), Ok(Some(3)));
     drop(infos);
     assert_eq!(entries, before);
+}
+
+#[test]
+fn existing_mint_and_absent_ledger_are_distinct_inputs() {
+    let mint = key(30);
+    let mut reader = Reader::new();
+    reader
+        .insert(mint, &spl_token_2022_interface::ID, &plain_mint(6))
+        .unwrap();
+    assert_eq!(reader.total_supply(&mint), Err(CoreError::MissingAccount));
+    reader
+        .insert_missing_ledger(&Pubkey::default(), &mint)
+        .unwrap();
+    assert_eq!(reader.total_supply(&mint), Ok(0));
+    assert_eq!(reader.symbol(&mint), Ok(Some(String::new())));
+    assert!(reader
+        .insert_missing_ledger(&Pubkey::default(), &mint)
+        .is_err());
+    let (storage, data) = root(Pubkey::default(), mint);
+    assert!(reader.insert(storage, &ID, &data).is_err());
 }

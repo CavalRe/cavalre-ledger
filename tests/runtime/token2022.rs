@@ -196,8 +196,8 @@ fn metadata_views_execute_in_a_consumer_without_calling_ledger() {
         .unwrap();
     let read = Instruction {
         program_id: consumer,
-        accounts: vec![AccountMeta::new_readonly(e.root, false)],
-        data: b"metadata".to_vec(),
+        accounts: vec![AccountMeta::new_readonly(e.root_storage, false)],
+        data: [b"metadata".as_slice(), e.root.as_ref()].concat(),
     };
     for symbol in ["META", "UPDATED"] {
         if symbol == "UPDATED" {
@@ -211,7 +211,7 @@ fn metadata_views_execute_in_a_consumer_without_calling_ledger() {
             succeeds(&mut h, &[0], ix);
         }
         let before = (
-            h.svm.get_account(&e.root).unwrap(),
+            h.svm.get_account(&e.root_storage).unwrap(),
             h.svm.get_account(&e.mint).unwrap(),
         );
         let result = run(&mut h, &[0], read.clone()).unwrap();
@@ -226,7 +226,7 @@ fn metadata_views_execute_in_a_consumer_without_calling_ledger() {
             .any(|line| line.contains(&format!("Program {} invoke", cavalre_ledger_solana::ID))));
         assert_eq!(
             (
-                h.svm.get_account(&e.root).unwrap(),
+                h.svm.get_account(&e.root_storage).unwrap(),
                 h.svm.get_account(&e.mint).unwrap()
             ),
             before
@@ -237,7 +237,7 @@ fn metadata_views_execute_in_a_consumer_without_calling_ledger() {
     let absent = child(e.root, h.key(2));
     assert!(h.svm.get_account(&absent).is_none());
     for target in [e.source, absent] {
-        let before = [target, e.root].map(|key| h.svm.get_account(&key));
+        let before = [target, e.root_storage].map(|key| h.svm.get_account(&key));
         let result = run(
             &mut h,
             &[0],
@@ -245,9 +245,9 @@ fn metadata_views_execute_in_a_consumer_without_calling_ledger() {
                 program_id: consumer,
                 accounts: vec![
                     AccountMeta::new_readonly(target, false),
-                    AccountMeta::new_readonly(e.root, false),
+                    AccountMeta::new_readonly(e.root_storage, false),
                 ],
-                data: b"metadata".to_vec(),
+                data: [b"metadata".as_slice(), target.as_ref()].concat(),
             },
         )
         .unwrap();
@@ -259,7 +259,10 @@ fn metadata_views_execute_in_a_consumer_without_calling_ledger() {
             .logs
             .iter()
             .any(|line| line.contains(&format!("Program {} invoke", cavalre_ledger_solana::ID))));
-        assert_eq!([target, e.root].map(|key| h.svm.get_account(&key)), before);
+        assert_eq!(
+            [target, e.root_storage].map(|key| h.svm.get_account(&key)),
+            before
+        );
     }
 }
 
@@ -316,7 +319,7 @@ fn incompatible_mints_reject_registration_without_allocating_ledger_state() {
         mint_extension(&mut h, &e, extension);
         let i = e.registration(&h);
         rejects(&mut h, &[0], i, LedgerError::UnsupportedToken.into());
-        for address in [e.root, e.source, e.vault] {
+        for address in [e.root_storage, e.source, e.vault] {
             assert!(h.svm.get_account(&address).is_none());
         }
     }

@@ -25,7 +25,7 @@ lifecycle, admission, posting, backing and exact-settlement rules live in the
 core. Its `atomic` contract uses Solana transaction rollback: every error is
 propagated directly to the entry point. The host is consumed by each call.
 
-Ledger PDA derivation and the 512-byte record allocation are unchanged. The
+The 512-byte record allocation is unchanged. The
 record stores a one-based `sub_index`, symbol and decimals in previously reserved space. Earlier
 draft records without these metadata fields and child indexes require fresh initialization;
 they are not a supported upgrade target. No deployed-state migration or deployment
@@ -36,10 +36,24 @@ reads. It updates balances and child counts directly and tracks changed records
 without a second before/after snapshot. Solana owns rollback; the core still
 computes the same checked posting changes before applying them.
 
-An external mint has one root PDA: `["ledger", zero public key, mint]`.
-All applications share that tree and its vault `["vault", root]`. Each root has
-an explicit credit Source at `["account", root, SOURCE]`; `SOURCE` is the
+An external token's logical ledger address is its mint address. This is the
+identity used in parent links, discovery, events and view/instruction arguments.
+It carries no implication about the mint's Solana account owner or signing rights.
+`ledger_address(zero, mint)` returns that identity. Its accounting record lives
+at `root_storage_address(zero, mint)`, the PDA `["ledger", zero, mint]`.
+The `root` account meta in Anchor instructions supplies this **storage PDA**.
+All applications share the tree and its vault `["vault", root_storage]`.
+The explicit credit Source is `["account", mint, SOURCE]`; `SOURCE` is the
 exported fixed relative identifier. All other external-token accounts are debits.
+
+This corrects the earlier draft's use of the root storage PDA as its logical
+identity. External/native child and index addresses change because their parent
+is now the asset identifier. Old draft records require fresh initialization;
+there is no deployed state to migrate. Root storage and custody vault derivations,
+record sizes, instruction account counts and permission rules are unchanged.
+Rust clients replace the old `root_address` helper with `root_storage_address`
+for account metas and `ledger_address` for logical root identifiers. The core's
+accounting rules and interfaces are unchanged.
 
 An accounting-only root uses `["ledger", authority, identifier]`. Its signed
 authority manages its accounts and authorizes postings, including credit issuance.
@@ -251,8 +265,10 @@ events from successful transactions; see [event fields and compatibility](../../
 ## Native SOL
 
 `NATIVE_SOL` is the zero public key, also the System Program address. It cannot
-be a token mint. SOL has one root `["ledger", zero, NATIVE_SOL]`, one protected
-Source, and a System-owned, empty-data vault at `["vault", root]`. Only Ledger
+be a token mint. It is SOL's logical ledger identity, regardless of the account
+already occupying that address. SOL's root storage is `["ledger", zero, NATIVE_SOL]`,
+with one protected Source and a System-owned, empty-data vault at
+`["vault", root_storage]`. Only Ledger
 can sign for that vault PDA. The root reports `TokenKind::Native`.
 
 `add_native_sol` initializes name `SOL`, symbol `SOL` and decimals `9` and funds the vault to the

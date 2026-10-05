@@ -56,10 +56,10 @@ fn external_registration_snapshots_issuer_metadata_and_repeats_are_noops() {
             (10, 10, 10)
         );
         h.metadata(e.mint, "New issuer name", "NEW");
-        let stored = h.svm.get_account(&e.root).unwrap();
+        let stored = h.svm.get_account(&e.root_storage).unwrap();
         let mut reader = Reader::new();
         reader
-            .insert(ap(e.root), &ap(stored.owner), &stored.data)
+            .insert(ap(e.root_storage), &ap(stored.owner), &stored.data)
             .unwrap();
         assert_eq!(reader.name(&ap(e.root)).unwrap(), "USD Coin");
         assert_eq!(reader.symbol(&ap(e.root)).unwrap(), Some("USDC".into()));
@@ -70,7 +70,7 @@ fn external_registration_snapshots_issuer_metadata_and_repeats_are_noops() {
             registration,
             LedgerError::MetadataConflict.into(),
         );
-        assert_eq!(h.svm.get_account(&e.root).unwrap(), stored);
+        assert_eq!(h.svm.get_account(&e.root_storage).unwrap(), stored);
     }
 }
 
@@ -123,7 +123,7 @@ fn registration_rejects_missing_empty_forged_or_malformed_issuer_metadata_atomic
             };
             rejects(&mut h, &[0], registration, expected.into());
             for key in [
-                e.root,
+                e.root_storage,
                 e.source,
                 e.vault,
                 sa(ledger::ledger_lib::global_root_address().0),
@@ -200,7 +200,7 @@ fn token2022_inline_names_are_issuer_authenticated_and_obey_original_string_limi
             assert_noop(&mut h, registration);
         } else {
             rejects(&mut h, &[0], registration, LedgerError::InvalidName.into());
-            assert!(h.svm.get_account(&e.root).is_none());
+            assert!(h.svm.get_account(&e.root_storage).is_none());
             assert!(h.svm.get_account(&e.vault).is_none());
         }
     }
@@ -209,7 +209,7 @@ fn token2022_inline_names_are_issuer_authenticated_and_obey_original_string_limi
 #[test]
 fn accounting_ledger_metadata_is_explicit_and_matching_creation_is_idempotent() {
     let mut h = Harness::new();
-    let root = sa(ledger::ledger_lib::root_address(&ap(h.key(0)), &ap(h.key(2))).0);
+    let root = sa(ledger::ledger_lib::root_storage_address(&ap(h.key(0)), &ap(h.key(2))).0);
     let build = |h: &Harness, name: &str, symbol: &str, decimals| {
         ix(
             h.registration(0, root),

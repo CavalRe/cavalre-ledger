@@ -50,10 +50,12 @@ This is a Solana encoding of the original semantics, not the Solidity event ABI.
 Public keys replace EVM addresses and `u128` replaces `uint256`. Solana logs do
 not supply Solidity indexed topics. The event discriminator identifies the type.
 
-Solana separates the ledger PDA from the asset identity. `LedgerAdded` therefore
-includes `ledger`, `identifier` and `scope`: external mints and native SOL use
-zero scope; accounting-only roots use their owning authority. The identifier is
-the mint, `NATIVE_SOL`, or the application's accounting quantity identifier.
+Event addresses are logical Ledger identities, not root storage locations.
+For external tokens, `ledger == identifier == mint`; for native SOL both equal
+`NATIVE_SOL`. Both use zero `scope`. Accounting-only roots retain their
+authority-scoped ledger identity and application-chosen `identifier`, with their
+owning authority in `scope`. All posting and structural events use these same
+logical identities, including parent links directly beneath a token ledger.
 `name`, `symbol` and `decimals` are the stored registration snapshot, preserving
 the original Solidity creation metadata. External-token values come from the
 validated issuer source; accounting-only values come from the authorized caller.
