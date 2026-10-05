@@ -38,6 +38,13 @@ remain available for reads.
 
 ## Query behavior
 
+`ledger_lib::name_to_address(name)` derives a relative identity;
+`to_address_by_name(program, parent, name)` derives its absolute child PDA and
+bump. Both are available without mutations and require no account reads. These
+helpers derive identities, not search by display label. An explicitly identified
+account may have the same label at another address. Use the exported `SOURCE`
+identifier for the reserved Source account, not a hash of its display name.
+
 | Query | Behavior |
 | --- | --- |
 | `account` / Solana `Reader::account_view` | Absolute/relative identities, ledger, effective flags, custody, registration, name, gross balances and parent admission status |

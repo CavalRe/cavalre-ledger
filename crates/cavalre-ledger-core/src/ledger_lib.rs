@@ -158,6 +158,37 @@ pub trait AddressDerivation<A> {
     fn to_address(&self, parent: &A, relative: &A) -> A;
 }
 
+/// Optional host-specific name hashing. Existing explicit-address hosts need
+/// not implement this. Hash the exact UTF-8 bytes without normalization; the
+/// public helpers validate names before invoking this method.
+pub trait NameDerivation<A> {
+    fn hash_name(&self, name: &str) -> A;
+}
+
+/// Matches the original name-derived overloads and registered group names.
+pub fn valid_name(name: &str) -> Result<(), Error> {
+    if name.is_empty() || name.len() > 64 {
+        return Err(Error::InvalidName);
+    }
+    Ok(())
+}
+
+/// Relative identity from a name, independent of its parent. No storage or
+/// authority is created by deriving an identity.
+pub fn name_to_address<A>(addresses: &impl NameDerivation<A>, name: &str) -> Result<A, Error> {
+    valid_name(name)?;
+    Ok(addresses.hash_name(name))
+}
+
+/// Absolute identity using the same derivation as an explicit relative address.
+pub fn to_address_by_name<A>(
+    addresses: &(impl AddressDerivation<A> + NameDerivation<A>),
+    parent: &A,
+    name: &str,
+) -> Result<A, Error> {
+    Ok(addresses.to_address(parent, &name_to_address(addresses, name)?))
+}
+
 /// Roots identify themselves; registered descendants resolve through custody.
 /// An implicit leaf requires its parent context, exactly as in LedgerLib.
 pub fn ledger<A: Copy + Eq>(store: &impl Store<A>, absolute: &A) -> Result<Option<A>, Error> {

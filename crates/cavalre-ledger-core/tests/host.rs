@@ -561,6 +561,62 @@ impl cavalre_ledger_core::ledger_lib::AddressDerivation<u64> for MemoryHost {
     }
 }
 
+#[test]
+fn named_creation_uses_the_existing_authenticated_command() {
+    struct Names;
+    impl cavalre_ledger_core::ledger_lib::NameDerivation<u64> for Names {
+        fn hash_name(&self, name: &str) -> u64 {
+            assert_eq!(name, "Rewards");
+            42 // Test host's name identity, with no platform hashing dependency.
+        }
+    }
+    let mut named = MemoryHost::new(true);
+    let parent = named.initialize(true);
+    let mut explicit = MemoryHost::new(true);
+    explicit.initialize(true);
+    let command = || {
+        Command::add_by_name(
+            &Names,
+            parent,
+            "Rewards".into(),
+            AccountKind::DebitGroup,
+            true,
+        )
+        .unwrap()
+    };
+    execute(&mut named, command()).unwrap();
+    execute(
+        &mut explicit,
+        Command::Add {
+            child: child(parent, 42),
+            name: "Rewards".into(),
+            kind: AccountKind::DebitGroup,
+            implicit_allowed: true,
+        },
+    )
+    .unwrap();
+    assert_eq!(named.accounts, explicit.accounts);
+    assert_eq!(named.children, explicit.children);
+    assert_eq!(named.events, explicit.events);
+    let writes = named.record_writes;
+    execute(&mut named, command()).unwrap();
+    assert_eq!(named.record_writes, writes);
+    assert_eq!(named.events, explicit.events);
+    named.actor = Some(USER);
+    assert_eq!(
+        execute(&mut named, command()),
+        Err(Failure::Rule(Error::Unauthorized))
+    );
+    assert_eq!(named.accounts, explicit.accounts);
+    // Reject before calling the host's name hasher, even for a named leaf.
+    for name in [String::new(), "x".repeat(65)] {
+        assert_eq!(
+            Command::add_by_name(&Names, parent, name, AccountKind::DebitLedger, true).err(),
+            Some(Error::InvalidName)
+        );
+    }
+}
+
 impl cavalre_ledger_core::ledger_lib::ReadStore<u64> for MemoryHost {
     fn account(&self, absolute: &u64) -> Result<Option<Account<u64, &str>>, Error> {
         Ok(self.accounts.get(absolute).map(Account::as_ref))

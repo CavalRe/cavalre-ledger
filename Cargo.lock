@@ -865,6 +865,7 @@ dependencies = [
  "anchor-lang",
  "anchor-spl",
  "cavalre-ledger-core",
+ "solana-keccak-hasher",
  "spl-token-2022-interface",
  "spl-token-metadata-interface",
 ]

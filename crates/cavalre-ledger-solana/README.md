@@ -53,6 +53,22 @@ Descendants require the branch's direct-child authority. An application uses a
 PDA signer through CPI; its administrator wallet cannot substitute for that PDA.
 Tree operations use runtime signatures, not off-chain intents.
 
+`ledger_lib::name_to_address(name)` derives a relative identity from the full
+Keccak-256 hash of the name's exact UTF-8 bytes. `to_address_by_name(program,
+parent, name)` returns its child PDA and bump using the existing seeds. Names
+require 1–64 bytes and are case-sensitive, with no trimming or normalization.
+These helpers work without the `mutations` feature and do not allocate storage.
+The existing reserved `SOURCE` identifier is unchanged; hashing `"Source"` does
+not address it.
+
+Named creation delegates to the explicit creation path. It needs the same
+accounts, child-index slots and authenticated custodian; a name hash grants no
+signing authority. Use named children inside an external token's application
+branch, whose direct child remains the application's signer identity. An
+accounting-only root's authority can create named children directly. Explicit
+identities may share display names, and can repeat named creation idempotently
+when the identity, metadata and flags match.
+
 `Record` stores identity, flags, custody ancestry, current `u128` debit and
 credit balances, registration, parent admission, child count, reverse index, name,
 symbol and decimals. Metadata
@@ -134,6 +150,9 @@ and must be rebuilt. Readers need only their requested slots, not all siblings.
   special spending authority are granted to the initializer.
 - `add_sub_account`, `add_sub_account_group`: register accounts with custodian
   authorization and existing balance/kind checks.
+- `add_sub_account_by_name(parent, name, credit)` and
+  `add_sub_account_group_by_name(parent, name, credit, implicit_allowed)`:
+  derive the relative identity from the name and use the same registration path.
 - `remove_sub_account`, `remove_sub_account_group`: unregister empty accounts;
   authorized removal of an implicit leaf is a no-op.
 - `transfer`: same-custodian debit transfers for external tokens; authorized

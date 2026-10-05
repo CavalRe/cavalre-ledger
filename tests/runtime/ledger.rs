@@ -104,11 +104,23 @@ impl Harness {
             extra.push(sa(child_index_address(&ap(root), 0).0));
         } else if data.starts_with(instruction::AddSubAccount::DISCRIMINATOR)
             || data.starts_with(instruction::AddSubAccountGroup::DISCRIMINATOR)
+            || data.starts_with(instruction::AddSubAccountByName::DISCRIMINATOR)
+            || data.starts_with(instruction::AddSubAccountGroupByName::DISCRIMINATOR)
             || data.starts_with(instruction::RemoveSubAccount::DISCRIMINATOR)
             || data.starts_with(instruction::RemoveSubAccountGroup::DISCRIMINATOR)
         {
             let parent = Address::new_from_array(data[8..40].try_into().unwrap());
-            let relative = Address::new_from_array(data[40..72].try_into().unwrap());
+            let relative = if data.starts_with(instruction::AddSubAccountByName::DISCRIMINATOR)
+                || data.starts_with(instruction::AddSubAccountGroupByName::DISCRIMINATOR)
+            {
+                let name = String::deserialize(&mut &data[40..]).unwrap();
+                let Ok(relative) = ledger::ledger_lib::name_to_address(&name) else {
+                    return instruction; // Invalid names need no append slot.
+                };
+                sa(relative)
+            } else {
+                Address::new_from_array(data[40..72].try_into().unwrap())
+            };
             let account = get(child(parent, relative));
             let removing = data.starts_with(instruction::RemoveSubAccount::DISCRIMINATOR)
                 || data.starts_with(instruction::RemoveSubAccountGroup::DISCRIMINATOR);

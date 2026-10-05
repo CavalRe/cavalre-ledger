@@ -10,6 +10,7 @@ description = "Fresh Solana Ledger draft based on the original Solidity LedgerLi
 [dependencies]
 cavalre-ledger-core = { path = "../cavalre-ledger-core", version = "0.1.0", default-features = false }
 anchor-lang = { version = "=1.2.0", features = ["init-if-needed"] }
+solana-keccak-hasher = { version = "=3.1.0", features = ["sha3"] }
 spl-token-2022-interface = "=2.1.0"
 spl-token-metadata-interface = "=0.8.0"
 anchor-spl = { optional = true, version = "=1.2.0", default-features = false, features = ["token", "token_2022"] }

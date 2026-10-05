@@ -1,6 +1,6 @@
 //! Standalone Ledger operations over authenticated, transactional host services.
 //! Mirrors Ledger.sol; the original posting walk remains in ledger_lib.
-use crate::ledger_lib::{self as lib, AccountKind, Balances, Error, Flags, TokenKind};
+use crate::ledger_lib::{self as lib, valid_name, AccountKind, Balances, Error, Flags, TokenKind};
 use alloc::{string::String, vec::Vec};
 
 use lib::StoreView as View;
@@ -138,6 +138,28 @@ pub enum Command<A> {
     },
 }
 
+impl<A> Command<A> {
+    /// Name-derived convenience for the existing Add command. Authentication
+    /// still receives the full resolved command through execute.
+    pub fn add_by_name(
+        addresses: &impl lib::NameDerivation<A>,
+        parent: A,
+        name: String,
+        kind: AccountKind,
+        implicit_allowed: bool,
+    ) -> Result<Self, Error> {
+        Ok(Self::Add {
+            child: Child {
+                parent,
+                relative: lib::name_to_address(addresses, &name)?,
+            },
+            name,
+            kind,
+            implicit_allowed,
+        })
+    }
+}
+
 /// Public service boundary. Hosts provide mechanisms; Ledger owns permission,
 /// lifecycle, admission, posting and exact-settlement policy.
 pub fn execute<A: Copy + Eq, H: Host<A>>(
@@ -172,12 +194,6 @@ pub fn execute<A: Copy + Eq, H: Host<A>>(
 
 fn get<'a, A: Copy + Eq>(host: &'a impl Host<A>, key: &A) -> Result<Account<A, &'a str>, Error> {
     host.account(key)?.ok_or(Error::MissingAccount)
-}
-fn valid_name(name: &str) -> Result<(), Error> {
-    if name.is_empty() || name.len() > 64 {
-        return Err(Error::InvalidName);
-    }
-    Ok(())
 }
 fn authorize<A: Copy + Eq>(
     host: &impl Host<A>,

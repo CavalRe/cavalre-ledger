@@ -46,6 +46,27 @@ pub mod cavalre_ledger_solana {
     ) -> Result<()> {
         ledger::add_account(&ctx, parent, relative, name, credit, true, implicit_allowed)
     }
+    pub fn add_sub_account_by_name<'info>(
+        ctx: Context<'info, LedgerAccounts<'info>>,
+        parent: Pubkey,
+        name: String,
+        credit: bool,
+    ) -> Result<()> {
+        let relative = ledger_lib::name_to_address(&name)
+            .map_err(|_| error!(ledger_lib::LedgerError::InvalidName))?;
+        add_sub_account(ctx, parent, relative, name, credit)
+    }
+    pub fn add_sub_account_group_by_name<'info>(
+        ctx: Context<'info, LedgerAccounts<'info>>,
+        parent: Pubkey,
+        name: String,
+        credit: bool,
+        implicit_allowed: bool,
+    ) -> Result<()> {
+        let relative = ledger_lib::name_to_address(&name)
+            .map_err(|_| error!(ledger_lib::LedgerError::InvalidName))?;
+        add_sub_account_group(ctx, parent, relative, name, credit, implicit_allowed)
+    }
     pub fn remove_sub_account<'info>(
         ctx: Context<'info, LedgerAccounts<'info>>,
         parent: Pubkey,

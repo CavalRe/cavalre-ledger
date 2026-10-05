@@ -11,7 +11,30 @@ pub fn to_address(program: &Pubkey, parent: &Pubkey, relative: &Pubkey) -> (Pubk
     Pubkey::find_program_address(&[b"account", parent.as_ref(), relative.as_ref()], program)
 }
 
+/// Full Keccak-256 of the exact name bytes, represented as a 32-byte relative
+/// public key. Names require 1–64 UTF-8 bytes, including for named leaves.
+/// This is an identifier, not a signer or an allocation. Reserved SOURCE remains
+/// its existing explicit identity; this helper does not special-case labels.
+pub fn name_to_address(name: &str) -> std::result::Result<Pubkey, Error> {
+    core::name_to_address(&PdaAddresses(&crate::ID), name)
+}
+
+/// Resolve a named child using the existing explicit-address PDA seeds.
+pub fn to_address_by_name(
+    program: &Pubkey,
+    parent: &Pubkey,
+    name: &str,
+) -> std::result::Result<(Pubkey, u8), Error> {
+    Ok(to_address(program, parent, &name_to_address(name)?))
+}
+
 pub struct PdaAddresses<'a>(pub &'a Pubkey);
+
+impl core::NameDerivation<Pubkey> for PdaAddresses<'_> {
+    fn hash_name(&self, name: &str) -> Pubkey {
+        Pubkey::new_from_array(solana_keccak_hasher::hash(name.as_bytes()).to_bytes())
+    }
+}
 
 impl core::AddressDerivation<Pubkey> for PdaAddresses<'_> {
     fn to_address(&self, parent: &Pubkey, relative: &Pubkey) -> Pubkey {

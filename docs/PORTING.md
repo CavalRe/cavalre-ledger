@@ -65,6 +65,18 @@ allow 0–64 bytes. Allowing an empty leaf label follows the original overload;
 retaining a maximum length for leaves is an intentional product policy. The
 original explicit-address leaf overload did not impose that length limit.
 
+Name-derived overloads are available as `name_to_address`, `to_address_by_name`,
+and named creation functions. Solana retains the full 32-byte Keccak-256 name
+hash as the relative identity, then uses the existing parent/relative PDA seeds.
+Solidity retained the low 20 bytes of that hash. Exact UTF-8 bytes determine the
+identity; names require 1–64 bytes even for the named leaf overload. Explicit
+leaf labels may still be empty. No normalization or display-name index is added.
+The core's optional `NameDerivation` interface and `Command::add_by_name` keep
+hashing host-specific and resolve into the existing authenticated `Add` command.
+Existing hosts, instructions, addresses, events and record layouts remain valid.
+Reserved `SOURCE` keeps its existing explicit identifier; hashing `"Source"`
+does not resolve it. Use `SOURCE` to address the protected credit account.
+
 Rust and Agave pins, the sBPF build/stack checks, and the original Solidity
 reference tooling remain in the working tree. Old deployment scripts and
 program identities were removed because they target the superseded program.

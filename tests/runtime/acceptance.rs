@@ -13,6 +13,8 @@ mod events;
 mod execution_limits;
 #[path = "metadata.rs"]
 mod metadata;
+#[path = "names.rs"]
+mod names;
 #[path = "native_sol.rs"]
 mod native_sol;
 #[path = "root.rs"]
