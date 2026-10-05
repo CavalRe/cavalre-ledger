@@ -5,16 +5,26 @@ artifacts before running tests. Runtime tests load those artifacts into LiteSVM;
 they do not substitute native Rust handlers. This is local runtime validation,
 not a deployed-cluster test or a security audit.
 
-There are 120 test functions: 36 core tests, 24 Solana library tests and
-60 runtime tests. View suites also run with mutations excluded;
+There are 122 test functions: 37 core tests, 24 Solana library tests and
+61 runtime tests. View suites also run with mutations excluded;
 those repeat executions are not additional test functions.
 One core test replays all 162 saved Solidity posting
 cases, including expected rejections and every node's resulting gross balances.
+The unchanged 138-step Solidity custody fixture is replayed through both the
+independent core host and actual Ledger sBPF with classic SPL and Token-2022.
+Each step checks both users' claim and wallet balances, Source, root gross
+balances, custody backing and token conservation. All 13 expected failures
+reject with the expected host/native error; failure and donation cases preserve
+Ledger records, and runtime rejection permits only the transaction fee to change.
+Receipts preserve implicit-leaf status. These are two replay test functions,
+not 138 extra tests per execution path.
 
 ## Exercised requirements
 
 The added cases are in [acceptance.rs](../tests/runtime/acceptance.rs). The
 original runtime scenarios are in [ledger.rs](../tests/runtime/ledger.rs).
+The custody replay is in [custody.rs](../tests/runtime/custody.rs), with the
+independent-host replay in [host.rs](../crates/cavalre-ledger-core/tests/host.rs).
 
 | Area | Runtime evidence |
 | --- | --- |
@@ -195,8 +205,9 @@ apply monetary admission policy to removal.
 ## Still outside this evidence
 
 - This does not port every original Solidity test or establish complete spec
-  conformance. Randomized operation sequences and broader adversarial review
-  remain useful additional coverage.
+  conformance. The custody fixture includes its original 128 seeded steps after
+  ten prescribed cases; broader sequence generation and adversarial review
+  remain additional validation beyond these pinned observations.
 - Core balance/account query semantics and the independent read boundary are
   implemented, including native/token symbol and decimals queries. Custom metadata
   formats and a complete Solana root-discovery client remain; see READS.md. Event semantics and compatibility decisions are
@@ -217,7 +228,23 @@ apply monetary admission policy to removal.
 - Unsupported Token-2022 extensions, cross-custodian transfers, off-chain
   intents, authority recovery and EVM execution remain outside the implemented scope.
 
-The product specification still needs reconciliation with concrete Solana
-interfaces, including accounting-only root ownership and distinct-payer signer
-accounts. Passing this suite does not mark those open documentation and release
-items complete.
+## Specification alignment
+
+The [standalone specification](https://caval.re/blog/ledger-specifications)
+describes the implemented Solana interfaces and separates deferred operations
+from release work. Its previously open policy sections are resolved as follows:
+
+| Policy | Implemented contract and evidence |
+| --- | --- |
+| Accounting-only ownership | Signed root authority plus application-chosen identifier; shared host and runtime issuance/authority tests |
+| Funding permission | Branch signer and token-owner signer; generic SPL delegation is insufficient; separate-payer and application-CPI tests |
+| Asset admission | Permissionless classic SPL and an explicit Token-2022 extension allowlist; authenticated issuer metadata; registration and subsequent-settlement tests |
+| Native SOL | Raw lamports, canonical System-owned vault, rent-excluded backing, unsigned withdrawal recipient; native SOL runtime suite |
+| Parent policy and lifecycle | Fixed immediate-child admission while registered, compatible funded-leaf registration, idempotence and empty removal; core/runtime lifecycle tests |
+| Reads, events and write access | Independent validated views, stored-value defaults, original event walk and changed-record writes; view/event/minimal-permission suites |
+
+The custody replay and specification update change tests and documentation only.
+Compared with `597e108`, the Ledger and test-consumer sBPF artifacts are
+byte-identical (401,160 and 130,064 bytes respectively), and the complete
+2,205-transaction execution profile is unchanged. No runtime resource increase
+or new fixture mismatch was observed. Release work listed above remains separate.

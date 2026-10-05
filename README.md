@@ -62,16 +62,20 @@ and runs core and runtime tests. Agave is pinned to **4.3.0** and platform-tools
 to **v1.57**. Stack-limit diagnostics fail the build.
 
 The posting regression replays all **162** saved Solidity hierarchy cases and
-checks every resulting balance and rejection. Runtime tests exercise internal
+checks every resulting balance and rejection. All **138** saved Solidity custody
+steps are replayed through the reusable core and actual sBPF execution with both
+classic SPL and Token-2022, including all 13 expected failures and donations.
+Runtime tests also exercise internal
 issuance, implicit receipts, parent admission, account lifecycle, token custody,
 application isolation, PDA authority, and transaction rollback. This is not the
 full original Solidity test suite or a security audit.
 
-The suite contains **120 test functions**: **36 core tests**, **24 Solana library
-tests**, and **60 sBPF runtime tests**. The read suites
+The suite contains **122 test functions**: **37 core tests**, **24 Solana library
+tests**, and **61 sBPF runtime tests**. The read suites
 also run with mutation modules excluded; these repeat runs are not extra tests.
-One core test replays the 162 saved posting cases; those are not 162 separate
-test functions. See [acceptance coverage](docs/ACCEPTANCE.md) for the exercised
+Fixture steps run inside replay tests; they are not separate test functions.
+See the [standalone specification](https://caval.re/blog/ledger-specifications)
+and [acceptance coverage](docs/ACCEPTANCE.md) for the implemented scope, exercised
 requirements and remaining validation work.
 
 Ledger imposes no resource-based depth cap. Applications are responsible for

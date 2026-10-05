@@ -6,6 +6,13 @@ Use that implementation to determine accounting behavior. The separately pinned
 reference fixture generator remains unchanged and is comparison material, not
 proof of complete parity with this baseline.
 
+The Rust tests replay the immutable 162-step hierarchy fixture and 138-step
+custody fixture. Custody is checked in the reusable core and through actual
+Solana sBPF with both classic SPL and Token-2022. The latter adapts ERC20 token
+movement to native token accounts while preserving every saved success/failure,
+wallet, vault and claim-balance observation. The reference files and generators
+are unchanged; this is coverage of those fixtures, not the entire Solidity suite.
+
 | Solidity module | Rust module | Status |
 | --- | --- | --- |
 | `LedgerLib.sol` | `cavalre-ledger-core/src/ledger_lib.rs` | Identity, effective flags, custody lookup and posting walk implemented |

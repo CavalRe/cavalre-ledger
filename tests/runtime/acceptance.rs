@@ -7,6 +7,8 @@ use solana_instruction_error::InstructionError;
 use solana_transaction_error::TransactionError;
 #[path = "children.rs"]
 mod children;
+#[path = "custody.rs"]
+mod custody;
 #[path = "events.rs"]
 mod events;
 #[path = "execution_limits.rs"]

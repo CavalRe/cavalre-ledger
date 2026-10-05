@@ -280,6 +280,156 @@ fn every_command_requires_a_host_authenticated_actor() {
 }
 
 #[test]
+fn replays_all_original_solidity_custody_steps_through_the_shared_service() {
+    let fixture: serde_json::Value =
+        serde_json::from_str(include_str!("../../../spec/fixtures/custody.json")).unwrap();
+    assert_eq!(fixture["schema_version"], 1);
+    assert_eq!(
+        fixture["contracts_commit"],
+        "34d159ff4e88fdfdee16738d9a1228f0bf407212"
+    );
+    let initial = u128::from(fixture["initial_tokens_per_user"].as_u64().unwrap());
+    let steps = fixture["steps"].as_array().unwrap();
+    assert_eq!(steps.len(), 138);
+    let users = [APP, USER];
+    let mut wallets = [initial; 2];
+    let mut host = MemoryHost::new(false);
+    execute(
+        &mut host,
+        Command::Initialize {
+            name: "Custody fixture".into(),
+            symbol: "FIX".into(),
+            decimals: 6,
+        },
+    )
+    .unwrap();
+    let mut failures = 0;
+    for (index, step) in steps.iter().enumerate() {
+        let user = step["user"].as_u64().unwrap() as usize;
+        let kind = step["kind"].as_u64().unwrap();
+        let amount = u128::from(step["amount"].as_u64().unwrap());
+        host.actor = Some(users[user]);
+        host.payer = Some(users[user]);
+        host.tokens.owner = users[user];
+        host.tokens.wallet = wallets[user];
+        let accounts_before = host.accounts.clone();
+        let events_before = host.events.clone();
+        let tokens_before = host.tokens;
+        let result = match kind {
+            0 | 1 => execute(
+                &mut host,
+                Command::MoveTokens {
+                    child: child(ROOT, users[user]),
+                    amount,
+                    deposit: kind == 0,
+                },
+            ),
+            // An unsolicited native token transfer bypasses Ledger entirely.
+            2 => host
+                .tokens
+                .wallet
+                .checked_sub(amount)
+                .ok_or(Failure::Native)
+                .map(|remaining| {
+                    host.tokens.wallet = remaining;
+                    host.tokens.vault += amount;
+                }),
+            _ => panic!("unknown custody fixture kind {kind}"),
+        };
+        assert_eq!(
+            result.is_ok(),
+            step["success"].as_bool().unwrap(),
+            "step {index}: {result:?}"
+        );
+        if let Err(error) = result {
+            failures += 1;
+            assert_eq!(
+                error,
+                if kind == 0 {
+                    Failure::Native
+                } else {
+                    Failure::Rule(Error::Accounting)
+                },
+                "step {index}"
+            );
+            assert_eq!(
+                (
+                    host.tokens.asset,
+                    host.tokens.owner,
+                    host.tokens.wallet,
+                    host.tokens.vault
+                ),
+                (
+                    tokens_before.asset,
+                    tokens_before.owner,
+                    tokens_before.wallet,
+                    tokens_before.vault
+                ),
+                "step {index}: failed settlement"
+            );
+        }
+        if !step["success"].as_bool().unwrap() || kind == 2 {
+            assert_eq!(
+                host.accounts, accounts_before,
+                "step {index}: changed Ledger state"
+            );
+            assert_eq!(
+                host.events, events_before,
+                "step {index}: committed Ledger events"
+            );
+        }
+        wallets[user] = host.tokens.wallet;
+        for (i, relative) in users.iter().enumerate() {
+            let account = host.accounts.get(&address(ROOT, *relative));
+            let balance = account.map_or(Balances::default(), |a| a.balances);
+            assert_eq!(
+                balance.debit,
+                u128::from(step["positions"][i].as_u64().unwrap()),
+                "step {index}, position {i}"
+            );
+            assert_eq!(balance.credit, 0, "step {index}, position {i}");
+            assert!(
+                !account.is_some_and(|a| a.registered),
+                "receipt must remain implicit"
+            );
+            assert_eq!(
+                wallets[i],
+                u128::from(step["wallets"][i].as_u64().unwrap()),
+                "step {index}, wallet {i}"
+            );
+        }
+        let claims = u128::from(step["total_claims"].as_u64().unwrap());
+        assert_eq!(
+            host.balance(ROOT),
+            Balances {
+                debit: claims,
+                credit: claims
+            },
+            "step {index}, root"
+        );
+        assert_eq!(
+            host.balance(address(ROOT, SOURCE)),
+            Balances {
+                debit: 0,
+                credit: claims
+            },
+            "step {index}, Source"
+        );
+        assert_eq!(
+            host.tokens.vault,
+            u128::from(step["vault"].as_u64().unwrap()),
+            "step {index}, vault"
+        );
+        assert!(host.tokens.vault >= claims);
+        assert_eq!(
+            host.tokens.vault + wallets.iter().sum::<u128>(),
+            initial * 2
+        );
+    }
+    assert_eq!(failures, 13);
+}
+
+#[test]
 fn core_uses_application_identity_and_distinct_payer_consent() {
     let mut host = MemoryHost::new(false);
     let parent = host.initialize(true);
