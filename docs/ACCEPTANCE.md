@@ -7,7 +7,7 @@ not a deployed-cluster test or a security audit.
 
 There are 86 test functions: 30 core tests (including 13 independent host
 tests and ten view tests), six Solana address/effective-flag tests, twelve Solana
-view/metadata/registry tests and 38 runtime tests. View suites also run with mutations excluded;
+view/metadata/Root tests and 38 runtime tests. View suites also run with mutations excluded;
 those repeat executions are not additional test functions.
 One core test replays all 162 saved Solidity posting
 cases, including expected rejections and every node's resulting gross balances.
@@ -19,7 +19,7 @@ original runtime scenarios are in [ledger.rs](../tests/runtime/ledger.rs).
 
 | Area | Runtime evidence |
 | --- | --- |
-| Global Root | Internal, classic SPL, Token-2022 and native SOL ledgers share the canonical parent and insertion-ordered registry. Failed first/later initialization, duplicate creation, stale index, fake Root, readonly entry and count overflow reject atomically. Posting leaves Root unchanged and requires no registry accounts. |
+| Global Root | Internal, classic SPL, Token-2022 and native SOL ledgers are discovered through ordinary Root child queries. Failed first/later initialization, duplicate creation, fake/readonly Root and child-count overflow reject atomically. Requests prepared before another creation remain valid without an insertion index. Posting leaves Root unchanged and does not need it as an input. |
 | Application authentication | An application PDA creates its branch through CPI; another program cannot sign for it; its administrator wallet cannot substitute for it when withdrawing. |
 | Distinct token payer | The application PDA and a separate token owner authorize funding together. Missing payer signatures and a generic SPL delegation do not authorize the deposit. Withdrawal needs no recipient signature. |
 | Tree authority | Another branch cannot be created, captured, mutated or removed by an unrelated authority. Applications cannot create external-token credits or mutate reserved Source metadata. |
@@ -59,10 +59,11 @@ nonsigner accounts and verifies that neither bytes nor lamports change. A runtim
 test also reads actual persisted records after a withdrawal is rejected for
 insufficient total backing.
 
-Registry view tests authenticate Root and entry owners, addresses and layouts,
-reject duplicate inputs and missing in-range entries, and preserve page bounds
-without requiring unrelated ledger records. The independent host verifies that
-registry append and ledger/Source creation roll back together.
+Root view tests use the shared record decoder and verify that discovery returns
+exactly the same results as Root child queries. They reject forged Root state,
+duplicate input, invalid children and incomplete snapshots, and preserve page
+bounds. The independent host verifies that Root's child count and ledger/Source
+creation roll back together.
 
 Metadata tests cover native SOL, undefined internal metadata, zero decimals,
 canonical Metaplex sources, Token-2022 pointer precedence, malformed/spoofed

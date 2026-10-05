@@ -3,7 +3,7 @@ use cavalre_ledger_core::{
     ledger_lib::{
         Account, AccountKind, AddressDerivation, Balances, Error, Flags, ReadStore, TokenKind,
     },
-    ledger_view::{self as view, ChildIndex, LedgerIndex},
+    ledger_view::{self as view, ChildIndex},
 };
 use std::collections::BTreeMap;
 use std::{
@@ -57,7 +57,6 @@ fn addr(parent: u64, relative: u64) -> u64 {
 #[derive(Clone)]
 struct Snapshot {
     records: BTreeMap<u64, Option<Account<u64>>>,
-    roots: Vec<u64>,
 }
 impl AddressDerivation<u64> for Snapshot {
     fn to_address(&self, parent: &u64, relative: &u64) -> u64 {
@@ -79,30 +78,10 @@ impl ChildIndex<u64> for Snapshot {
             .iter()
             .filter_map(|(k, a)| {
                 a.as_ref()
-                    .filter(|a| a.registered && a.flags.depth > 2 && a.flags.parent == *parent)
+                    .filter(|a| a.registered && a.flags.depth > 1 && a.flags.parent == *parent)
                     .map(|_| *k)
             })
             .collect())
-    }
-}
-impl LedgerIndex<u64> for Snapshot {
-    fn registered_ledger_count(&self) -> Result<u64, Error> {
-        for (index, address) in self.roots.iter().enumerate() {
-            if self.roots[..index].contains(address) {
-                return Err(Error::InvalidIndex);
-            }
-            let account = self.account(address)?.ok_or(Error::InvalidIndex)?;
-            if !account.registered || account.flags.depth != 2 {
-                return Err(Error::InvalidIndex);
-            }
-        }
-        Ok(self.roots.len() as u64)
-    }
-    fn registered_ledger(&self, index: u64) -> Result<u64, Error> {
-        self.roots
-            .get(index as usize)
-            .copied()
-            .ok_or(Error::InvalidIndex)
     }
 }
 fn record(
@@ -156,9 +135,11 @@ fn snapshot() -> Snapshot {
     root.children = 2;
     let mut group = record(ROOT, APP, AccountKind::DebitGroup, 3, app, 150, true);
     group.children = 1;
+    let mut global = record(0, 0, AccountKind::DebitGroup, 1, 0, 0, true);
+    global.children = 1;
     Snapshot {
-        roots: vec![ROOT],
         records: BTreeMap::from([
+            (0, Some(global)),
             (ROOT, Some(root)),
             (
                 source,
@@ -348,15 +329,27 @@ fn children_exclude_implicit_leaves_and_reject_incomplete_snapshots() {
     );
 }
 #[test]
-fn ledger_enumeration_validates_roots_duplicates_and_page_bounds() {
+fn ledger_discovery_is_root_child_enumeration_with_the_same_page_bounds() {
     let mut state = snapshot();
-    assert_eq!(view::ledger_count(&state).unwrap(), 1);
-    assert_eq!(view::ledger_at(&state, 0).unwrap(), ROOT);
-    assert_eq!(view::ledger_at(&state, 1), Err(Error::InvalidIndex));
-    assert_eq!(view::ledgers(&state, 0, u64::MAX).unwrap(), vec![ROOT]);
-    assert!(view::ledgers(&state, u64::MAX, 1).unwrap().is_empty());
-    state.roots.push(ROOT);
-    assert_eq!(view::ledger_count(&state), Err(Error::InvalidIndex));
+    assert_eq!(
+        view::ledger_count(&state, &0),
+        view::sub_account_count(&state, &0, &0)
+    );
+    assert_eq!(
+        view::ledger_at(&state, &0, 0),
+        view::sub_account(&state, &0, &0, 0)
+    );
+    assert_eq!(view::ledger_at(&state, &0, 0), Ok(ROOT));
+    assert_eq!(view::ledger_at(&state, &0, 1), Err(Error::InvalidIndex));
+    assert_eq!(
+        view::ledgers(&state, &0, 0, usize::MAX),
+        view::sub_accounts(&state, &0, &0, 0, usize::MAX)
+    );
+    assert!(view::ledgers(&state, &0, usize::MAX, 1).unwrap().is_empty());
+    assert!(view::ledgers(&state, &0, 0, 0).unwrap().is_empty());
+    state.records.remove(&ROOT);
+    assert_eq!(view::ledger_count(&state, &0), Ok(1));
+    assert_eq!(view::ledgers(&state, &0, 0, 1), Err(Error::IncompleteIndex));
 }
 #[test]
 fn queries_validate_root_parent_and_registered_leaf_eligibility_as_parent() {
@@ -424,24 +417,42 @@ fn metadata_queries_validate_roots_and_preserve_undefined_zero_and_errors() {
 }
 
 #[test]
-fn global_registry_pages_require_only_the_requested_entries() {
-    struct Page;
-    impl LedgerIndex<u64> for Page {
-        fn registered_ledger_count(&self) -> Result<u64, Error> {
-            Ok(1000)
-        }
-        fn registered_ledger(&self, index: u64) -> Result<u64, Error> {
-            match index {
-                998 => Ok(42),
-                999 => Ok(43),
-                _ => Err(Error::IncompleteIndex),
-            }
+fn root_children_reject_duplicate_and_invalid_child_indexes() {
+    struct Index {
+        state: Snapshot,
+        children: Vec<u64>,
+    }
+    impl AddressDerivation<u64> for Index {
+        fn to_address(&self, parent: &u64, relative: &u64) -> u64 {
+            self.state.to_address(parent, relative)
         }
     }
-    assert_eq!(view::ledger_count(&Page), Ok(1000));
-    assert_eq!(view::ledgers(&Page, 998, u64::MAX), Ok(vec![42, 43]));
-    assert_eq!(view::ledger_at(&Page, 0), Err(Error::IncompleteIndex));
-    assert_eq!(view::ledger_at(&Page, 1000), Err(Error::InvalidIndex));
-    assert_eq!(view::ledgers(&Page, u64::MAX, u64::MAX), Ok(vec![]));
-    assert_eq!(view::ledgers(&Page, 0, 0), Ok(vec![]));
+    impl ReadStore<u64> for Index {
+        fn account(&self, address: &u64) -> Result<Option<Account<u64, &str>>, Error> {
+            self.state.account(address)
+        }
+    }
+    impl ChildIndex<u64> for Index {
+        fn child_addresses(&self, _: &u64) -> Result<Vec<u64>, Error> {
+            Ok(self.children.clone())
+        }
+    }
+    let mut index = Index {
+        state: snapshot(),
+        children: vec![ROOT, ROOT],
+    };
+    assert_eq!(view::ledgers(&index, &0, 0, 2), Err(Error::InvalidIndex));
+    index.children = vec![addr(ROOT, APP)];
+    assert_eq!(view::ledgers(&index, &0, 0, 1), Err(Error::InvalidIndex));
+    index.children = vec![ROOT];
+    index
+        .state
+        .records
+        .get_mut(&ROOT)
+        .unwrap()
+        .as_mut()
+        .unwrap()
+        .flags
+        .account_kind = AccountKind::CreditGroup;
+    assert_eq!(view::ledger_at(&index, &0, 0), Err(Error::InvalidIndex));
 }

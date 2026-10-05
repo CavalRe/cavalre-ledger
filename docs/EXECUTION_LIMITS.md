@@ -62,24 +62,24 @@ external paths diverge immediately below the shared application group.
 
 | Leaf depth | Maximum compute units | Maximum transaction bytes | Maximum account keys | Maximum writable keys |
 | --- | ---: | ---: | ---: | ---: |
-| 4 | 120020 | 793 | 15 | 7 |
-| 5 | 101806 | 826 | 16 | 8 |
-| 6 | 119175 | 859 | 17 | 10 |
-| 7 | 148815 | 892 | 18 | 12 |
-| 8 | 161356 | 925 | 19 | 14 |
-| 9 | 169411 | 967 | 20 | 16 |
-| 10 | 196491 | 1033 | 22 | 18 |
-| 11 | 201258 | 1099 | 24 | 20 |
-| 12 | 210715 | 1165 | 26 | 22 |
-| 13 | 224312 | 1231 | 28 | 24 |
+| 4 | 120052 | 793 | 15 | 7 |
+| 5 | 101841 | 826 | 16 | 8 |
+| 6 | 119204 | 859 | 17 | 10 |
+| 7 | 148855 | 892 | 18 | 12 |
+| 8 | 161409 | 925 | 19 | 14 |
+| 9 | 169463 | 967 | 20 | 16 |
+| 10 | 196549 | 1033 | 22 | 18 |
+| 11 | 201322 | 1099 | 24 | 20 |
+| 12 | 210785 | 1165 | 26 | 22 |
+| 13 | 224401 | 1231 | 28 | 24 |
 
 Each column is its own maximum across that depth's measured operations. Compute
 need not increase monotonically because PDA bump searches vary with addresses.
 These are sampled measurements, not universal worst-case CU promises. The
 measurements include the current structural and debit/credit events emitted
 through Anchor logs and validation of the global Root parent; see [event delivery](EVENTS.md).
-Ledger registration is setup outside this profile. Only registration writes the
-global Root and a new registry entry; measured postings need neither account.
+Ledger creation is setup outside this profile. Only creation writes the global
+Root child count; measured postings do not need Root as an account input.
 
 The tests submit signed **legacy transactions**, including both compute-limit
 and compute-price instructions. They enforce the 1232-byte packet limit before
@@ -91,17 +91,17 @@ as test setup; all Ledger tree state is created through actual instructions.
 
 | Operation at depth 13 | Maximum compute units | Maximum bytes | New storage funding (SOL) |
 | --- | ---: | ---: | ---: |
-| Create group | 103796 | 858 | 0.0044544 |
-| Create registered leaf | 98814 | 890 | 0.0044544 |
-| First deposit / Source issuance | 164637 | 1090 | 0.0044544 |
-| Repeated deposit / Source issuance | 158188 | 1090 | 0 |
-| First transfer to implicit leaf | 215731 | 1231 | 0.0044544 |
-| Repeated transfer | 209185 | 1231 | 0 |
-| Transfer between registered leaves | 209279 | 1231 | 0 |
-| Withdraw / retire to Source | 156059 | 994 | 0 |
-| First issuance from deep credit leaf | 224312 | 1168 | 0.0044544 |
-| Issuance from registered deep credit leaf | 217897 | 1168 | 0 |
-| Retirement to deep credit leaf | 217982 | 1168 | 0 |
+| Create group | 103820 | 858 | 0.0044544 |
+| Create registered leaf | 98837 | 890 | 0.0044544 |
+| First deposit / Source issuance | 164696 | 1090 | 0.0044544 |
+| Repeated deposit / Source issuance | 158238 | 1090 | 0 |
+| First transfer to implicit leaf | 215814 | 1231 | 0.0044544 |
+| Repeated transfer | 209259 | 1231 | 0 |
+| Transfer between registered leaves | 209353 | 1231 | 0 |
+| Withdraw / retire to Source | 156109 | 994 | 0 |
+| First issuance from deep credit leaf | 224401 | 1168 | 0.0044544 |
+| Issuance from registered deep credit leaf | 217977 | 1168 | 0 |
+| Retirement to deep credit leaf | 218062 | 1168 | 0 |
 
 The complete generated report includes registration and removal measurements.
 The suite verifies final leaf, Source, root and custody balances. A separate

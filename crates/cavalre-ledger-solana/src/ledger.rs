@@ -1,10 +1,7 @@
 //! Solana host for the shared Ledger service. Owns runtime authentication,
 //! account encoding/allocation, token calls and transaction rollback integration.
 pub use crate::ledger_lib::{decode, root_address, LedgerError, Record, SOURCE};
-use crate::ledger_lib::{
-    global_root_address, ledger_index_address, to_address, GlobalRoot, LedgerEntry, INDEX_MAGIC,
-    INDEX_SPACE, MAGIC, NATIVE_SOL, ROOT_MAGIC, ROOT_NAME, ROOT_SPACE, SPACE,
-};
+use crate::ledger_lib::{global_root_address, to_address, MAGIC, NATIVE_SOL, ROOT_NAME, SPACE};
 use anchor_lang::{prelude::*, system_program};
 use anchor_spl::token_interface::{
     self as token, Mint, TokenAccount, TokenInterface, TransferChecked,
@@ -35,12 +32,9 @@ pub struct RegisterLedger<'info> {
     #[account(mut)]
     pub root: UncheckedAccount<'info>,
     pub system_program: Program<'info, System>,
-    /// CHECK: canonical global Root, decoded or initialized by the host.
+    /// CHECK: canonical Root account, decoded or initialized with its first child.
     #[account(mut)]
     pub global_root: UncheckedAccount<'info>,
-    /// CHECK: next insertion index PDA, authenticated against global Root count.
-    #[account(mut)]
-    pub ledger_index: UncheckedAccount<'info>,
     // Remaining: writable Source PDA.
 }
 #[derive(Accounts)]
@@ -57,12 +51,9 @@ pub struct RegisterToken<'info> {
     pub vault: InterfaceAccount<'info, TokenAccount>,
     pub token_program: Interface<'info, TokenInterface>,
     pub system_program: Program<'info, System>,
-    /// CHECK: canonical global Root, decoded or initialized by the host.
+    /// CHECK: canonical Root account, decoded or initialized with its first child.
     #[account(mut)]
     pub global_root: UncheckedAccount<'info>,
-    /// CHECK: next insertion index PDA, authenticated against global Root count.
-    #[account(mut)]
-    pub ledger_index: UncheckedAccount<'info>,
 }
 #[derive(Accounts)]
 pub struct MoveTokens<'info> {
@@ -97,12 +88,9 @@ pub struct RegisterSol<'info> {
         constraint=vault.data_is_empty() @ LedgerError::InvalidAccount)]
     pub vault: SystemAccount<'info>,
     pub system_program: Program<'info, System>,
-    /// CHECK: canonical global Root, decoded or initialized by the host.
+    /// CHECK: canonical Root account, decoded or initialized with its first child.
     #[account(mut)]
     pub global_root: UncheckedAccount<'info>,
-    /// CHECK: next insertion index PDA, authenticated against global Root count.
-    #[account(mut)]
-    pub ledger_index: UncheckedAccount<'info>,
 }
 
 #[derive(Accounts)]
@@ -253,7 +241,6 @@ fn allocate<'info>(
     account: &AccountInfo<'info>,
     system: &AccountInfo<'info>,
     seeds: &[&[u8]],
-    space: usize,
 ) -> Result<()> {
     require!(
         account.is_writable && account.data_is_empty(),
@@ -265,7 +252,7 @@ fn allocate<'info>(
         LedgerError::InvalidAccount
     );
     let required = Rent::get()?
-        .minimum_balance(space)
+        .minimum_balance(SPACE)
         .saturating_sub(account.lamports());
     if required > 0 {
         system_program::transfer(
@@ -288,7 +275,7 @@ fn allocate<'info>(
             },
             signer,
         ),
-        space as u64,
+        SPACE as u64,
     )?;
     system_program::assign(
         CpiContext::new_with_signer(
@@ -309,7 +296,7 @@ struct SolanaHost<'a, 'info> {
     payer: AccountInfo<'info>,
     authority: AccountInfo<'info>,
     system: AccountInfo<'info>,
-    registration: Option<(AccountInfo<'info>, AccountInfo<'info>)>,
+    global_root_info: Option<AccountInfo<'info>>,
     settlement: Option<Settlement<'a, 'info>>,
     root: service::Root<Pubkey>,
     state: State,
@@ -363,7 +350,7 @@ impl<'a, 'info> SolanaHost<'a, 'info> {
             );
             (
                 State {
-                    records: Vec::with_capacity(rest.len() + 1),
+                    records: Vec::with_capacity(rest.len() + 2),
                 },
                 scope,
                 identifier,
@@ -390,7 +377,7 @@ impl<'a, 'info> SolanaHost<'a, 'info> {
             payer,
             authority,
             system,
-            registration: None,
+            global_root_info: None,
             settlement: None,
             root,
             state,
@@ -409,61 +396,33 @@ impl<'a, 'info> SolanaHost<'a, 'info> {
             None,
         )
     }
-    fn append_registry(&mut self) -> Result<()> {
-        let (global, entry) = self
-            .registration
-            .as_ref()
-            .ok_or(error!(LedgerError::MissingAccount))?;
-        let (address, bump) = global_root_address();
-        require_keys_eq!(*global.key, address, LedgerError::InvalidAccount);
-        require_keys_eq!(self.root.parent, address, LedgerError::InvalidAccount);
-        require!(
-            global.is_writable && entry.is_writable,
-            LedgerError::InvalidAccount
-        );
-        let mut registry = if global.data_is_empty() {
-            allocate(
-                &self.payer,
-                global,
-                &self.system,
-                &[ROOT_NAME.as_bytes(), &[bump]],
-                ROOT_SPACE,
-            )?;
-            GlobalRoot { ledger_count: 0 }
+    fn with_global_root(mut self, global: AccountInfo<'info>) -> Result<Self> {
+        require_keys_eq!(*global.key, self.root.parent, LedgerError::InvalidAccount);
+        require!(global.is_writable, LedgerError::InvalidAccount);
+        if !global.data_is_empty() {
+            let record = decode(&global)?;
+            require!(record.depth == 1, LedgerError::InvalidAccount);
+            self.state.records.push(StoredAccount {
+                key: *global.key,
+                record,
+                changed: false,
+                new: false,
+            });
         } else {
-            GlobalRoot::decode(global.key, global.owner, &global.try_borrow_data()?)?
-        };
-        let index = registry.ledger_count;
-        registry.ledger_count = index
-            .checked_add(1)
-            .ok_or(error!(LedgerError::Accounting))?;
-        let (address, bump) = ledger_index_address(index);
-        require_keys_eq!(*entry.key, address, LedgerError::InvalidAccount);
-        allocate(
-            &self.payer,
-            entry,
-            &self.system,
-            &[b"ledger-index", &index.to_le_bytes(), &[bump]],
-            INDEX_SPACE,
-        )?;
-        let mut data = entry.try_borrow_mut_data()?;
-        data[..8].copy_from_slice(INDEX_MAGIC);
-        LedgerEntry {
-            index,
-            ledger: self.root.address,
+            require_keys_eq!(
+                *global.owner,
+                system_program::ID,
+                LedgerError::InvalidAccount
+            );
         }
-        .serialize(&mut &mut data[8..])
-        .map_err(|_| error!(LedgerError::InvalidAccount))?;
-        let mut data = global.try_borrow_mut_data()?;
-        data[..8].copy_from_slice(ROOT_MAGIC);
-        registry
-            .serialize(&mut &mut data[8..])
-            .map_err(|_| error!(LedgerError::InvalidAccount))?;
-        Ok(())
+        self.global_root_info = Some(global);
+        Ok(self)
     }
-    fn with_registry(mut self, root: AccountInfo<'info>, entry: AccountInfo<'info>) -> Self {
-        self.registration = Some((root, entry));
-        self
+    fn account_info(&self, key: &Pubkey) -> Result<&AccountInfo<'info>> {
+        if let Some(global) = self.global_root_info.as_ref().filter(|a| a.key == key) {
+            return Ok(global);
+        }
+        info(&self.root_info, self.rest, key)
     }
     fn run(mut self, command: service::Command<Pubkey>) -> Result<()> {
         service::execute(&mut self, command).map_err(|error| error.0)
@@ -494,9 +453,6 @@ impl service::Host<Pubkey> for SolanaHost<'_, '_> {
         }
         Ok(*account.key)
     }
-    fn register_ledger(&mut self) -> std::result::Result<(), HostError> {
-        self.append_registry().map_err(Into::into)
-    }
     fn put(
         &mut self,
         key: Pubkey,
@@ -513,7 +469,10 @@ impl service::Host<Pubkey> for SolanaHost<'_, '_> {
         } else {
             Pubkey::default()
         };
-        let (expected, bump) = if is_root {
+        let is_global = key == self.root.parent;
+        let (expected, bump) = if is_global {
+            global_root_address()
+        } else if is_root {
             root_address(&scope, &identifier)
         } else {
             to_address(&crate::ID, &account.flags.parent, &account.relative)
@@ -522,7 +481,7 @@ impl service::Host<Pubkey> for SolanaHost<'_, '_> {
             return Err(core::Error::InvalidAccount.into());
         }
         let r = Record {
-            root: self.root.address,
+            root: if is_global { key } else { self.root.address },
             parent: account.flags.parent,
             relative: account.relative,
             custodian: account.custodian,
@@ -696,9 +655,11 @@ impl service::Host<Pubkey> for SolanaHost<'_, '_> {
         for entry in &self.state.records {
             let (key, record) = (&entry.key, &entry.record);
             if entry.new {
-                let target = info(&self.root_info, self.rest, key)?;
+                let target = self.account_info(key)?;
                 let bump = [record.bump];
-                let seeds: &[&[u8]] = if *key == self.root.address {
+                let seeds: &[&[u8]] = if record.depth == 1 {
+                    &[ROOT_NAME.as_bytes(), &bump]
+                } else if *key == self.root.address {
                     &[
                         b"ledger",
                         record.scope.as_ref(),
@@ -713,13 +674,13 @@ impl service::Host<Pubkey> for SolanaHost<'_, '_> {
                         &bump,
                     ]
                 };
-                allocate(&self.payer, target, &self.system, seeds, SPACE)?;
+                allocate(&self.payer, target, &self.system, seeds)?;
             }
         }
         for entry in &self.state.records {
             if entry.changed {
                 let r = &entry.record;
-                save(info(&self.root_info, self.rest, &entry.key)?, r)?;
+                save(self.account_info(&entry.key)?, r)?;
             }
         }
         Ok(())
@@ -828,10 +789,7 @@ pub fn add_ledger<'info>(
         ctx.accounts.system_program.to_account_info(),
         Some((ctx.accounts.authority.key(), id)),
     )?
-    .with_registry(
-        ctx.accounts.global_root.to_account_info(),
-        ctx.accounts.ledger_index.to_account_info(),
-    )
+    .with_global_root(ctx.accounts.global_root.to_account_info())?
     .run(service::Command::Initialize { name })
 }
 pub fn add_external_token<'info>(
@@ -848,10 +806,7 @@ pub fn add_external_token<'info>(
         ctx.accounts.system_program.to_account_info(),
         Some((Pubkey::default(), ctx.accounts.mint.key())),
     )?
-    .with_registry(
-        ctx.accounts.global_root.to_account_info(),
-        ctx.accounts.ledger_index.to_account_info(),
-    )
+    .with_global_root(ctx.accounts.global_root.to_account_info())?
     .run(service::Command::Initialize { name })
 }
 pub fn add_native_sol<'info>(ctx: Context<'info, RegisterSol<'info>>) -> Result<()> {
@@ -877,10 +832,7 @@ pub fn add_native_sol<'info>(ctx: Context<'info, RegisterSol<'info>>) -> Result<
         ctx.accounts.system_program.to_account_info(),
         Some((Pubkey::default(), NATIVE_SOL)),
     )?
-    .with_registry(
-        ctx.accounts.global_root.to_account_info(),
-        ctx.accounts.ledger_index.to_account_info(),
-    )
+    .with_global_root(ctx.accounts.global_root.to_account_info())?
     .run(service::Command::Initialize { name: "SOL".into() })
 }
 pub fn add_account<'info>(
@@ -1053,8 +1005,9 @@ impl core::ReadStore<Pubkey> for SolanaHost<'_, '_> {
         if let Some(record) = self.state.optional(key) {
             return Ok(Some(record.borrowed()));
         }
-        let account =
-            info(&self.root_info, self.rest, key).map_err(|_| core::Error::MissingAccount)?;
+        let account = self
+            .account_info(key)
+            .map_err(|_| core::Error::MissingAccount)?;
         if *account.owner == system_program::ID && account.data_is_empty() {
             Ok(None)
         } else {

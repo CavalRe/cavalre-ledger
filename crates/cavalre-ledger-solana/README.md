@@ -65,37 +65,33 @@ conflicting metadata and registration over incompatible balances are rejected.
 Removal requires zero gross balances and no registered children. Removal clears
 registration, retaining storage; rent reclamation is not implemented.
 
-## Global Root and registration
+## Global Root
 
-One global `Root` is the parent of every token and accounting ledger. This
-restores the original Solidity `ROOT_ADDRESS` and its ledger child index.
-Token ledgers remain debit groups at depth 2; each has its own credit Source.
-Root indexes them without summing balances in different units.
+One global `Root` is the parent of every token and accounting ledger. It is a
+registered debit group at depth 1 using the existing 512-byte `Record`, including
+its ordinary `children` count. `global_root_address()` derives it from `["Root"]`.
+Root's parent, relative identity and custodian point to itself. Token ledgers
+remain debit groups at depth 2, each with its own credit Source; posting stops
+there and Root's balances stay zero.
 
-| Account | PDA seeds | Stored data |
-| --- | --- | --- |
-| Global Root | `["Root"]` | `CVROOT01` header and `u64` ledger count; 16 bytes |
-| Ledger index entry | `["ledger-index", index.to_le_bytes()]` | `CVIDX001` header, `u64` index and ledger address; 48 bytes |
-
-`global_root_address()` and `ledger_index_address(index)` expose these addresses.
-The first successful ledger registration initializes Root automatically. This
-is permissionless and grants no global authority to the initializer. Each
-creation appends exactly one immutable entry in registration order. Root, the
-entry, the ledger, Source and any vault initialization commit together; failure
-rolls everything back. Existing-ledger registration rejects without appending.
+The first successful ledger creation initializes Root automatically. The payer
+receives no global authority. Creating a ledger sets its parent to Root and
+increments Root's child count through the same core storage operations used
+for other groups. Root, ledger, Source and any vault initialization commit
+together. Failed or duplicate creation changes none of them.
 
 `add_ledger` uses `RegisterLedger`; `RegisterToken` and `RegisterSol` also include
-writable `global_root` and `ledger_index` accounts. Supply the entry for Root's
-current count (zero before initialization), plus the writable Source PDA as a
-remaining account. If another registration commits first, rebuild with the new
-count and retry. Registrations serialize on Root, but normal account mutations,
-transfers and settlement do not read or write Root or its index entries.
+a writable `global_root` account. Supply the writable Source PDA as a remaining
+account. There is no index-entry account or client-supplied insertion index.
+Creations serialize on Root and use its current count at execution. Ordinary
+account mutations, transfers and settlement do not read or write Root.
 
-The payer funds Root once and one small entry per new ledger. Entries use
-separate accounts so append and page reads do not load an ever-growing array.
-There is no configured registry size cap; count arithmetic is checked. Account
-layout, owner and canonical PDA are validated. Clients must supply one consistent
-snapshot for [count, indexed lookup and pagination](../../docs/READS.md).
+Ledger discovery delegates to Root's child queries. As with other child queries,
+the reader validates a complete snapshot of immediate children against the
+parent's count, then returns children in address order. Count alone needs only
+Root. See [read semantics](../../docs/READS.md). The separate registry format from
+the preceding draft is removed; this draft uses fresh initialization and does
+not migrate deployed accounts.
 
 ## Instructions
 

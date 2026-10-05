@@ -155,7 +155,6 @@ fn initialization_and_account_lifecycle_emit_original_event_families() {
     let i = ix(
         accounts::RegisterSol {
             global_root: ledger::ledger_lib::global_root_address().0,
-            ledger_index: h.next_index(),
             payer: ap(scope),
             root: ap(root),
             vault: ap(vault),

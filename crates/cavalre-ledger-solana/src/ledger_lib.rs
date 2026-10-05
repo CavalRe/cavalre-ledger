@@ -37,60 +37,10 @@ pub fn effective_flags(
     )
 }
 
-/// Shared parent of every token and accounting ledger. It indexes ledgers;
-/// balances and Source accounts remain within their respective asset ledgers.
-pub const ROOT_NAME: &str = "Root";
-pub(crate) const ROOT_MAGIC: &[u8; 8] = b"CVROOT01";
-pub(crate) const INDEX_MAGIC: &[u8; 8] = b"CVIDX001";
-pub(crate) const ROOT_SPACE: usize = 16;
-pub(crate) const INDEX_SPACE: usize = 48;
+pub use core::ROOT_NAME;
 
 pub fn global_root_address() -> (Pubkey, u8) {
     Pubkey::find_program_address(&[ROOT_NAME.as_bytes()], &crate::ID)
-}
-pub fn ledger_index_address(index: u64) -> (Pubkey, u8) {
-    Pubkey::find_program_address(&[b"ledger-index", &index.to_le_bytes()], &crate::ID)
-}
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug, PartialEq, Eq)]
-pub struct GlobalRoot {
-    pub ledger_count: u64,
-}
-impl GlobalRoot {
-    pub fn decode(address: &Pubkey, owner: &Pubkey, data: &[u8]) -> Result<Self> {
-        require_keys_eq!(*owner, crate::ID, LedgerError::InvalidAccount);
-        require_keys_eq!(
-            *address,
-            global_root_address().0,
-            LedgerError::InvalidAccount
-        );
-        require!(
-            data.len() == ROOT_SPACE && &data[..8] == ROOT_MAGIC,
-            LedgerError::InvalidAccount
-        );
-        Self::deserialize(&mut &data[8..]).map_err(|_| error!(LedgerError::InvalidAccount))
-    }
-}
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug, PartialEq, Eq)]
-pub struct LedgerEntry {
-    pub index: u64,
-    pub ledger: Pubkey,
-}
-impl LedgerEntry {
-    pub fn decode(address: &Pubkey, owner: &Pubkey, data: &[u8]) -> Result<Self> {
-        require_keys_eq!(*owner, crate::ID, LedgerError::InvalidAccount);
-        require!(
-            data.len() == INDEX_SPACE && &data[..8] == INDEX_MAGIC,
-            LedgerError::InvalidAccount
-        );
-        let entry =
-            Self::deserialize(&mut &data[8..]).map_err(|_| error!(LedgerError::InvalidAccount))?;
-        require_keys_eq!(
-            *address,
-            ledger_index_address(entry.index).0,
-            LedgerError::InvalidAccount
-        );
-        Ok(entry)
-    }
 }
 
 pub const SOURCE: Pubkey = Pubkey::new_from_array([83; 32]);
@@ -179,10 +129,29 @@ pub fn decode_data(address: &Pubkey, owner: &Pubkey, data: &[u8]) -> Result<Reco
     let r =
         Record::deserialize(&mut &data[8..]).map_err(|_| error!(LedgerError::InvalidAccount))?;
     require!(
-        r.kind <= 3 && r.depth >= 2 && r.name.len() <= 64,
+        r.kind <= 3 && r.depth >= 1 && r.name.len() <= 64,
         LedgerError::InvalidAccount
     );
-    let key = if r.depth == 2 {
+    let key = if r.depth == 1 {
+        let key = global_root_address().0;
+        require!(
+            r.root == key
+                && r.parent == key
+                && r.relative == key
+                && r.custodian == key
+                && r.kind == 0
+                && r.token_kind == 0
+                && r.registered
+                && !r.implicit_allowed
+                && r.debit == 0
+                && r.credit == 0
+                && r.name == ROOT_NAME
+                && r.scope == Pubkey::default()
+                && r.identifier == Pubkey::default(),
+            LedgerError::InvalidAccount
+        );
+        key
+    } else if r.depth == 2 {
         require_keys_eq!(
             r.parent,
             global_root_address().0,

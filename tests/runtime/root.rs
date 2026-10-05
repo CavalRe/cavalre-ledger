@@ -1,13 +1,9 @@
-//! Global Root and registry exercised through the actual Ledger sBPF program.
+//! Root children exercised through the actual Ledger sBPF program.
 use super::*;
-use ledger::ledger_lib::{global_root_address, ledger_index_address, GlobalRoot};
+use ledger::ledger_lib::global_root_address;
 use ledger::ledger_view::Reader;
-fn count(h: &Harness) -> u64 {
-    let key = global_root_address().0;
-    let a = h.svm.get_account(&sa(key)).unwrap();
-    GlobalRoot::decode(&key, &ap(a.owner), &a.data)
-        .unwrap()
-        .ledger_count
+fn count(h: &Harness) -> u32 {
+    h.record(sa(global_root_address().0)).children
 }
 fn add_internal(h: &Harness, id: Address, source: bool) -> Instruction {
     let root = sa(ledger::ledger_lib::root_address(&ap(h.key(0)), &ap(id)).0);
@@ -25,7 +21,7 @@ fn add_internal(h: &Harness, id: Address, source: bool) -> Instruction {
     )
 }
 #[test]
-fn all_ledger_kinds_share_root_registry_in_creation_order() {
+fn all_ledger_kinds_are_discovered_as_root_children() {
     let mut h = Harness::new();
     let (internal, _) = h.internal();
     let classic = External::new(&mut h, 60, 0);
@@ -46,13 +42,13 @@ fn all_ledger_kinds_share_root_registry_in_creation_order() {
             vault: ap(vault),
             system_program: ap(SYSTEM),
             global_root: global_root_address().0,
-            ledger_index: h.next_index(),
         },
         instruction::AddNativeSol {},
         &[child(native, sa(SOURCE))],
     );
     succeeds(&mut h, &[0], i);
-    let expected = vec![internal, classic.root, token2022.root, native];
+    let mut expected = vec![internal, classic.root, token2022.root, native];
+    expected.sort();
     let global = sa(global_root_address().0);
     assert_eq!(count(&h), 4);
     let before = h.svm.get_account(&global).unwrap();
@@ -60,18 +56,29 @@ fn all_ledger_kinds_share_root_registry_in_creation_order() {
     reader
         .insert(ap(global), &ap(before.owner), &before.data)
         .unwrap();
-    for (index, address) in expected.iter().enumerate() {
+    for address in &expected {
         let r = h.record(*address);
         assert_eq!(r.parent, ap(global));
         assert_eq!(r.custodian, ap(global));
         assert_eq!(r.depth, 2);
-        let key = ledger_index_address(index as u64).0;
-        let a = h.svm.get_account(&sa(key)).unwrap();
-        reader.insert(key, &ap(a.owner), &a.data).unwrap();
+        let a = h.svm.get_account(address).unwrap();
+        reader.insert(ap(*address), &ap(a.owner), &a.data).unwrap();
     }
     assert_eq!(
-        reader.ledgers(0, u64::MAX).unwrap(),
+        reader.ledgers(0, usize::MAX).unwrap(),
         expected.into_iter().map(ap).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        reader.ledger_count(),
+        reader.sub_account_count(&ap(global), &ap(global))
+    );
+    assert_eq!(
+        reader.ledgers(0, usize::MAX),
+        reader.sub_accounts(&ap(global), &ap(global), 0, usize::MAX)
+    );
+    assert_eq!(
+        reader.ledger_at(0),
+        reader.sub_account(&ap(global), &ap(global), 0)
     );
     // Posting stays within one asset. Global Root isn't an instruction account.
     let to = child(internal, h.key(1));
@@ -93,22 +100,17 @@ fn all_ledger_kinds_share_root_registry_in_creation_order() {
     assert_eq!(h.record(internal).credit, 20);
 }
 #[test]
-fn failed_initialization_and_stale_registry_slots_roll_back_every_account() {
+fn root_child_creation_is_atomic_and_needs_no_client_index() {
     let mut h = Harness::new();
     let id = h.key(2);
-    let i = add_internal(&h, id, false); // Source missing: registry writes precede commit.
+    let i = add_internal(&h, id, false); // Source missing: allocation fails at commit.
     rejects(&mut h, &[0], i, LedgerError::MissingAccount as u32 + 6000);
     assert!(h.svm.get_account(&sa(global_root_address().0)).is_none());
-    assert!(h.svm.get_account(&sa(ledger_index_address(0).0)).is_none());
     let stale = add_internal(&h, Address::new_from_array([98; 32]), true);
     h.internal();
-    rejects(
-        &mut h,
-        &[0],
-        stale,
-        LedgerError::InvalidAccount as u32 + 6000,
-    );
-    assert_eq!(count(&h), 1);
+    // Prepared before another creation, still valid: no stale index to retry.
+    succeeds(&mut h, &[0], stale);
+    assert_eq!(count(&h), 2);
     let duplicate = add_internal(&h, id, true);
     rejects(
         &mut h,
@@ -116,9 +118,6 @@ fn failed_initialization_and_stale_registry_slots_roll_back_every_account() {
         duplicate,
         LedgerError::InvalidAccount as u32 + 6000,
     );
-    let fresh = add_internal(&h, Address::new_from_array([98; 32]), true);
-    succeeds(&mut h, &[0], fresh);
-    assert_eq!(count(&h), 2);
     let failed = add_internal(&h, Address::new_from_array([99; 32]), false);
     rejects(
         &mut h,
@@ -127,10 +126,9 @@ fn failed_initialization_and_stale_registry_slots_roll_back_every_account() {
         LedgerError::MissingAccount as u32 + 6000,
     );
     assert_eq!(count(&h), 2);
-    assert!(h.svm.get_account(&sa(ledger_index_address(2).0)).is_none());
 }
 #[test]
-fn registration_rejects_fake_root_readonly_index_and_count_overflow() {
+fn creation_rejects_fake_root_readonly_root_and_child_count_overflow() {
     let mut h = Harness::new();
     let id = h.key(2);
     let mut fake = add_internal(&h, id, true);
@@ -142,14 +140,16 @@ fn registration_rejects_fake_root_readonly_index_and_count_overflow() {
         LedgerError::InvalidAccount as u32 + 6000,
     );
     let mut readonly = add_internal(&h, id, true);
-    readonly.accounts[5].is_writable = false;
+    readonly.accounts[4].is_writable = false;
     rejects(&mut h, &[0], readonly, u32::from(ErrorCode::ConstraintMut));
     h.internal();
     // Corrupt a fixture to exercise the checked numeric boundary, not a policy cap.
     let key = sa(global_root_address().0);
     let mut a = h.svm.get_account(&key).unwrap();
-    a.data[8..16].copy_from_slice(&u64::MAX.to_le_bytes());
+    let mut record = h.record(key);
+    record.children = u32::MAX;
+    anchor_lang::AnchorSerialize::serialize(&record, &mut &mut a.data[8..]).unwrap();
     h.svm.set_account(key, a).unwrap();
     let i = add_internal(&h, Address::new_from_array([99; 32]), true);
-    rejects(&mut h, &[0], i, LedgerError::Accounting as u32 + 6000);
+    rejects(&mut h, &[0], i, LedgerError::InvalidAccount as u32 + 6000);
 }

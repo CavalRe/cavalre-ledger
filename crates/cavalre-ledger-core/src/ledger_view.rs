@@ -172,14 +172,6 @@ pub fn ledger<A: Copy + Eq>(store: &impl ReadStore<A>, absolute: &A) -> Result<O
 pub trait ChildIndex<A: Copy + Eq>: ReadStore<A> {
     fn child_addresses(&self, parent: &A) -> Result<Vec<A>, Error>;
 }
-/// Authenticated global Root registry from one snapshot. Count is authoritative;
-/// entries are unique, append-only and ordered by registration. A host may load
-/// only the requested entries; missing in-range input is an error, not absence.
-/// No ledger balance records are needed to enumerate this index.
-pub trait LedgerIndex<A: Copy + Eq> {
-    fn registered_ledger_count(&self) -> Result<u64, Error>;
-    fn registered_ledger(&self, index: u64) -> Result<A, Error>;
-}
 fn unique<A: Copy + Eq>(addresses: &[A]) -> Result<(), Error> {
     for (i, address) in addresses.iter().enumerate() {
         if addresses[..i].contains(address) {
@@ -188,12 +180,38 @@ fn unique<A: Copy + Eq>(addresses: &[A]) -> Result<(), Error> {
     }
     Ok(())
 }
+fn enumeration_parent<'a, A: Copy + Eq>(
+    store: &'a impl ReadStore<A>,
+    ledger: &A,
+    parent_address: &A,
+) -> Result<Account<A, &'a str>, Error> {
+    if ledger == parent_address {
+        let account = store
+            .account(parent_address)?
+            .ok_or(Error::InvalidAccountGroup)?;
+        if account.flags.depth == 1 {
+            if !account.registered || account.flags.account_kind != lib::AccountKind::DebitGroup {
+                return Err(Error::InvalidAccountGroup);
+            }
+            return Ok(account);
+        }
+    }
+    parent(store, ledger, parent_address)
+}
+/// Stored count of registered immediate children; no child records are required.
+pub fn sub_account_count<A: Copy + Eq>(
+    store: &impl ReadStore<A>,
+    ledger: &A,
+    parent: &A,
+) -> Result<u32, Error> {
+    Ok(enumeration_parent(store, ledger, parent)?.children)
+}
 fn children<A: Copy + Eq>(
     store: &impl ChildIndex<A>,
     ledger: &A,
     parent_address: &A,
 ) -> Result<Vec<A>, Error> {
-    let parent = parent(store, ledger, parent_address)?;
+    let parent = enumeration_parent(store, ledger, parent_address)?;
     let addresses = store.child_addresses(parent_address)?;
     unique(&addresses)?;
     if addresses.len() != parent.children as usize {
@@ -204,16 +222,29 @@ fn children<A: Copy + Eq>(
         let a = store.account(&address)?.ok_or(Error::InvalidIndex)?;
         if !a.registered
             || a.flags.parent != *parent_address
-            || store.to_address(parent_address, &a.relative) != address
+            || parent.flags.depth.checked_add(1) != Some(a.flags.depth)
         {
             return Err(Error::InvalidIndex);
         }
-        relative.push(a.relative);
+        if parent.flags.depth == 1 {
+            // Ledger identities are asset/authority roots, already authenticated
+            // by ReadStore. As in Solidity, Root's children are ledger addresses.
+            if a.flags.account_kind != lib::AccountKind::DebitGroup {
+                return Err(Error::InvalidIndex);
+            }
+            relative.push(address);
+        } else {
+            if store.to_address(parent_address, &a.relative) != address {
+                return Err(Error::InvalidIndex);
+            }
+            relative.push(a.relative);
+        }
     }
     Ok(relative)
 }
 /// Like Solidity subAccounts, return relative identifiers, excluding implicit
-/// and removed leaves. A caller can derive each absolute address from its parent.
+/// and removed leaves. Root children are ledger addresses; other children are
+/// relative identifiers from which a caller can derive their absolute addresses.
 pub fn sub_accounts<A: Copy + Eq>(
     store: &impl ChildIndex<A>,
     ledger: &A,
@@ -238,26 +269,22 @@ pub fn sub_account<A: Copy + Eq>(
         .copied()
         .ok_or(Error::InvalidIndex)
 }
-pub fn ledger_count<A: Copy + Eq>(store: &impl LedgerIndex<A>) -> Result<u64, Error> {
-    store.registered_ledger_count()
+/// Ledger discovery is Root's ordinary child enumeration.
+pub fn ledger_count<A: Copy + Eq>(store: &impl ReadStore<A>, root: &A) -> Result<u32, Error> {
+    sub_account_count(store, root, root)
 }
-pub fn ledger_at<A: Copy + Eq>(store: &impl LedgerIndex<A>, index: u64) -> Result<A, Error> {
-    if index >= store.registered_ledger_count()? {
-        return Err(Error::InvalidIndex);
-    }
-    store.registered_ledger(index)
+pub fn ledger_at<A: Copy + Eq>(
+    store: &impl ChildIndex<A>,
+    root: &A,
+    index: usize,
+) -> Result<A, Error> {
+    sub_account(store, root, root, index)
 }
 pub fn ledgers<A: Copy + Eq>(
-    store: &impl LedgerIndex<A>,
-    start: u64,
-    limit: u64,
+    store: &impl ChildIndex<A>,
+    root: &A,
+    start: usize,
+    limit: usize,
 ) -> Result<Vec<A>, Error> {
-    let count = store.registered_ledger_count()?;
-    let length = count.saturating_sub(start).min(limit);
-    // Grow with authenticated results, never preallocate from an untrusted limit.
-    let mut addresses = Vec::new();
-    for offset in 0..length {
-        addresses.push(store.registered_ledger(start + offset)?);
-    }
-    Ok(addresses)
+    sub_accounts(store, root, root, start, limit)
 }

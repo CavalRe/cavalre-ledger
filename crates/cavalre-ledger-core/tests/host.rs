@@ -34,7 +34,6 @@ struct MemoryHost {
     root: Root<u64>,
     accounts: BTreeMap<u64, Account<u64>>,
     events: Vec<Event<u64>>,
-    registry: Vec<u64>,
     tokens: TokenBalances<u64>,
     // Trusted execution context. These are verified runtime identities, not
     // command arguments or a suggested implementation of cryptography.
@@ -58,7 +57,6 @@ impl MemoryHost {
             },
             accounts: BTreeMap::new(),
             events: Vec::new(),
-            registry: Vec::new(),
             tokens: TokenBalances {
                 asset: 99,
                 owner: PAYER,
@@ -115,6 +113,10 @@ impl Host<u64> for MemoryHost {
     }
     fn authenticate(&self, role: Role, command: &Command<u64>) -> Result<u64, Failure> {
         assert!(self.active, "authentication must be inside the transaction");
+        // This host binds its service to global Root address zero.
+        if self.root.parent != 0 {
+            return Err(Error::InvalidAccount.into());
+        }
         let identity = match role {
             Role::Authority => self.actor,
             Role::TokenPayer => {
@@ -129,14 +131,6 @@ impl Host<u64> for MemoryHost {
             }
         };
         identity.ok_or(Failure::Rule(Error::Unauthorized))
-    }
-    fn register_ledger(&mut self) -> Result<(), Failure> {
-        assert!(self.active);
-        if self.root.parent != 0 || self.registry.contains(&self.root.address) {
-            return Err(Error::InvalidIndex.into());
-        }
-        self.registry.push(self.root.address);
-        Ok(())
     }
     fn put(&mut self, absolute: u64, account: Account<u64>) -> Result<(), Failure> {
         assert!(self.active);
@@ -202,14 +196,12 @@ impl Host<u64> for MemoryHost {
         let accounts = self.accounts.clone();
         let tokens = self.tokens;
         let events = self.events.len();
-        let registry = self.registry.len();
         self.active = true;
         let result = operation(self);
         if result.is_err() {
             self.accounts = accounts;
             self.tokens = tokens;
             self.events.truncate(events);
-            self.registry.truncate(registry);
         }
         self.active = false;
         result
@@ -839,31 +831,38 @@ fn opposite_polarity_events_follow_leaf_columns_through_the_same_group() {
 }
 
 #[test]
-fn global_registry_is_atomic_with_ledger_and_source_creation() {
+fn root_child_count_is_atomic_with_ledger_and_source_creation() {
     let mut host = MemoryHost::new(true);
     let initialize = || Command::Initialize {
         name: "Units".into(),
     };
     host.fail_commit = true;
     assert_eq!(execute(&mut host, initialize()), Err(Failure::Commit));
-    assert!(host.registry.is_empty());
     assert!(host.accounts.is_empty());
     assert!(host.events.is_empty());
     host.fail_commit = false;
     execute(&mut host, initialize()).unwrap();
-    assert_eq!(host.registry, vec![ROOT]);
+    assert_eq!(host.accounts[&0].children, 1);
     assert_eq!(host.accounts[&ROOT].flags.parent, 0);
     assert!(host.accounts[&address(ROOT, SOURCE)].registered);
     assert!(execute(&mut host, initialize()).is_err());
-    assert_eq!(host.registry, vec![ROOT]);
+    assert_eq!(host.accounts[&0].children, 1);
     host.root.address = 2;
     host.root.parent = 99;
     assert_eq!(
         execute(&mut host, initialize()),
-        Err(Error::InvalidIndex.into())
+        Err(Error::InvalidAccount.into())
     );
     assert!(!host.accounts.contains_key(&2));
     host.root.parent = 0;
     execute(&mut host, initialize()).unwrap();
-    assert_eq!(host.registry, vec![ROOT, 2]);
+    assert_eq!(host.accounts[&0].children, 2);
+    assert_eq!(host.accounts[&0].balances, Balances::default());
+    assert_eq!(
+        host.accounts
+            .values()
+            .filter(|a| a.flags.depth == 2 && a.flags.parent == 0)
+            .count(),
+        2
+    );
 }

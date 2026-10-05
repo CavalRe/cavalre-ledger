@@ -55,8 +55,7 @@ The `Host<A>` interface is defined by the core. A host supplies an address type
 
 | Method | Host responsibility |
 | --- | --- |
-| `root` | Authenticate the selected root, asset/identifier, reserved Source identity and accounting-only owner. |
-| `register_ledger` | Verify the selected ledger's parent is global Root and atomically append its unique address to the insertion-ordered registry. |
+| `root` | Bind the selected ledger, its global Root parent, asset/identifier, reserved Source identity and accounting-only owner. |
 | `authenticate(role, command)` | Establish the acting authority or token payer from the current execution context. Verify signatures or consume the runtime's verified result. |
 | `to_address` | Derive a child identity from its absolute parent and relative identifier in this service's domain. |
 | `account`, `put` | Borrow authenticated logical state; create or replace metadata without imposing a serialization or database format. |
@@ -95,13 +94,17 @@ The same change buffer records credit/debit posting directions and gross columns
 for event emission, including zero amounts. No second event buffer or ancestor
 walk is needed. See [event semantics](../../docs/EVENTS.md).
 
-Host implementors must implement borrowed `account` reads, field updates and
-`register_ledger` inside the same atomic boundary. Registry failure must undo
-ledger and Source creation; later commit failure must also undo the append.
-The read-only `LedgerIndex` provides an authoritative `u64` count and indexed
-lookup without loading unrelated ledger records. This is separate from the
-selected depth-2 ledger returned by `Host::root`. Solana registration account
-changes are documented in the adapter README.
+Host implementors provide borrowed `account` reads and field updates inside the
+same atomic boundary. Ledger creation initializes global Root if absent and
+increments its ordinary child count through `put` and `set_children`. There is
+no separate registry hook or state. Hosts must authenticate the global Root
+identity supplied by `root().parent`; storage absence must be confirmed.
+
+`ledger_count`, `ledger_at` and `ledgers` delegate to Root's shared child queries.
+`ChildIndex` enumerates registered immediate children from the same snapshot;
+the shared query checks membership, uniqueness and the stored child count.
+At global Root it returns ledger addresses; beneath ledgers it returns relative
+identifiers. Solana read ordering and completeness are documented in READS.md.
 
 The Solana implementation uses runtime signer checks, PDA derivation, program
 accounts and SPL calls. `tests/host.rs` implements the same interface using

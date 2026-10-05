@@ -434,6 +434,9 @@ pub fn transfer_debits<A: Copy + Eq>(
     transfer(store, addresses, ledger_address, from, to, amount)
 }
 
+/// Distinguished parent of all token and accounting ledgers.
+pub const ROOT_NAME: &str = "Root";
+
 /// State reads shared by queries and mutations. None means confirmed absence;
 /// omitted or unavailable state must return an error. Implementations validate
 /// owner, identity and ledger membership and read a consistent state snapshot.

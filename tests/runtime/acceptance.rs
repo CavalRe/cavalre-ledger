@@ -11,8 +11,8 @@ mod events;
 mod execution_limits;
 #[path = "native_sol.rs"]
 mod native_sol;
-#[path = "registry.rs"]
-mod registry;
+#[path = "root.rs"]
+mod root;
 #[path = "token2022.rs"]
 mod token2022;
 
@@ -154,7 +154,6 @@ impl External {
         ix(
             accounts::RegisterToken {
                 global_root: ledger::ledger_lib::global_root_address().0,
-                ledger_index: h.next_index(),
                 payer: ap(h.key(0)),
                 root: ap(self.root),
                 mint: ap(self.mint),
