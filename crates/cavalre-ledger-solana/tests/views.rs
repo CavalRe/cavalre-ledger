@@ -276,15 +276,84 @@ fn readers_reject_wrong_owners_addresses_headers_duplicates_and_root_context() {
     reader.insert(record.key, &ID, &record.data).unwrap();
     assert!(reader.insert(record.key, &ID, &record.data).is_err());
     assert!(reader.insert_missing(record.key).is_err());
-    let reader = fixture.reader();
-    assert_eq!(
-        reader.total_supply(&fixture.app),
-        Err(CoreError::InvalidAccount)
-    );
     let mut partial = Reader::new();
-    let leaf = fixture.records.last().unwrap();
+    let leaf = fixture
+        .records
+        .iter()
+        .find(|r| r.key == fixture.leaf)
+        .unwrap();
     partial.insert(leaf.key, &ID, &leaf.data).unwrap();
     assert_eq!(partial.name(&fixture.leaf), Err(CoreError::MissingAccount));
+    assert_eq!(
+        partial.total_supply(&fixture.leaf),
+        Err(CoreError::MissingAccount)
+    );
+    assert_eq!(
+        partial.symbol(&fixture.leaf),
+        Err(CoreError::MissingAccount)
+    );
+    assert_eq!(
+        partial.decimals(&fixture.leaf),
+        Err(CoreError::MissingAccount)
+    );
+    // Removing getter-level root restrictions must not suppress host validation.
+    for registered in [false, true] {
+        let mut bad = Record::deserialize(&mut &record.data[8..]).unwrap();
+        bad.registered = registered;
+        bad.sub_index = u32::from(registered);
+        bad.kind = 1; // A token ledger must be a registered debit group.
+        let bad = stored(record.key, bad);
+        let mut reader = Reader::new();
+        reader.insert(bad.key, &bad.owner, &bad.data).unwrap();
+        assert_eq!(
+            reader.total_supply(&bad.key),
+            Err(CoreError::InvalidAccount)
+        );
+        assert_eq!(reader.symbol(&bad.key), Err(CoreError::InvalidAccount));
+        assert_eq!(reader.decimals(&bad.key), Err(CoreError::InvalidAccount));
+        assert_eq!(reader.known_ledgers(), Err(CoreError::InvalidAccount));
+    }
+}
+
+#[test]
+fn stored_getters_preserve_values_and_distinguish_missing_input_from_absence() {
+    let fixture = Fixture::new();
+    let mut reader = fixture.reader();
+    // These fixture records store the same labels, but differ in kind and
+    // registration. The queried address need not itself be a ledger root.
+    for address in [fixture.root, fixture.app, fixture.leaf] {
+        assert_eq!(reader.total_supply(&address), Ok(50));
+        assert_eq!(reader.symbol(&address), Ok(Some("UNIT".into())));
+        assert_eq!(reader.decimals(&address), Ok(Some(6)));
+    }
+    let absent = to_address(&ID, &fixture.app, &Pubkey::new_from_array([23; 32])).0;
+    assert_eq!(reader.total_supply(&absent), Err(CoreError::MissingAccount));
+    assert_eq!(reader.symbol(&absent), Err(CoreError::MissingAccount));
+    assert_eq!(reader.decimals(&absent), Err(CoreError::MissingAccount));
+    reader.insert_missing(absent).unwrap();
+    assert_eq!(reader.total_supply(&absent), Ok(0));
+    assert_eq!(reader.symbol(&absent), Ok(Some(String::new())));
+    assert_eq!(reader.decimals(&absent), Ok(Some(0)));
+
+    // The same defaults apply to a confirmed absent runtime account, without
+    // requiring a token root, signatures, write access or storage allocation.
+    let mut lamports = 0;
+    let mut data = [];
+    let owner = anchor_lang::system_program::ID;
+    let info = AccountInfo::new(
+        &absent,
+        false,
+        false,
+        &mut lamports,
+        &mut data,
+        &owner,
+        false,
+    );
+    let reader = Reader::from_account_infos(&[info]).unwrap();
+    assert_eq!(reader.total_supply(&absent), Ok(0));
+    assert_eq!(reader.symbol(&absent), Ok(Some(String::new())));
+    assert_eq!(reader.decimals(&absent), Ok(Some(0)));
+    assert_eq!(lamports, 0);
 }
 
 #[test]

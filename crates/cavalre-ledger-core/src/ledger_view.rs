@@ -122,18 +122,30 @@ pub fn name<A: Copy + Eq>(store: &impl ReadStore<A>, absolute: &A) -> Result<Str
         .unwrap_or_default())
 }
 
-/// Metadata stored at registration, matching the original LedgerLib snapshot.
-/// The optional return shape is retained for read-client compatibility; a valid
-/// initialized ledger always has a symbol and decimals, including internal units.
+/// Stored symbol at this address, or empty for confirmed absence, as in LedgerLib.
+/// No registration or ledger-root requirement. Storage errors still propagate.
+/// The optional return shape is retained for read-client compatibility.
 pub fn symbol<A: Copy + Eq>(
     store: &impl ReadStore<A>,
-    ledger: &A,
+    absolute: &A,
 ) -> Result<Option<String>, Error> {
-    Ok(Some(String::from(root(store, ledger)?.symbol)))
+    Ok(Some(
+        store
+            .account(absolute)?
+            .map(|account| String::from(account.symbol))
+            .unwrap_or_default(),
+    ))
 }
-/// Base-unit precision captured at registration; zero decimals is valid.
-pub fn decimals<A: Copy + Eq>(store: &impl ReadStore<A>, ledger: &A) -> Result<Option<u8>, Error> {
-    Ok(Some(root(store, ledger)?.decimals))
+/// Stored precision at this address, or zero for confirmed absence.
+pub fn decimals<A: Copy + Eq>(
+    store: &impl ReadStore<A>,
+    absolute: &A,
+) -> Result<Option<u8>, Error> {
+    Ok(Some(
+        store
+            .account(absolute)?
+            .map_or(0, |account| account.decimals),
+    ))
 }
 pub fn debit_balance_of<A: Copy + Eq>(
     store: &impl ReadStore<A>,
@@ -185,9 +197,12 @@ pub fn balance_of<A: Copy + Eq>(
         .checked_sub(negative)
         .ok_or(Error::InsufficientBalance)
 }
-/// The original LedgerView returns the root's gross debit balance, not its net.
-pub fn total_supply<A: Copy + Eq>(store: &impl ReadStore<A>, ledger: &A) -> Result<u128, Error> {
-    Ok(root(store, ledger)?.balances.debit)
+/// LedgerLib's totalSupply is a stored gross-debit read at any address.
+/// Confirmed absence returns zero; unknown or invalid storage remains an error.
+pub fn total_supply<A: Copy + Eq>(store: &impl ReadStore<A>, absolute: &A) -> Result<u128, Error> {
+    Ok(store
+        .account(absolute)?
+        .map_or(0, |account| account.balances.debit))
 }
 pub fn ledger<A: Copy + Eq>(store: &impl ReadStore<A>, absolute: &A) -> Result<Option<A>, Error> {
     lib::ledger(&StoreView(store), absolute)

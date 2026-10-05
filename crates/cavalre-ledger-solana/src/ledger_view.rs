@@ -271,11 +271,11 @@ impl Reader {
     pub fn name(&self, absolute: &Pubkey) -> std::result::Result<String, core::Error> {
         view::name(self, absolute)
     }
-    pub fn symbol(&self, ledger: &Pubkey) -> std::result::Result<Option<String>, core::Error> {
-        view::symbol(self, ledger)
+    pub fn symbol(&self, absolute: &Pubkey) -> std::result::Result<Option<String>, core::Error> {
+        view::symbol(self, absolute)
     }
-    pub fn decimals(&self, ledger: &Pubkey) -> std::result::Result<Option<u8>, core::Error> {
-        view::decimals(self, ledger)
+    pub fn decimals(&self, absolute: &Pubkey) -> std::result::Result<Option<u8>, core::Error> {
+        view::decimals(self, absolute)
     }
 
     fn contains(&self, address: &Pubkey) -> bool {
@@ -319,8 +319,8 @@ impl Reader {
     ) -> std::result::Result<u128, core::Error> {
         view::balance_of(self, ledger, parent, relative)
     }
-    pub fn total_supply(&self, ledger: &Pubkey) -> std::result::Result<u128, core::Error> {
-        view::total_supply(self, ledger)
+    pub fn total_supply(&self, absolute: &Pubkey) -> std::result::Result<u128, core::Error> {
+        view::total_supply(self, absolute)
     }
     pub fn sub_accounts(
         &self,

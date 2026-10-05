@@ -433,7 +433,8 @@ fn queries_validate_root_parent_and_registered_leaf_eligibility_as_parent() {
         view::account(&state, &ROOT, &addr(app, 20), &1),
         Err(Error::InvalidAccountGroup)
     );
-    assert_eq!(view::total_supply(&state, &app), Err(Error::InvalidAccount));
+    // Stored-value getters do not impose the account-view root restriction.
+    assert_eq!(view::total_supply(&state, &app), Ok(150));
 }
 
 #[test]
@@ -443,12 +444,9 @@ fn metadata_queries_read_stored_ledger_values_including_zero_decimals() {
     assert_eq!(view::decimals(&state, &ROOT), Ok(Some(0)));
     assert_eq!(
         view::symbol(&state, &addr(ROOT, APP)),
-        Err(Error::InvalidAccount)
+        Ok(Some(String::new()))
     );
-    assert_eq!(
-        view::decimals(&state, &addr(ROOT, APP)),
-        Err(Error::InvalidAccount)
-    );
+    assert_eq!(view::decimals(&state, &addr(ROOT, APP)), Ok(Some(0)));
     state
         .records
         .get_mut(&ROOT)
@@ -457,6 +455,41 @@ fn metadata_queries_read_stored_ledger_values_including_zero_decimals() {
         .unwrap()
         .decimals = 255;
     assert_eq!(view::decimals(&state, &ROOT), Ok(Some(255)));
+}
+
+#[test]
+fn stored_getters_read_any_account_and_default_only_confirmed_absence() {
+    let mut state = snapshot();
+    let app = addr(ROOT, APP);
+    let implicit = addr(app, 21);
+    let absent = addr(app, 22);
+    let unknown = addr(app, 23);
+    // A funded, unregistered leaf can have both columns. Supply returns gross
+    // debit, independent of registration, polarity and metadata inheritance.
+    let leaf = state.records.get_mut(&implicit).unwrap().as_mut().unwrap();
+    leaf.balances.credit = 20;
+    leaf.symbol = "LOCAL".into();
+    leaf.decimals = 9;
+    for (address, debit, symbol, decimals) in [
+        (0, 0, "", 0),
+        (ROOT, 150, "UNIT", 0),
+        (addr(ROOT, SOURCE), 0, "", 0),
+        (app, 150, "", 0),
+        (addr(app, 20), 80, "", 0),
+        (implicit, 70, "LOCAL", 9),
+        (absent, 0, "", 0),
+    ] {
+        assert_eq!(view::total_supply(&state, &address), Ok(debit));
+        assert_eq!(view::symbol(&state, &address), Ok(Some(symbol.into())));
+        assert_eq!(view::decimals(&state, &address), Ok(Some(decimals)));
+    }
+    assert_eq!(view::balance_of(&state, &ROOT, &app, &21), Ok(50));
+    assert_eq!(
+        view::total_supply(&state, &unknown),
+        Err(Error::MissingAccount)
+    );
+    assert_eq!(view::symbol(&state, &unknown), Err(Error::MissingAccount));
+    assert_eq!(view::decimals(&state, &unknown), Err(Error::MissingAccount));
 }
 
 #[test]

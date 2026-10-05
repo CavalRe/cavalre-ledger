@@ -67,7 +67,7 @@ issuance, implicit receipts, parent admission, account lifecycle, token custody,
 application isolation, PDA authority, and transaction rollback. This is not the
 full original Solidity test suite or a security audit.
 
-The suite contains **118 test functions**: **35 core tests**, **23 Solana library
+The suite contains **120 test functions**: **36 core tests**, **24 Solana library
 tests**, and **60 sBPF runtime tests**. The read suites
 also run with mutation modules excluded; these repeat runs are not extra tests.
 One core test replays the 162 saved posting cases; those are not 162 separate

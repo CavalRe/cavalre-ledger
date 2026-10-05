@@ -140,7 +140,8 @@ fn native_internal_and_external_queries_read_stored_metadata() {
     assert_eq!(reader.name(&internal), Ok("Ledger name".into()));
     assert_eq!(reader.symbol(&key(8)), Err(CoreError::MissingAccount));
     reader.insert_missing(key(8)).unwrap();
-    assert_eq!(reader.decimals(&key(8)), Err(CoreError::InvalidAccount));
+    assert_eq!(reader.symbol(&key(8)), Ok(Some(String::new())));
+    assert_eq!(reader.decimals(&key(8)), Ok(Some(0)));
 }
 
 #[test]

@@ -232,6 +232,35 @@ fn metadata_views_execute_in_a_consumer_without_calling_ledger() {
             before
         );
     }
+    // Stored metadata is readable at a non-root account and defaults at a
+    // confirmed absent account, without invoking Ledger or allocating a record.
+    let absent = child(e.root, h.key(2));
+    assert!(h.svm.get_account(&absent).is_none());
+    for target in [e.source, absent] {
+        let before = [target, e.root].map(|key| h.svm.get_account(&key));
+        let result = run(
+            &mut h,
+            &[0],
+            Instruction {
+                program_id: consumer,
+                accounts: vec![
+                    AccountMeta::new_readonly(target, false),
+                    AccountMeta::new_readonly(e.root, false),
+                ],
+                data: b"metadata".to_vec(),
+            },
+        )
+        .unwrap();
+        let fields =
+            <(Option<String>, Option<u8>)>::deserialize(&mut &result.return_data.data[..]).unwrap();
+        assert_eq!(fields, (Some(String::new()), Some(0)));
+        assert_eq!(result.return_data.program_id, consumer);
+        assert!(!result
+            .logs
+            .iter()
+            .any(|line| line.contains(&format!("Program {} invoke", cavalre_ledger_solana::ID))));
+        assert_eq!([target, e.root].map(|key| h.svm.get_account(&key)), before);
+    }
 }
 
 // Deliberately constructed extension states exercise admission, not mint permissions.

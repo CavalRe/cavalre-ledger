@@ -50,10 +50,10 @@ account when combined with the ledger root.
 | --- | --- |
 | `account` / Solana `Reader::account_view` | Absolute/relative identities, ledger, effective flags, custody, registration, name, gross balances and parent admission status |
 | `name` | Registered name, which may be empty for a leaf; also empty for confirmed unregistered/absent accounts. Use `account_view.registered` to determine registration. |
-| `symbol`, `decimals` | Name, symbol and decimals are snapshots stored at ledger registration; no mint or metadata account is needed for these queries |
+| `symbol`, `decimals` | Stored values at the queried address; confirmed absence returns empty symbol and zero decimals. Ledger metadata remains the registration snapshot, without reading the mint. |
 | `debit_balance_of`, `credit_balance_of` | Current gross balances with ledger/parent validation |
 | `balance_of` | Debit minus credit for debit accounts; credit minus debit for credit accounts, using effective polarity |
-| `total_supply` | Root gross debits, as in the original Solidity view; not root net balance |
+| `total_supply` | Stored gross debits at the queried address, as in Solidity; confirmed absence returns zero. At a token ledger this is its total supply, not its net balance. |
 | `ledger` | Address-only lookup for registered accounts/roots; implicit leaves require their parent context |
 | `sub_account_count`, `sub_accounts`, `sub_account` | Stored child count and registered child identifiers; Root children are ledger addresses, other children are relative identifiers |
 | `sub_account_index` | One-based position in the parent's child array; zero for a confirmed unregistered account |
@@ -63,6 +63,13 @@ Unsigned negative net balances return an error, preserving Solidity subtraction
 behavior. Gross balances remain inspectable. Queries report a parent's admission
 restriction without refusing to inspect an implicit leaf. That reported admission
 status is not proof of monetary eligibility or spending permission.
+
+`total_supply`, `symbol` and `decimals` do not require the queried address to be
+a registered ledger root. They read its own stored fields, including for groups
+and allocated implicit leaves; metadata is not inherited from a parent. They do
+not prove registration or ledger kind. The existing Rust metadata return types
+are retained: defaults are `Some("")` and `Some(0)`. Unknown input and storage
+validation errors still propagate, rather than becoming defaults.
 
 ## Transfer write planning
 
@@ -142,6 +149,11 @@ flags come from its registered parent.
 For account and balance queries, supply the root, parent, custody ancestor and
 endpoint. Read one consistent snapshot; RPC provenance and commitment are the
 client's responsibility. Duplicate entries are rejected.
+
+For stored-value getters on an allocated non-root record, supply the record and
+its token ledger root so the existing reader can authenticate ledger membership.
+Parents and custody ancestors are unnecessary for these getters. A confirmed
+absent address needs no root context to return its defaults.
 
 Child enumeration uses a maintained index, matching Solidity's `subs[parent]`
 and `subIndex[child]`. Creation appends; removal moves the last child into the

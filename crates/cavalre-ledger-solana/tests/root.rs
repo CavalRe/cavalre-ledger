@@ -102,8 +102,8 @@ fn discovery_reads_only_requested_root_child_slots() {
     assert_eq!(reader.ledger_at(2), Err(Error::InvalidIndex));
     assert_eq!(reader.ledgers(usize::MAX, usize::MAX), Ok(vec![]));
     assert_eq!(reader.ledgers(0, 0), Ok(vec![]));
-    // Root is not a token ledger or monetary endpoint.
-    assert_eq!(reader.total_supply(&global), Err(Error::InvalidAccount));
+    // Stored gross debits are readable even though Root is not a token ledger.
+    assert_eq!(reader.total_supply(&global), Ok(0));
     assert_eq!(reader.ledger(&global), Ok(None));
 }
 #[test]

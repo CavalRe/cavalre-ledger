@@ -5,7 +5,7 @@ artifacts before running tests. Runtime tests load those artifacts into LiteSVM;
 they do not substitute native Rust handlers. This is local runtime validation,
 not a deployed-cluster test or a security audit.
 
-There are 118 test functions: 35 core tests, 23 Solana library tests and
+There are 120 test functions: 36 core tests, 24 Solana library tests and
 60 runtime tests. View suites also run with mutations excluded;
 those repeat executions are not additional test functions.
 One core test replays all 162 saved Solidity posting
@@ -38,6 +38,7 @@ original runtime scenarios are in [ledger.rs](../tests/runtime/ledger.rs).
 | Shared custody | Two application branches share one Source and root totals. Direct donations increase backing without claims; an empty payer cannot use existing custody surplus to fund a deposit. |
 | Withdrawal backing | A vault that covers an individual withdrawal but not all recorded claims rejects that withdrawal. |
 | Internal accounting | Authorized issuance and retirement support the full `u128` range; overflow rejects atomically and internal issuance changes no external-token claims. |
+| Stored-value reads | `total_supply`, `symbol` and `decimals` return stored fields without requiring a registered ledger root, matching the original Solidity getters. Confirmed absence returns zero/empty defaults; omitted input and invalid storage still reject. Core and Solana library cases run with mutations enabled and excluded. Runtime metadata reads cover a Source leaf and an absent PDA without invoking Ledger, writing records or allocating storage. |
 
 The new rejection helper asserts the expected error and compares every supplied
 account before and after failure. Only the actual transaction fee may be lost;
@@ -164,6 +165,14 @@ measurements for these fixtures, not a bound for every application. Reproduce
 *after* the full gate has finished to avoid overlapping Cargo builds with
 different feature sets:
 `cargo test -p cavalre-ledger-runtime-tests --test ledger custody_requires_root_writes_only --locked -- --nocapture`.
+
+Restoring stored-value getter semantics, compared with `7c516c2`, leaves all
+2,205 profiled transactions identical, including compute, account/write counts,
+packet sizes, outcomes, fees and rent. The Ledger program remains byte-for-byte
+unchanged at 401,160 bytes; the test consumer shrinks by 120 bytes to 130,064.
+These profiles measure mutation workflows. Separate read cases verify the new
+default values and retained storage validation, with mutations enabled and
+excluded; no general read-compute bound is claimed.
 
 The [Token-2022 suite](../tests/runtime/token2022.rs) executes against LiteSVM's
 bundled Token-2022 11.0.0 sBPF. Its plain/metadata mints, metadata initialization,
