@@ -179,29 +179,30 @@ metas before signing. Existing transactions with writable
 roots remain valid. A missing required root write rejects atomically at commit,
 including rollback of native token movement and new leaf allocation.
 
-For application CPI, enable this crate's `cpi` feature and use
-`ledger_cpi::{wrap, unwrap, wrap_sol, unwrap_sol}`. These helpers accept the same
-Anchor `CpiContext` and account structs as the generated wrappers. They select
-the inner root meta from the amount: writable for nonzero, read-only for zero.
-They preserve signer seeds and remaining-account privileges.
+For direct clients and application CPI, enable this crate's `cpi` feature and use
+`ledger_cpi::set_custody_root_writable(&mut instruction)`. It checks the encoded
+wrap/unwrap instruction's kind and layout, then sets only the root meta from the
+encoded amount: writable for nonzero, read-only for zero. It leaves the encoded
+data and all other metas intact, with no allocation or re-encoding. Apply it
+before signing a direct transaction or invoking Ledger:
 
 ```rust,ignore
-use anchor_lang::prelude::*;
-use cavalre_ledger_solana::ledger_cpi as cpi;
+use anchor_lang::solana_program::program::invoke_signed;
+use cavalre_ledger_solana::ledger_cpi::set_custody_root_writable;
 
-// accounts: cpi::accounts::MoveTokens; records: the required Ledger records.
-let ctx = CpiContext::new_with_signer(ledger_program_id, accounts, signer_seeds)
-    .with_remaining_accounts(records);
-cpi::wrap(ctx, parent, relative, amount)?;
+// Reuse an encoded Ledger instruction, or construct it once from arguments.
+set_custody_root_writable(&mut instruction)?;
+invoke_signed(&instruction, account_infos, signer_seeds)?;
 ```
 
 The outer transaction must still supply the required writable root, Source,
-endpoint and ancestors for nonzero settlement. Helpers cannot grant privileges
+endpoint and ancestors for nonzero settlement. Preparation cannot grant privileges
 missing from that transaction; Solana rejects such a call before entering Ledger.
 Anchor's generated `cpi::wrap`/`unwrap`/`wrap_sol`/`unwrap_sol` keep the root
-read-only, so use the `ledger_cpi` variants for custody. The
-[test consumer](../../tests/consumer/src/lib.rs) exercises the supported helpers
-with an application PDA signer.
+read-only, so prepare the instruction and invoke it directly for custody.
+The typed `ledger_cpi` wrappers have been removed to avoid their additional call
+preparation costs. The [test consumer](../../tests/consumer/src/lib.rs) forwards
+encoded instructions using the in-place helper and an application PDA signer.
 
 For zero amounts, all Ledger records can be read-only, including root, Source,
 receiver and ancestors. The full authorization, admission, backing and native

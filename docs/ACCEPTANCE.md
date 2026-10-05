@@ -5,7 +5,7 @@ artifacts before running tests. Runtime tests load those artifacts into LiteSVM;
 they do not substitute native Rust handlers. This is local runtime validation,
 not a deployed-cluster test or a security audit.
 
-There are 116 test functions: 35 core tests, 21 Solana library tests and
+There are 118 test functions: 35 core tests, 23 Solana library tests and
 60 runtime tests. View suites also run with mutations excluded;
 those repeat executions are not additional test functions.
 One core test replays all 162 saved Solidity posting
@@ -34,7 +34,7 @@ original runtime scenarios are in [ledger.rs](../tests/runtime/ledger.rs).
 | Token-2022 | Plain and metadata mints settle through direct calls and application CPI. Immutable-owner wallets work; UI-scaled tokens settle in raw units. Unsupported mint/account extensions reject, including on subsequent settlement. Mixed token programs and frozen accounts reject; late commit failure rolls back settlement and allocation. |
 | Native token identity | Wrong mints, wallets, vault PDAs, vault authorities, substituted token programs and wallet/vault aliasing reject. |
 | Settlement atomicity | Frozen token accounts reject. A late commit failure after token movement and new-leaf allocation rolls back token balances, ledger writes and rent allocation. |
-| Custody root access | Zero-amount classic SPL, Token-2022 and native SOL wrap/unwrap run with all Ledger records read-only, directly and through both raw CPI and the typed `ledger_cpi` helpers, for absent and funded endpoints. Nonzero direct/raw calls with a read-only root reject at commit and roll back settlement/allocation; helper calls reject missing outer write privileges before entering Ledger. The same calls succeed when root writes are supplied. Helpers preserve application PDA signing and remaining records; a signed but incorrect token funder still rejects. |
+| Custody root access | Zero-amount classic SPL, Token-2022 and native SOL wrap/unwrap run with all Ledger records read-only, directly and through raw CPI with and without in-place preparation, for absent and funded endpoints. Nonzero unprepared calls with a read-only root reject at commit and roll back settlement/allocation; prepared calls reject missing outer write privileges before entering Ledger. The same calls succeed when root writes are supplied. Application PDA signing and remaining records are preserved; a signed but incorrect token funder still rejects. Preparation tests check all four encoded layouts, high-bit amounts, idempotence, unchanged data/other metas and malformed-input rejection without modifications. |
 | Shared custody | Two application branches share one Source and root totals. Direct donations increase backing without claims; an empty payer cannot use existing custody surplus to fund a deposit. |
 | Withdrawal backing | A vault that covers an individual withdrawal but not all recorded claims rejects that withdrawal. |
 | Internal accounting | Authorized issuance and retirement support the full `u128` range; overflow rejects atomically and internal issuance changes no external-token claims. |
@@ -125,35 +125,44 @@ Measured classic SPL deposit/withdrawal calls cost 2 fewer CUs; other sampled
 operations are unchanged. The program artifact shrinks by 200 bytes to 401,160.
 There is a client compatibility change: generated account metas (including
 Anchor CPI wrappers) now mark the root read-only. Nonzero custody instructions
-must explicitly supply writable root metas. The `ledger_cpi` custody helpers
-select the inner root permission from the amount; applications must supply
+must explicitly supply writable root metas. The `ledger_cpi` preparation helper
+selects the inner root permission from the amount; applications must supply
 the required privileges in the outer transaction. Zero-amount tests separately exercise the newly allowed
 read-only Ledger records with native vault/wallet writes retained.
 
-Adding the typed custody CPI helpers, compared with `0b8ec4e`, preserves all
-2,205 profiled transaction outcomes, packet sizes, account/write counts, fees
-and rent. Direct and internal compute costs are unchanged. Existing raw CPI
-cases cost 6 additional CUs from the test consumer's new dispatch branch; the
-Ledger program remains 401,160 bytes. The test consumer grows from 129,608 to
-158,432 bytes (+28,824) with all four helpers and their test dispatch code.
-That is caller-program code, not additional Ledger account storage or rent.
+The typed custody wrappers added in `e01f007` have been replaced with
+`ledger_cpi::set_custody_root_writable`, which adjusts an encoded instruction in
+place without allocating or re-encoding. Compared with `e01f007`, all 2,205
+profiled transaction outcomes, packet sizes, account/write counts, fees and rent
+are unchanged. Direct and internal compute costs are unchanged. Raw CPI cases
+cost 6 additional CUs from the revised test dispatch, or 12 CUs above the
+pre-helper `0b8ec4e` consumer. This dispatch distinguishes the two test paths;
+it is not required in an application that always prepares its instruction.
+Ledger's 401,160-byte program is byte-for-byte unchanged from `e01f007`.
 
-The custody root-access tests compare the two CPI paths in the same consumer:
+The test consumer shrinks from 158,432 to 130,184 bytes (-28,248). Its growth
+above the original 129,608-byte raw-forwarding consumer is now 576 bytes (0.44%),
+compared with 28,824 bytes for the typed version. Ledger account storage and
+rent requirements are unchanged.
 
-| Asset / operation | Raw forwarding CUs | Typed helper CUs | Increase |
+The custody root-access tests compare raw forwarding and in-place preparation
+in the same consumer, using the same application PDA and nested leaf:
+
+| Asset / operation | Raw forwarding CUs | Prepared CUs | Increase |
 | --- | ---: | ---: | ---: |
-| Classic SPL deposit | 74,361 | 77,545 | 3,184 (4.3%) |
-| Classic SPL withdrawal | 68,219 | 71,405 | 3,186 (4.7%) |
-| Token-2022 deposit | 76,628 | 79,812 | 3,184 (4.2%) |
-| Token-2022 withdrawal | 70,486 | 73,672 | 3,186 (4.5%) |
-| Native SOL deposit | 85,393 | 88,262 | 2,869 (3.4%) |
-| Native SOL withdrawal | 79,261 | 82,131 | 2,870 (3.6%) |
+| Classic SPL deposit | 74,367 | 74,404 | 37 (0.050%) |
+| Classic SPL withdrawal | 68,225 | 68,262 | 37 (0.054%) |
+| Token-2022 deposit | 76,634 | 76,671 | 37 (0.048%) |
+| Token-2022 withdrawal | 70,492 | 70,529 | 37 (0.052%) |
+| Native SOL deposit | 85,399 | 85,439 | 40 (0.047%) |
+| Native SOL withdrawal | 79,267 | 79,307 | 40 (0.050%) |
 
-These are complete transaction measurements for the tested application PDA and
-nested leaf. The helper path includes argument decoding, typed context assembly
-and reserialization in the consumer; raw forwarding reuses serialized input.
-The difference is not the cost of the root-permission assignment alone, nor a
-bound for every application. Reproduce after the sBPF build with
+The previous typed path added 2,869–3,186 CUs (3.4–4.7%) over its raw path.
+The replacement forwards the same encoded payload after checking its kind and
+layout and setting the root permission. These are complete transaction
+measurements for these fixtures, not a bound for every application. Reproduce
+*after* the full gate has finished to avoid overlapping Cargo builds with
+different feature sets:
 `cargo test -p cavalre-ledger-runtime-tests --test ledger custody_requires_root_writes_only --locked -- --nocapture`.
 
 The [Token-2022 suite](../tests/runtime/token2022.rs) executes against LiteSVM's
