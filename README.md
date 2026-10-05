@@ -72,9 +72,10 @@ One core test replays the 162 saved posting cases; those are not 162 separate
 test functions. See [acceptance coverage](docs/ACCEPTANCE.md) for the exercised
 requirements and remaining validation work.
 
-The Solana adapter caps leaves at depth 13 and groups at depth 12 (root depth 2),
-based on actual sBPF resource measurements. See [execution limits](docs/EXECUTION_LIMITS.md)
-for compute, transaction sizes, storage funding and reproduction instructions.
+Ledger imposes no resource-based depth cap. Applications are responsible for
+fitting their complete transactions within runtime budgets. See
+[execution measurements](docs/EXECUTION_LIMITS.md) for compute, transaction sizes,
+storage funding and reproduction instructions.
 
 See [program usage and limitations](crates/cavalre-ledger-solana/README.md)
 before attempting deployment. The checked-in program ID is for local simulation.

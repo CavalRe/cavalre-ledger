@@ -56,11 +56,13 @@ nonsigner accounts and verifies that neither bytes nor lamports change. A runtim
 test also reads actual persisted records after a withdrawal is rejected for
 insufficient total backing.
 
-The execution suite measures 2205 transactions across supported depths, direct
+The execution suite measures 2205 transactions across sampled depths, direct
 calls, application CPI and internal debit/credit postings. It checks signed
 packet size, compute headroom, first-use rent and final accounting balances.
-Boundary rejections enforce the Solana depth cap and verify atomic rollback;
-see [execution limits](EXECUTION_LIMITS.md).
+A separate regression creates groups, converts an unregistered leaf into a
+group, and posts to implicit leaves beyond the former depth cap, through direct
+and CPI calls. Checked depth overflow and `u128` balance overflow remain covered;
+see [execution measurements](EXECUTION_LIMITS.md).
 
 The allocation regression uses maximum-length names and counts allocations on
 the calling thread: repeated flags/custody/balance reads allocate nothing, and
@@ -85,8 +87,8 @@ apply monetary admission policy to removal.
   implemented. Token/native metadata parity, a complete Solana root-discovery
   client and event compatibility remain; see READS.md. Shared account lifecycle,
   admission, authority and settlement policy live in the core.
-- Deeper trees, additional CPI layers, versioned/batched transactions and cluster
-  throughput are not established by the measured envelope. Instructions still
+- Arbitrary deeper workflows, additional CPI layers, versioned/batched transactions
+  and cluster throughput are not established by these measurements. Instructions still
   lock the root writable, serializing mutations that share a root.
 - Production identity, upgrade authority, deployment tooling and a deployed
   release rehearsal remain unfinished.

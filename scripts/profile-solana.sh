@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Rebuild real sBPF, enforce the measured envelope, and print a compact report.
+# Rebuild real sBPF, check sampled transaction budgets, and print a compact report.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 bash scripts/build-sbf.sh tests/consumer/Cargo.toml

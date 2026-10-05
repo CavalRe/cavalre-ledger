@@ -1,7 +1,7 @@
 //! Solana host for the shared Ledger service. Owns runtime authentication,
 //! account encoding/allocation, token calls and transaction rollback integration.
 pub use crate::ledger_lib::{decode, root_address, LedgerError, Record, SOURCE};
-use crate::ledger_lib::{to_address, MAGIC, MAX_ACCOUNT_DEPTH, MAX_GROUP_DEPTH, SPACE};
+use crate::ledger_lib::{to_address, MAGIC, SPACE};
 use anchor_lang::{prelude::*, system_program};
 use anchor_spl::token::{self, Mint, Token, TokenAccount, TransferChecked};
 use cavalre_ledger_core::{ledger as service, ledger_lib as core};
@@ -319,16 +319,6 @@ impl service::Host<Pubkey> for SolanaHost<'_, '_> {
         key: Pubkey,
         account: service::Account<Pubkey>,
     ) -> std::result::Result<(), HostError> {
-        // A group must leave room for a usable child. This covers registration,
-        // leaf-to-group conversion and implicit allocation through the same host.
-        let max_depth = if account.flags.account_kind.is_group() {
-            MAX_GROUP_DEPTH
-        } else {
-            MAX_ACCOUNT_DEPTH
-        };
-        if account.flags.depth > max_depth {
-            return Err(error!(LedgerError::DepthLimit).into());
-        }
         let is_root = key == self.root.address;
         let scope = if is_root {
             self.root.authority.unwrap_or_default()

@@ -1,21 +1,21 @@
-# Solana execution limits
+# Solana execution measurements
 
-The current Solana adapter permits **leaf depth 13 and group depth 12**. The root
-has depth 2: a deepest leaf is eleven parent-child edges below it. A group must
-leave one level for usable children, whether those children are registered or
-implicit. These limits apply to both external-token and accounting-only trees.
+Ledger imposes no resource-based depth cap. Applications are responsible for
+ensuring their complete transactions fit the runtime's compute, heap, account
+and transaction-size limits, including all instructions and CPI calls. A depth
+cap cannot guarantee that a composed transaction will fit its shared budget.
 
-The adapter exports `MAX_ACCOUNT_DEPTH` and `MAX_GROUP_DEPTH` in `ledger_lib`.
-Its host rejects out-of-range creation and metadata writes with `DepthLimit`, including conversion of
-an empty unregistered leaf into a group. Rejection rolls back the entire
-transaction apart from its fee. Account encoding and instruction arguments are
-unchanged. The reusable core has no new platform-specific depth cap, and read
-decoding does not apply this mutation limit.
+Depth remains a checked `u8`, with root depth 2. Overflow, malformed trees,
+unauthorized operations and invalid accounting still reject. The stored format
+and instruction arguments are unchanged. Resource exhaustion fails execution;
+Solana rolls back the failed transaction's state changes apart from fees.
+Successful account creation does not guarantee that every later operation on
+that account will fit: applications must validate their intended workflows.
 
-## Why this limit exists
+## Profiling scope
 
-With this implementation, all measured operations succeed through depth 13.
-An exploratory build admitting depth 14 reached the legacy packet-size boundary:
+The full profile samples leaf depths 4 through 13. Earlier exploration at depth
+14 reached the legacy packet-size boundary for distant-branch transfers:
 the first distant-branch transfer required 1234 bytes for internal accounting,
 1297 bytes for direct external-token calls, and 1267 bytes through the consumer.
 Those transactions were rejected by the profiler's 1232-byte wire-size check
@@ -37,15 +37,16 @@ gone; no custom allocator, larger heap request or account-layout change was need
 The allocation regression checks zero allocations for repeated field and numeric
 queries, and exactly one change-buffer allocation for a posting.
 
-Depth 13 is the tested envelope of the current legacy transaction construction,
-not a Solana protocol depth restriction. At its largest, a measured transaction
-uses 1231 of 1232 bytes. Additional instructions or accounts may require shallower
-paths or a separately tested transaction format. Increasing the cap requires
-demonstrating usable complete operations, not just successful group creation.
+The sampling range belongs only to the profiler; it is not enforced by Ledger.
+At its largest, a measured transaction uses 1231 of 1232 bytes. Additional
+instructions or accounts may require shallower paths or a separately tested
+transaction format. A separate regression succeeds at depth 14 with a shorter
+posting path, demonstrating why depth alone does not determine whether a
+transaction fits.
 
 ## Measured envelope
 
-Run on 2026-10-04 using Rust 1.98.1, Agave 4.3.0, platform-tools v1.57 and
+Run on 2026-10-05 UTC using Rust 1.98.1, Agave 4.3.0, platform-tools v1.57 and
 LiteSVM 0.16.0, with freshly built Ledger and test-consumer sBPF. The runtime
 dependencies and feature configuration are those pinned in Cargo.lock and
 LiteSVM's default setup. This is local execution evidence, not cluster throughput.
@@ -61,16 +62,16 @@ external paths diverge immediately below the shared application group.
 
 | Leaf depth | Maximum compute units | Maximum transaction bytes | Maximum account keys | Maximum writable keys |
 | --- | ---: | ---: | ---: | ---: |
-| 4 | 109731 | 793 | 15 | 7 |
-| 5 | 92408 | 826 | 16 | 8 |
-| 6 | 109227 | 859 | 17 | 10 |
-| 7 | 139490 | 892 | 18 | 12 |
-| 8 | 151913 | 925 | 19 | 14 |
-| 9 | 159970 | 967 | 20 | 16 |
-| 10 | 186992 | 1033 | 22 | 18 |
-| 11 | 191701 | 1099 | 24 | 20 |
-| 12 | 201100 | 1165 | 26 | 22 |
-| 13 | 214153 | 1231 | 28 | 24 |
+| 4 | 109736 | 793 | 15 | 7 |
+| 5 | 92413 | 826 | 16 | 8 |
+| 6 | 109248 | 859 | 17 | 10 |
+| 7 | 139511 | 892 | 18 | 12 |
+| 8 | 151950 | 925 | 19 | 14 |
+| 9 | 160007 | 967 | 20 | 16 |
+| 10 | 187037 | 1033 | 22 | 18 |
+| 11 | 191754 | 1099 | 24 | 20 |
+| 12 | 201161 | 1165 | 26 | 22 |
+| 13 | 214232 | 1231 | 28 | 24 |
 
 Each column is its own maximum across that depth's measured operations. Compute
 need not increase monotonically because PDA bump searches vary with addresses.
@@ -86,24 +87,24 @@ as test setup; all Ledger tree state is created through actual instructions.
 
 | Operation at depth 13 | Maximum compute units | Maximum bytes | New storage funding (SOL) |
 | --- | ---: | ---: | ---: |
-| Create group | 94872 | 858 | 0.0044544 |
-| Create registered leaf | 90122 | 890 | 0.0044544 |
-| First deposit / Source issuance | 154114 | 1090 | 0.0044544 |
-| Repeated deposit / Source issuance | 147668 | 1090 | 0 |
-| First transfer to implicit leaf | 205998 | 1231 | 0.0044544 |
-| Repeated transfer | 199455 | 1231 | 0 |
-| Transfer between registered leaves | 199549 | 1231 | 0 |
-| Withdraw / retire to Source | 146098 | 994 | 0 |
-| First issuance from deep credit leaf | 214153 | 1168 | 0.0044544 |
-| Issuance from registered deep credit leaf | 207741 | 1168 | 0 |
-| Retirement to deep credit leaf | 207838 | 1168 | 0 |
+| Create group | 94860 | 858 | 0.0044544 |
+| Create registered leaf | 90109 | 890 | 0.0044544 |
+| First deposit / Source issuance | 154155 | 1090 | 0.0044544 |
+| Repeated deposit / Source issuance | 147722 | 1090 | 0 |
+| First transfer to implicit leaf | 206075 | 1231 | 0.0044544 |
+| Repeated transfer | 199545 | 1231 | 0 |
+| Transfer between registered leaves | 199639 | 1231 | 0 |
+| Withdraw / retire to Source | 146150 | 994 | 0 |
+| First issuance from deep credit leaf | 214232 | 1168 | 0.0044544 |
+| Issuance from registered deep credit leaf | 207833 | 1168 | 0 |
+| Retirement to deep credit leaf | 207930 | 1168 | 0 |
 
 The complete generated report includes registration and removal measurements.
 The suite verifies final leaf, Source, root and custody balances. A separate
-boundary test rejects excessive group depth for all three invocation modes,
-including an attempt to reuse an allocated, unregistered leaf. It checks the
-specific error and rollback of every supplied account, including payer funds
-after the transaction fee.
+regression exercises all three invocation modes beyond the former cap: it
+creates groups through depth 13, registers and converts an empty leaf into a
+group at depth 14, funds an implicit leaf at depth 14, and transfers between
+sibling implicit leaves. It verifies their balances and the Source/root totals.
 
 ## Funding and client construction
 
@@ -146,12 +147,12 @@ With the pinned tools on PATH:
 bash scripts/profile-solana.sh
 ```
 
-This rebuilds both programs, runs the profile and boundary tests, prints binary
+This rebuilds both programs, runs the profile and deeper-tree tests, prints binary
 hashes and summary tables, and writes individual samples to
 `target/execution-profile.json`. The same tests run under `bash scripts/check.sh`.
-Increasing the constants requires rerunning the complete envelope, including
-opposite-polarity internal postings and first-use leaves, without weakening the
-resource or accounting assertions.
+The sampled depths and budgets are test settings, not exported program limits.
+Consumers should profile their own complete workflows, including first-use
+allocation and opposite-polarity postings where applicable.
 
 Protocol references: [legacy transaction structure](https://solana.com/docs/core/transactions/transaction-structure),
 [compute and heap budgets](https://solana.com/docs/core/fees/compute-budget), and

@@ -1,10 +1,11 @@
 //! Reproducible execution measurements using real sBPF and signed legacy packets.
 use super::*;
-use ledger::ledger_lib::{MAX_ACCOUNT_DEPTH, MAX_GROUP_DEPTH};
 use solana_compute_budget_interface::ComputeBudgetInstruction;
 
 const PACKET_BYTES: usize = 1232;
 const COMPUTE_UNITS: u32 = 300_000;
+// Sampling range for these transaction shapes, not a Ledger policy.
+const PROFILE_DEPTHS: std::ops::RangeInclusive<u8> = 4..=13;
 
 struct Profile {
     h: Harness,
@@ -466,7 +467,7 @@ impl Profile {
 fn execution_profiles() {
     let mut rows = Vec::new();
     let mut completed = true;
-    for depth in 4..=MAX_ACCOUNT_DEPTH {
+    for depth in PROFILE_DEPTHS {
         for mode in ["internal", "direct", "cpi"] {
             for seed in 0..3 {
                 let mut profile = Profile::new(mode, depth, seed);
@@ -488,7 +489,7 @@ fn execution_profiles() {
         serde_json::to_string_pretty(&rows).unwrap(),
     )
     .unwrap();
-    // Save diagnostics even on failure; increasing depth must still pass all gates.
+    // Save diagnostics even on failure so callers can inspect resource usage.
     let failures: Vec<_> = rows.iter().filter(|r| r["status"] != "ok").collect();
     assert!(failures.is_empty(), "profile failures: {failures:?}");
     assert!(completed, "profile did not execute every operation");
@@ -498,17 +499,17 @@ fn execution_profiles() {
 }
 
 #[test]
-fn depth_limit_rejects_groups_before_their_children_become_unusable() {
+fn deeper_trees_allow_creation_conversion_and_posting() {
     for mode in ["internal", "direct", "cpi"] {
-        let mut p = Profile::new(mode, MAX_ACCOUNT_DEPTH, 0);
-        let root = if mode == "internal" {
-            p.h.internal().0
-        } else {
-            External::new(&mut p.h, 100, 1).root
-        };
+        let mut p = Profile::new(mode, 14, 0);
+        let external = (mode != "internal").then(|| External::new(&mut p.h, 100, 1));
+        let (root, source) = external
+            .as_ref()
+            .map(|e| (e.root, e.source))
+            .unwrap_or_else(|| p.h.internal());
         let mut parent = root;
         let mut path = Vec::new();
-        for depth in 3..=MAX_GROUP_DEPTH {
+        for depth in 3..=13 {
             let relative = if depth == 3 {
                 p.authority
             } else {
@@ -518,21 +519,11 @@ fn depth_limit_rejects_groups_before_their_children_become_unusable() {
             parent = child(parent, relative);
             path.push(parent);
         }
+        assert_eq!(p.h.record(parent).depth, 13);
         let relative = Address::new_from_array([90; 32]);
-        assert!(!p.group(root, parent, relative, &path));
-        let expected = format!(
-            "{:?}",
-            TransactionError::InstructionError(
-                2,
-                InstructionError::Custom(LedgerError::DepthLimit.into())
-            )
-        );
-        assert_eq!(p.rows.last().unwrap()["status"], expected);
-        assert!(p.h.svm.get_account(&child(parent, relative)).is_none());
-        assert_eq!(p.h.record(parent).children, 0);
         assert!(p.register_leaf(root, parent, relative, &path));
-        // Unregistration retains storage. Converting that empty allocated leaf
-        // into a group must not bypass the same boundary.
+        assert_eq!(p.h.record(child(parent, relative)).depth, 14);
+        // An empty unregistered leaf can also become a group at this depth.
         let i = remove(&p.h, root, p.authority, parent, relative, false);
         let mut i = i;
         let existing: Vec<_> = i.accounts.iter().map(|a| a.pubkey).collect();
@@ -542,10 +533,39 @@ fn depth_limit_rejects_groups_before_their_children_become_unusable() {
                 .map(|k| AccountMeta::new(*k, false)),
         );
         assert!(p.run("remove_leaf", i, false));
-        let before = p.h.svm.get_account(&child(parent, relative));
-        assert!(!p.group(root, parent, relative, &path));
-        assert_eq!(p.rows.last().unwrap()["status"], expected);
-        assert_eq!(p.h.svm.get_account(&child(parent, relative)), before);
-        assert_eq!(p.h.record(parent).children, 0);
+        assert!(p.group(root, parent, relative, &path));
+        assert_eq!(p.h.record(child(parent, relative)).kind, 0);
+        assert_eq!(p.h.record(parent).children, 1);
+
+        let a = Address::new_from_array([91; 32]);
+        let b = Address::new_from_array([92; 32]);
+        let i = if let Some(e) = &external {
+            e.movement(&p.h, (p.authority, 1), (parent, a), 100, true, &path)
+        } else {
+            let mut funding_path = path.clone();
+            funding_path.push(source);
+            transfer(
+                &p.h,
+                root,
+                p.authority,
+                (root, sa(SOURCE)),
+                (parent, a),
+                100,
+                &funding_path,
+            )
+        };
+        assert!(p.run("deposit_first", i, external.is_some()));
+        let i = transfer(&p.h, root, p.authority, (parent, a), (parent, b), 20, &path);
+        assert!(p.run("transfer_first", i, false));
+        let from = p.h.record(child(parent, a));
+        let to = p.h.record(child(parent, b));
+        assert_eq!((from.depth, to.depth), (14, 14));
+        assert!(!from.registered && !to.registered);
+        assert_eq!((from.debit, to.debit), (80, 20));
+        assert_eq!(p.h.record(source).credit, 100);
+        assert_eq!(
+            (p.h.record(root).debit, p.h.record(root).credit),
+            (100, 100)
+        );
     }
 }
