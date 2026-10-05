@@ -65,14 +65,14 @@ issuance, implicit receipts, parent admission, account lifecycle, token custody,
 application isolation, PDA authority, and transaction rollback. This is not the
 full original Solidity test suite or a security audit.
 
-The suite contains **51 test functions**, including **19 sBPF runtime tests**,
-**eight independent host tests**, and **11 read-interface tests**. The read suites
+The suite contains **52 test functions**, including **19 sBPF runtime tests**,
+**eight independent host tests**, and **12 read-interface tests**. The read suites
 also run with mutation modules excluded; these repeat runs are not extra tests.
 One core test replays the 162 saved posting cases; those are not 162 separate
 test functions. See [acceptance coverage](docs/ACCEPTANCE.md) for the exercised
 requirements and remaining validation work.
 
-The Solana adapter caps leaves at depth 7 and groups at depth 6 (root depth 2),
+The Solana adapter caps leaves at depth 13 and groups at depth 12 (root depth 2),
 based on actual sBPF resource measurements. See [execution limits](docs/EXECUTION_LIMITS.md)
 for compute, transaction sizes, storage funding and reproduction instructions.
 

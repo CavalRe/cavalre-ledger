@@ -27,6 +27,11 @@ propagated directly to the entry point. The host is consumed by each call.
 This extraction retains the existing instruction arguments and 512-byte `Record`
 layout; it does not require a data migration.
 
+The host decodes each supplied record once and borrows its metadata for core
+reads. It updates balances and child counts directly and tracks changed records
+without a second before/after snapshot. Solana owns rollback; the core still
+computes the same checked posting changes before applying them.
+
 An external mint has one root PDA: `["ledger", zero public key, mint]`.
 All applications share that tree and its vault `["vault", root]`. Each root has
 an explicit credit Source at `["account", root, SOURCE]`; `SOURCE` is the
@@ -100,8 +105,8 @@ registration after mutations; this new schema is not ERC20 event compatibility.
 - Group cancellation preserves the original accounting walk; the current
   instruction contexts conservatively lock the root writable. Parallel account
   scheduling and removal of unnecessary root locks remain optimization work.
-- Leaves are capped at depth 7 and groups at depth 6, with root depth 2. This
-  Solana host limit prevents creation of trees beyond the tested heap envelope;
+- Leaves are capped at depth 13 and groups at depth 12, with root depth 2. This
+  Solana host limit prevents creation of trees beyond the tested legacy-packet envelope;
   it also leaves space for implicit children. See [execution measurements](../../docs/EXECUTION_LIMITS.md)
   for compute, signed packet sizes, rent and client construction guidance.
 - Names are bounded to 64 bytes. External mint decimals come from the mint.

@@ -137,7 +137,7 @@ impl core::ReadStore<Pubkey> for Reader {
     fn account(
         &self,
         address: &Pubkey,
-    ) -> std::result::Result<Option<core::Account<Pubkey>>, core::Error> {
+    ) -> std::result::Result<Option<core::Account<Pubkey, &str>>, core::Error> {
         let record = self
             .records
             .get(address)
@@ -156,7 +156,7 @@ impl core::ReadStore<Pubkey> for Reader {
         if record.depth == 2 && record.root != *address {
             return Err(core::Error::InvalidAccount);
         }
-        Ok(Some(record.logical()))
+        Ok(Some(record.borrowed()))
     }
 }
 impl view::ChildIndex<Pubkey> for Reader {

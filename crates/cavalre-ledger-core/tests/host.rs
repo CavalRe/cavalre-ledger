@@ -134,6 +134,22 @@ impl Host<u64> for MemoryHost {
     fn token_balances(&mut self) -> Result<TokenBalances<u64>, Failure> {
         Ok(self.tokens)
     }
+    fn set_balances(&mut self, address: u64, balances: Balances) -> Result<(), Failure> {
+        assert!(self.active);
+        self.accounts
+            .get_mut(&address)
+            .ok_or(Error::MissingAccount)?
+            .balances = balances;
+        Ok(())
+    }
+    fn set_children(&mut self, address: u64, children: u32) -> Result<(), Failure> {
+        assert!(self.active);
+        self.accounts
+            .get_mut(&address)
+            .ok_or(Error::MissingAccount)?
+            .children = children;
+        Ok(())
+    }
     fn move_tokens(&mut self, deposit: bool, amount: u128) -> Result<(), Failure> {
         assert!(self.active);
         if deposit {
@@ -502,7 +518,7 @@ impl cavalre_ledger_core::ledger_lib::AddressDerivation<u64> for MemoryHost {
 }
 
 impl cavalre_ledger_core::ledger_lib::ReadStore<u64> for MemoryHost {
-    fn account(&self, absolute: &u64) -> Result<Option<Account<u64>>, Error> {
-        Ok(self.accounts.get(absolute).cloned())
+    fn account(&self, absolute: &u64) -> Result<Option<Account<u64, &str>>, Error> {
+        Ok(self.accounts.get(absolute).map(Account::as_ref))
     }
 }

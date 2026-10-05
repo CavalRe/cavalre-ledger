@@ -465,30 +465,18 @@ impl Profile {
 #[test]
 fn execution_profiles() {
     let mut rows = Vec::new();
+    let mut completed = true;
     for depth in 4..=MAX_ACCOUNT_DEPTH {
         for mode in ["internal", "direct", "cpi"] {
             for seed in 0..3 {
                 let mut profile = Profile::new(mode, depth, seed);
                 profile.exercise();
-                assert!(
-                    profile.rows.iter().all(|r| r["status"] == "ok"),
-                    "profile failed: {:?}",
-                    profile.rows.last()
-                );
-                assert_eq!(
-                    profile.rows.last().unwrap()["operation"],
-                    if mode == "internal" {
+                completed &= profile.rows.last().unwrap()["operation"]
+                    == if mode == "internal" {
                         "retire_deep"
                     } else {
                         "withdraw"
-                    }
-                );
-                // Measured scenarios retain at least 10% compute headroom.
-                assert!(profile
-                    .rows
-                    .iter()
-                    .all(|r| r["compute_units"].as_u64().unwrap() * 11
-                        <= u64::from(COMPUTE_UNITS) * 10));
+                    };
                 rows.extend(profile.rows);
             }
         }
@@ -500,6 +488,13 @@ fn execution_profiles() {
         serde_json::to_string_pretty(&rows).unwrap(),
     )
     .unwrap();
+    // Save diagnostics even on failure; increasing depth must still pass all gates.
+    let failures: Vec<_> = rows.iter().filter(|r| r["status"] != "ok").collect();
+    assert!(failures.is_empty(), "profile failures: {failures:?}");
+    assert!(completed, "profile did not execute every operation");
+    assert!(rows
+        .iter()
+        .all(|r| r["compute_units"].as_u64().unwrap() * 11 <= u64::from(COMPUTE_UNITS) * 10));
 }
 
 #[test]

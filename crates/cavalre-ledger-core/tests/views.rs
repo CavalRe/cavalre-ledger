@@ -6,6 +6,47 @@ use cavalre_ledger_core::{
     ledger_view::{self as view, ChildIndex, LedgerIndex},
 };
 use std::collections::BTreeMap;
+use std::{
+    alloc::{GlobalAlloc, Layout, System},
+    cell::Cell,
+};
+
+// Count only the measured test thread, so parallel tests cannot affect results.
+thread_local! { static ALLOCATIONS: Cell<Option<usize>> = const { Cell::new(None) }; }
+struct CountAllocations;
+fn allocation() {
+    let _ = ALLOCATIONS.try_with(|count| {
+        if let Some(n) = count.get() {
+            count.set(Some(n + 1));
+        }
+    });
+}
+unsafe impl GlobalAlloc for CountAllocations {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        allocation();
+        unsafe { System.alloc(layout) }
+    }
+    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+        allocation();
+        unsafe { System.alloc_zeroed(layout) }
+    }
+    unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, size: usize) -> *mut u8 {
+        allocation();
+        unsafe { System.realloc(pointer, layout, size) }
+    }
+    unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
+        unsafe { System.dealloc(pointer, layout) }
+    }
+}
+#[global_allocator]
+static ALLOCATOR: CountAllocations = CountAllocations;
+
+fn measured<T>(f: impl FnOnce() -> T) -> (T, usize) {
+    ALLOCATIONS.with(|count| count.set(Some(0)));
+    let result = f();
+    let count = ALLOCATIONS.with(|count| count.replace(None).unwrap());
+    (result, count)
+}
 
 const ROOT: u64 = 1;
 const APP: u64 = 10;
@@ -24,8 +65,11 @@ impl AddressDerivation<u64> for Snapshot {
     }
 }
 impl ReadStore<u64> for Snapshot {
-    fn account(&self, key: &u64) -> Result<Option<Account<u64>>, Error> {
-        self.records.get(key).cloned().ok_or(Error::MissingAccount)
+    fn account(&self, key: &u64) -> Result<Option<Account<u64, &str>>, Error> {
+        self.records
+            .get(key)
+            .map(|a| a.as_ref().map(Account::as_ref))
+            .ok_or(Error::MissingAccount)
     }
 }
 impl ChildIndex<u64> for Snapshot {
@@ -125,6 +169,51 @@ fn snapshot() -> Snapshot {
             (addr(app, 22), None),
         ]),
     }
+}
+
+#[test]
+fn field_reads_allocate_nothing_and_posting_allocates_one_change_buffer() {
+    use cavalre_ledger_core::ledger_lib::{self as lib, AccountingStore, Store, StoreView};
+    let mut state = snapshot();
+    for account in state.records.values_mut().flatten() {
+        account.name = "N".repeat(64);
+    }
+    let store = StoreView(&state);
+    let app = addr(ROOT, APP);
+    let leaf = addr(app, 20);
+    let (_, count) = measured(|| {
+        for _ in 0..1000 {
+            assert_eq!(store.flags(&leaf).unwrap().unwrap().depth, 4);
+            assert_eq!(store.relative(&leaf).unwrap(), 20);
+            assert_eq!(store.custody_account(&leaf).unwrap(), Some(app));
+            assert_eq!(store.balances(&leaf).unwrap().debit, 80);
+            assert_eq!(view::balance_of(&state, &ROOT, &app, &20).unwrap(), 80);
+            assert_eq!(view::balance_of(&state, &ROOT, &app, &21).unwrap(), 70);
+            assert_eq!(view::total_supply(&state, &ROOT).unwrap(), 150);
+        }
+    });
+    assert_eq!(count, 0, "simple reads allocated account metadata");
+    let from = lib::Endpoint {
+        relative: 20,
+        flags: lib::effective_flags(&store, &store, &ROOT, &app, &20)
+            .unwrap()
+            .0,
+    };
+    let to = lib::Endpoint {
+        relative: 21,
+        flags: lib::effective_flags(&store, &store, &ROOT, &app, &21)
+            .unwrap()
+            .0,
+    };
+    let (changes, count) =
+        measured(|| lib::transfer_debits(&store, &store, &ROOT, from, to, &APP, 10).unwrap());
+    assert_eq!(
+        count, 1,
+        "posting allocated beyond its bounded change buffer"
+    );
+    assert_eq!(changes.len(), 2);
+    assert_eq!(changes[0].after.debit, 70);
+    assert_eq!(changes[1].after.debit, 80);
 }
 
 #[test]

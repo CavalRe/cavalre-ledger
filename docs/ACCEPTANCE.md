@@ -5,8 +5,8 @@ artifacts before running tests. Runtime tests load those artifacts into LiteSVM;
 they do not substitute native Rust handlers. This is local runtime validation,
 not a deployed-cluster test or a security audit.
 
-There are 51 test functions: 22 core tests (including eight independent host
-tests and seven view tests), six Solana address/effective-flag tests, four Solana
+There are 52 test functions: 23 core tests (including eight independent host
+tests and eight view tests), six Solana address/effective-flag tests, four Solana
 view tests and 19 runtime tests. View suites also run with mutations excluded;
 those repeat executions are not additional test functions.
 One core test replays all 162 saved Solidity posting
@@ -56,11 +56,17 @@ nonsigner accounts and verifies that neither bytes nor lamports change. A runtim
 test also reads actual persisted records after a withdrawal is rejected for
 insufficient total backing.
 
-The execution suite measures 630 transactions across supported depths, direct
+The execution suite measures 2205 transactions across supported depths, direct
 calls, application CPI and internal debit/credit postings. It checks signed
 packet size, compute headroom, first-use rent and final accounting balances.
 Boundary rejections enforce the Solana depth cap and verify atomic rollback;
 see [execution limits](EXECUTION_LIMITS.md).
+
+The allocation regression uses maximum-length names and counts allocations on
+the calling thread: repeated flags/custody/balance reads allocate nothing, and
+a posting allocates only its single bounded change buffer. Solana uses borrowed
+record metadata, direct balance/child-count updates and one working record set.
+The original posting fixtures and token/ledger rollback tests run unchanged.
 
 ## Regression fixed
 

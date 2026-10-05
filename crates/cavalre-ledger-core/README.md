@@ -24,6 +24,12 @@ membership but do not enforce mutation permission or monetary admission. A
 restricted implicit leaf remains readable. `None` from `ReadStore::account`
 means confirmed absence; unavailable state must return an error.
 
+`ReadStore::account` returns `Account<A, &str>` with a borrowed name. Flags,
+custody and balance reads use this borrowed projection and allocate nothing.
+`Account<A>` still defaults to an owned `String` for creation and metadata
+changes. Views that explicitly return names copy them into their result; numeric
+queries do not construct a named account result.
+
 Build with `default-features = false` to exclude `ledger.rs`. Shared account
 types, LedgerLib primitives and LedgerView stay available. This supports removing
 the mutation module while keeping queries connected to the same stored state;
@@ -46,7 +52,8 @@ The `Host<A>` interface is defined by the core. A host supplies an address type
 | `root` | Authenticate the selected root, asset/identifier, reserved Source identity and accounting-only owner. |
 | `authenticate(role, command)` | Establish the acting authority or token payer from the current execution context. Verify signatures or consume the runtime's verified result. |
 | `to_address` | Derive a child identity from its absolute parent and relative identifier in this service's domain. |
-| `account`, `put` | Read authenticated logical state and stage writes without imposing a serialization or database format. |
+| `account`, `put` | Borrow authenticated logical state; create or replace metadata without imposing a serialization or database format. |
+| `set_balances`, `set_children` | Update existing fields directly, preserving all unrelated metadata. Missing accounts must error. |
 | `token_balances`, `move_tokens` | Validate supported native assets, bind the vault and wallet to this operation, observe balances and execute native movement. |
 | `atomic`, `commit` | Commit storage and token effects together, or roll all effects back on any error. |
 
@@ -70,6 +77,17 @@ and commit. A transactional database host can restore a checkpoint on error.
 A host relying on runtime transaction rollback must propagate errors out of the
 entry point; swallowing an error and committing would violate the contract.
 Physical allocation never grants registration or authority.
+
+The host contract does not require full before/after copies. The Solana host
+decodes each supplied record once, reserves its record buffer once, and tracks
+which entries changed. It uses runtime rollback and writes only changed records.
+The posting walk reserves one bounded change buffer for the two ancestor paths;
+its arithmetic, cancellation and validation order are unchanged.
+
+Host implementors must adapt the borrowed `account` return type and implement
+`set_balances`/`set_children` inside the same atomic boundary. This is a Rust
+interface change; it changes neither Solana instruction arguments nor stored
+account encoding.
 
 The Solana implementation uses runtime signer checks, PDA derivation, program
 accounts and SPL calls. `tests/host.rs` implements the same interface using

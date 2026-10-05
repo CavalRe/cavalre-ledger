@@ -52,20 +52,34 @@ pub struct MoveTokens<'info> {
     pub system_program: Program<'info, System>,
 }
 
-#[derive(Clone)]
+struct StoredAccount {
+    key: Pubkey,
+    record: Record,
+    changed: bool,
+    new: bool,
+}
 struct State {
-    records: Vec<(Pubkey, Record)>,
+    records: Vec<StoredAccount>,
 }
 impl State {
     fn get(&self, key: &Pubkey) -> Result<&Record> {
         self.records
             .iter()
-            .find(|(k, _)| k == key)
-            .map(|(_, v)| v)
+            .find(|a| a.key == *key)
+            .map(|a| &a.record)
             .ok_or(error!(LedgerError::MissingAccount))
     }
     fn optional(&self, key: &Pubkey) -> Option<&Record> {
-        self.records.iter().find(|(k, _)| k == key).map(|(_, v)| v)
+        self.records
+            .iter()
+            .find(|a| a.key == *key)
+            .map(|a| &a.record)
+    }
+    fn entry_mut(&mut self, key: &Pubkey) -> Result<&mut StoredAccount> {
+        self.records
+            .iter_mut()
+            .find(|a| a.key == *key)
+            .ok_or(error!(LedgerError::MissingAccount))
     }
 }
 fn info<'a, 'info>(
@@ -86,17 +100,28 @@ fn load(root: &AccountInfo, rest: &[AccountInfo]) -> Result<State> {
         r.depth == 2 && r.registered && r.kind == 0 && r.root == *root.key,
         LedgerError::InvalidAccount
     );
-    let mut records = vec![(*root.key, r)];
+    let mut records = Vec::with_capacity(rest.len() + 1);
+    records.push(StoredAccount {
+        key: *root.key,
+        record: r,
+        changed: false,
+        new: false,
+    });
     for a in rest {
         require!(
-            !records.iter().any(|(key, _)| key == a.key),
+            !records.iter().any(|record| record.key == *a.key),
             LedgerError::InvalidAccount
         );
         if a.owner == &crate::ID {
             let r = decode(a)?;
             require_keys_eq!(r.root, *root.key, LedgerError::InvalidAccount);
             require!(r.depth > 2, LedgerError::InvalidAccount);
-            records.push((*a.key, r));
+            records.push(StoredAccount {
+                key: *a.key,
+                record: r,
+                changed: false,
+                new: false,
+            });
         }
     }
     Ok(State { records })
@@ -108,26 +133,6 @@ fn save(info: &AccountInfo, r: &Record) -> Result<()> {
     data[..8].copy_from_slice(MAGIC);
     r.serialize(&mut &mut data[8..])
         .map_err(|_| error!(LedgerError::InvalidAccount))
-}
-fn commit<'info>(
-    root: &AccountInfo<'info>,
-    rest: &[AccountInfo<'info>],
-    before: &State,
-    after: &State,
-) -> Result<()> {
-    for (key, r) in &after.records {
-        if before.optional(key) != Some(r) {
-            save(info(root, rest, key)?, r)?;
-            emit!(AccountChanged {
-                account: *key,
-                root: r.root,
-                debit: r.debit,
-                credit: r.credit,
-                registered: r.registered
-            });
-        }
-    }
-    Ok(())
 }
 fn allocate<'info>(
     payer: &AccountInfo<'info>,
@@ -191,7 +196,7 @@ struct SolanaHost<'a, 'info> {
     system: AccountInfo<'info>,
     native: Option<&'a mut MoveTokens<'info>>,
     root: service::Root<Pubkey>,
-    before: State,
+    initializing: bool,
     state: State,
 }
 struct HostError(anchor_lang::error::Error);
@@ -227,7 +232,7 @@ impl<'a, 'info> SolanaHost<'a, 'info> {
         system: AccountInfo<'info>,
         initialize: Option<(Pubkey, Pubkey)>,
     ) -> Result<Self> {
-        let (before, scope, identifier) = if let Some((scope, identifier)) = initialize {
+        let (state, scope, identifier) = if let Some((scope, identifier)) = initialize {
             require_keys_eq!(
                 root_address(&scope, &identifier).0,
                 *root_info.key,
@@ -235,16 +240,16 @@ impl<'a, 'info> SolanaHost<'a, 'info> {
             );
             (
                 State {
-                    records: Vec::new(),
+                    records: Vec::with_capacity(rest.len() + 1),
                 },
                 scope,
                 identifier,
             )
         } else {
-            let before = load(&root_info, rest)?;
-            let r = before.get(root_info.key)?;
+            let state = load(&root_info, rest)?;
+            let r = state.get(root_info.key)?;
             let (scope, identifier) = (r.scope, r.identifier);
-            (before, scope, identifier)
+            (state, scope, identifier)
         };
         let root = service::Root {
             address: *root_info.key,
@@ -261,8 +266,8 @@ impl<'a, 'info> SolanaHost<'a, 'info> {
             system,
             native: None,
             root,
-            state: before.clone(),
-            before,
+            state,
+            initializing: initialize.is_some(),
         })
     }
     fn accounts(
@@ -374,11 +379,35 @@ impl service::Host<Pubkey> for SolanaHost<'_, '_> {
             identifier,
             bump,
         };
-        if let Some((_, existing)) = self.state.records.iter_mut().find(|(id, _)| *id == key) {
-            *existing = r;
+        if let Some(existing) = self.state.records.iter_mut().find(|a| a.key == key) {
+            existing.changed |= existing.record != r;
+            existing.record = r;
         } else {
-            self.state.records.push((key, r));
+            self.state.records.push(StoredAccount {
+                key,
+                record: r,
+                changed: true,
+                new: true,
+            });
         }
+        Ok(())
+    }
+    fn set_balances(
+        &mut self,
+        key: Pubkey,
+        balances: core::Balances,
+    ) -> std::result::Result<(), HostError> {
+        let entry = self.state.entry_mut(&key)?;
+        entry.changed |=
+            entry.record.debit != balances.debit || entry.record.credit != balances.credit;
+        entry.record.debit = balances.debit;
+        entry.record.credit = balances.credit;
+        Ok(())
+    }
+    fn set_children(&mut self, key: Pubkey, children: u32) -> std::result::Result<(), HostError> {
+        let entry = self.state.entry_mut(&key)?;
+        entry.changed |= entry.record.children != children;
+        entry.record.children = children;
         Ok(())
     }
     fn token_balances(&mut self) -> std::result::Result<service::TokenBalances<Pubkey>, HostError> {
@@ -429,8 +458,9 @@ impl service::Host<Pubkey> for SolanaHost<'_, '_> {
         Ok(())
     }
     fn commit(&mut self) -> std::result::Result<(), HostError> {
-        for (key, record) in &self.state.records {
-            if self.before.optional(key).is_none() {
+        for entry in &self.state.records {
+            let (key, record) = (&entry.key, &entry.record);
+            if entry.new {
                 let target = info(&self.root_info, self.rest, key)?;
                 let bump = [record.bump];
                 let seeds: &[&[u8]] = if *key == self.root.address {
@@ -452,12 +482,20 @@ impl service::Host<Pubkey> for SolanaHost<'_, '_> {
             }
         }
         // Initialization previously emitted no mutation snapshots; retain that schema.
-        if self.before.records.is_empty() {
-            for (key, record) in &self.state.records {
-                save(info(&self.root_info, self.rest, key)?, record)?;
+        for entry in &self.state.records {
+            if entry.changed {
+                let r = &entry.record;
+                save(info(&self.root_info, self.rest, &entry.key)?, r)?;
+                if !self.initializing {
+                    emit!(AccountChanged {
+                        account: entry.key,
+                        root: r.root,
+                        debit: r.debit,
+                        credit: r.credit,
+                        registered: r.registered
+                    });
+                }
             }
-        } else {
-            commit(&self.root_info, self.rest, &self.before, &self.state)?;
         }
         Ok(())
     }
@@ -589,9 +627,9 @@ impl core::ReadStore<Pubkey> for SolanaHost<'_, '_> {
     fn account(
         &self,
         key: &Pubkey,
-    ) -> std::result::Result<Option<service::Account<Pubkey>>, core::Error> {
+    ) -> std::result::Result<Option<service::Account<Pubkey, &str>>, core::Error> {
         if let Some(record) = self.state.optional(key) {
-            return Ok(Some(record.logical()));
+            return Ok(Some(record.borrowed()));
         }
         let account =
             info(&self.root_info, self.rest, key).map_err(|_| core::Error::MissingAccount)?;

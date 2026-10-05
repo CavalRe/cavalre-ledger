@@ -39,7 +39,7 @@ pub fn effective_flags(
 
 pub const SOURCE: Pubkey = Pubkey::new_from_array([83; 32]);
 /// Current Solana execution envelope; root depth is 2. See docs/EXECUTION_LIMITS.md.
-pub const MAX_ACCOUNT_DEPTH: u8 = 7;
+pub const MAX_ACCOUNT_DEPTH: u8 = 13;
 /// Reserve one level for leaves, including unregistered recipients.
 pub const MAX_GROUP_DEPTH: u8 = MAX_ACCOUNT_DEPTH - 1;
 pub(crate) const MAGIC: &[u8; 8] = b"CVLEDG01";
@@ -136,6 +136,10 @@ pub fn decode_data(address: &Pubkey, owner: &Pubkey, data: &[u8]) -> Result<Reco
 
 impl Record {
     pub fn logical(&self) -> core::Account<Pubkey> {
+        self.borrowed().with_name(self.name.clone())
+    }
+    /// Borrow the name already decoded from storage; field reads allocate nothing.
+    pub fn borrowed(&self) -> core::Account<Pubkey, &str> {
         core::Account {
             flags: self.flags(),
             relative: self.relative,
@@ -147,7 +151,7 @@ impl Record {
                 debit: self.debit,
                 credit: self.credit,
             },
-            name: self.name.clone(),
+            name: &self.name,
         }
     }
 }

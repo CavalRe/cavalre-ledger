@@ -6,7 +6,7 @@ use alloc::string::String;
 
 /// Logical account state, independent of serialization and physical allocation.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Account<A> {
+pub struct Account<A, Name = String> {
     pub flags: Flags<A>,
     pub relative: A,
     pub custodian: A,
@@ -14,7 +14,39 @@ pub struct Account<A> {
     pub implicit_allowed: bool,
     pub children: u32,
     pub balances: Balances,
-    pub name: String,
+    pub name: Name,
+}
+
+impl<A: Copy, Name: AsRef<str>> Account<A, Name> {
+    /// Borrow metadata; flags/balance reads must not allocate or clone a name.
+    pub fn as_ref(&self) -> Account<A, &str> {
+        Account {
+            flags: self.flags,
+            relative: self.relative,
+            custodian: self.custodian,
+            registered: self.registered,
+            implicit_allowed: self.implicit_allowed,
+            children: self.children,
+            balances: self.balances,
+            name: self.name.as_ref(),
+        }
+    }
+}
+
+impl<A, Name> Account<A, Name> {
+    /// Supply an owned name only when creating or changing account metadata.
+    pub fn with_name(self, name: String) -> Account<A> {
+        Account {
+            flags: self.flags,
+            relative: self.relative,
+            custodian: self.custodian,
+            registered: self.registered,
+            implicit_allowed: self.implicit_allowed,
+            children: self.children,
+            balances: self.balances,
+            name,
+        }
+    }
 }
 
 /// Host-authenticated root identity. `authority: None` means external custody;
@@ -241,6 +273,9 @@ pub fn transfer<A: Copy + Eq>(
     if from_flags.depth < 3 || to_flags.depth < 3 {
         return Err(Error::InvalidLedgerAccount);
     }
+    // At most both paths up to the root, with the common root counted once.
+    // Reserve once: a bump allocator cannot recycle Vec growth allocations.
+    changes.reserve_exact(usize::from(from.flags.depth) + usize::from(to.flags.depth) - 3);
     loop {
         if from.flags.depth >= depth {
             update(
@@ -368,8 +403,9 @@ pub fn transfer_debits<A: Copy + Eq>(
 /// State reads shared by queries and mutations. None means confirmed absence;
 /// omitted or unavailable state must return an error. Implementations validate
 /// owner, identity and ledger membership and read a consistent state snapshot.
+/// Names borrow host storage, so walking flags/custody/balances does not allocate.
 pub trait ReadStore<A: Copy + Eq>: AddressDerivation<A> {
-    fn account(&self, address: &A) -> Result<Option<Account<A>>, Error>;
+    fn account(&self, address: &A) -> Result<Option<Account<A, &str>>, Error>;
 }
 
 /// Read-only adaptation to the original LedgerLib interfaces.

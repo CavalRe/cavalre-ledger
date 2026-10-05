@@ -18,18 +18,21 @@ pub struct AccountView<A> {
     pub admitted: bool,
 }
 
-fn root<A: Copy + Eq>(store: &impl ReadStore<A>, ledger: &A) -> Result<Account<A>, Error> {
+fn root<'a, A: Copy + Eq>(
+    store: &'a impl ReadStore<A>,
+    ledger: &A,
+) -> Result<Account<A, &'a str>, Error> {
     let account = store.account(ledger)?.ok_or(Error::InvalidAccount)?;
     if !account.registered || account.flags.depth != 2 || !account.flags.account_kind.is_group() {
         return Err(Error::InvalidAccount);
     }
     Ok(account)
 }
-fn parent<A: Copy + Eq>(
-    store: &impl ReadStore<A>,
+fn parent<'a, A: Copy + Eq>(
+    store: &'a impl ReadStore<A>,
     ledger: &A,
     parent: &A,
-) -> Result<Account<A>, Error> {
+) -> Result<Account<A, &'a str>, Error> {
     root(store, ledger)?;
     let account = store.account(parent)?.ok_or(Error::InvalidAccountGroup)?;
     if !account.registered || !account.flags.account_kind.is_group() {
@@ -58,7 +61,7 @@ pub fn account<A: Copy + Eq>(
     let balances = stored.as_ref().map(|a| a.balances).unwrap_or_default();
     let name = stored
         .filter(|a| a.registered)
-        .map(|a| a.name)
+        .map(|a| String::from(a.name))
         .unwrap_or_default();
     Ok(AccountView {
         absolute,
@@ -77,7 +80,7 @@ pub fn name<A: Copy + Eq>(store: &impl ReadStore<A>, absolute: &A) -> Result<Str
     Ok(store
         .account(absolute)?
         .filter(|a| a.registered)
-        .map(|a| a.name)
+        .map(|a| String::from(a.name))
         .unwrap_or_default())
 }
 pub fn debit_balance_of<A: Copy + Eq>(
@@ -109,14 +112,22 @@ pub fn credit_balance_of<A: Copy + Eq>(
 pub fn balance_of<A: Copy + Eq>(
     store: &impl ReadStore<A>,
     ledger: &A,
-    parent: &A,
+    parent_address: &A,
     relative: &A,
 ) -> Result<u128, Error> {
-    let a = account(store, ledger, parent, relative)?;
-    let (positive, negative) = if a.flags.account_kind.is_credit() {
-        (a.balances.credit, a.balances.debit)
+    parent(store, ledger, parent_address)?;
+    let view = StoreView(store);
+    let (flags, _, absolute) =
+        lib::effective_flags(&view, &view, ledger, parent_address, relative)?;
+    lib::custody(&view, ledger, flags, relative)?;
+    let balances = store
+        .account(&absolute)?
+        .map(|a| a.balances)
+        .unwrap_or_default();
+    let (positive, negative) = if flags.account_kind.is_credit() {
+        (balances.credit, balances.debit)
     } else {
-        (a.balances.debit, a.balances.credit)
+        (balances.debit, balances.credit)
     };
     positive
         .checked_sub(negative)

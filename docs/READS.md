@@ -15,6 +15,12 @@ extends `ReadStore`; queries never require `Host`, a signature, a fee payer,
 token movement or commit. The host may remove mutation dispatch while its query
 service continues reading committed snapshots. No pause mechanism is added.
 
+`ReadStore::account` borrows names from host storage through `Account<A, &str>`.
+Flags, custody, gross/net balance and supply queries allocate no account metadata.
+Names are copied only when a query explicitly returns an owned name or a full
+`AccountView`. The Solana `Reader` still decodes supplied account bytes once;
+borrowed queries reuse those validated records.
+
 Both crates default to enabling `mutations`. A read client can opt out:
 
 ```toml

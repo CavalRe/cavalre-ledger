@@ -42,6 +42,9 @@ pub trait Host<A: Copy + Eq>: ReadStore<A> + Sized {
     fn root(&self) -> Root<A>;
     fn authenticate(&self, role: Role, command: &Command<A>) -> Result<A, Self::Error>;
     fn put(&mut self, address: A, account: Account<A>) -> Result<(), Self::Error>;
+    /// Update existing fields without reading/copying unrelated metadata.
+    fn set_balances(&mut self, address: A, balances: Balances) -> Result<(), Self::Error>;
+    fn set_children(&mut self, address: A, children: u32) -> Result<(), Self::Error>;
     fn token_balances(&mut self) -> Result<TokenBalances<A>, Self::Error>;
     fn move_tokens(&mut self, deposit: bool, amount: u128) -> Result<(), Self::Error>;
     fn commit(&mut self) -> Result<(), Self::Error>;
@@ -105,7 +108,7 @@ pub fn execute<A: Copy + Eq, H: Host<A>>(
     })
 }
 
-fn get<A: Copy + Eq>(host: &impl Host<A>, key: &A) -> Result<Account<A>, Error> {
+fn get<'a, A: Copy + Eq>(host: &'a impl Host<A>, key: &A) -> Result<Account<A, &'a str>, Error> {
     host.account(key)?.ok_or(Error::MissingAccount)
 }
 fn valid_name(name: &str) -> Result<(), Error> {
@@ -258,13 +261,14 @@ fn add_account<A: Copy + Eq, H: Host<A>>(
     valid_name(&name)?;
     authorize(host, authority, child)?;
     ordinary(host.root(), child)?;
-    let mut parent = get(host, &child.parent)?;
+    let parent = get(host, &child.parent)?;
     if !parent.registered
         || !parent.flags.account_kind.is_group()
         || (kind.is_credit() && host.root().authority.is_none())
     {
         return Err(Error::InvalidKind.into());
     }
+    let children = parent.children;
     let key = implicit(host, child)?;
     let mut account = get(host, &key)?;
     if account.registered {
@@ -285,15 +289,12 @@ fn add_account<A: Copy + Eq, H: Host<A>>(
         return Err(Error::InvalidKind.into());
     }
     account.flags.account_kind = kind;
-    account.name = name;
     account.registered = true;
     account.implicit_allowed = implicit_allowed;
-    parent.children = parent
-        .children
-        .checked_add(1)
-        .ok_or(Error::InvalidAccount)?;
+    let children = children.checked_add(1).ok_or(Error::InvalidAccount)?;
+    let account = account.with_name(name);
     host.put(key, account)?;
-    host.put(child.parent, parent)
+    host.set_children(child.parent, children)
 }
 fn remove_account<A: Copy + Eq, H: Host<A>>(
     host: &mut H,
@@ -327,26 +328,24 @@ fn remove_account<A: Copy + Eq, H: Host<A>>(
         return Err(Error::NonemptyAccount.into());
     }
     account.registered = false;
-    account.name.clear();
-    let mut parent = get(host, &child.parent)?;
-    parent.children = parent
+    let account = account.with_name(String::new());
+    let children = get(host, &child.parent)?
         .children
         .checked_sub(1)
         .ok_or(Error::InvalidAccount)?;
     host.put(key, account)?;
-    host.put(child.parent, parent)
+    host.set_children(child.parent, children)
 }
 fn apply<A: Copy + Eq, H: Host<A>>(
     host: &mut H,
     changes: Vec<lib::BalanceChange<A>>,
 ) -> Result<(), H::Error> {
     for change in changes {
-        let mut account = get(host, &change.absolute)?;
+        let account = get(host, &change.absolute)?;
         if account.balances != change.before {
             return Err(Error::Accounting.into());
         }
-        account.balances = change.after;
-        host.put(change.absolute, account)?;
+        host.set_balances(change.absolute, change.after)?;
     }
     Ok(())
 }
