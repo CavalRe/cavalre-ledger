@@ -278,7 +278,6 @@ struct SolanaHost<'a, 'info> {
     system: AccountInfo<'info>,
     settlement: Option<Settlement<'a, 'info>>,
     root: service::Root<Pubkey>,
-    initializing: bool,
     state: State,
 }
 enum Settlement<'a, 'info> {
@@ -357,7 +356,6 @@ impl<'a, 'info> SolanaHost<'a, 'info> {
             settlement: None,
             root,
             state,
-            initializing: initialize.is_some(),
         })
     }
     fn accounts(
@@ -624,21 +622,92 @@ impl service::Host<Pubkey> for SolanaHost<'_, '_> {
                 allocate(&self.payer, target, &self.system, seeds)?;
             }
         }
-        // Initialization previously emitted no mutation snapshots; retain that schema.
         for entry in &self.state.records {
             if entry.changed {
                 let r = &entry.record;
                 save(info(&self.root_info, self.rest, &entry.key)?, r)?;
-                if !self.initializing {
-                    emit!(AccountChanged {
-                        account: entry.key,
-                        root: r.root,
-                        debit: r.debit,
-                        credit: r.credit,
-                        registered: r.registered
-                    });
-                }
             }
+        }
+        Ok(())
+    }
+    fn emit(&mut self, event: service::Event<Pubkey>) -> std::result::Result<(), HostError> {
+        use service::Event;
+        match event {
+            Event::LedgerAdded {
+                ledger,
+                authority,
+                identifier,
+                name,
+            } => emit!(LedgerAdded {
+                ledger,
+                scope: authority.unwrap_or_default(),
+                identifier,
+                name
+            }),
+            Event::SubAccountAdded {
+                ledger,
+                parent,
+                relative,
+                is_credit,
+            } => emit!(SubAccountAdded {
+                ledger,
+                parent,
+                relative,
+                is_credit
+            }),
+            Event::SubAccountGroupAdded {
+                ledger,
+                parent,
+                relative,
+                name,
+                is_credit,
+            } => emit!(SubAccountGroupAdded {
+                ledger,
+                parent,
+                relative,
+                name,
+                is_credit
+            }),
+            Event::SubAccountRemoved {
+                ledger,
+                parent,
+                relative,
+            } => emit!(SubAccountRemoved {
+                ledger,
+                parent,
+                relative
+            }),
+            Event::SubAccountGroupRemoved {
+                ledger,
+                parent,
+                relative,
+            } => emit!(SubAccountGroupRemoved {
+                ledger,
+                parent,
+                relative
+            }),
+            Event::Credit {
+                ledger,
+                account,
+                amount,
+                balance,
+            } => emit!(Credit {
+                ledger,
+                account,
+                amount,
+                balance
+            }),
+            Event::Debit {
+                ledger,
+                account,
+                amount,
+                balance,
+            } => emit!(Debit {
+                ledger,
+                account,
+                amount,
+                balance
+            }),
         }
         Ok(())
     }
@@ -806,15 +875,54 @@ pub fn move_sol<'info>(
     })
 }
 
-/// Snapshot after a committed mutation. This is a new Solana event schema;
-/// it does not claim ERC20 Transfer-event compatibility.
+/// Solana encodings of the shared semantic events; see docs/EVENTS.md.
 #[event]
-pub struct AccountChanged {
+pub struct LedgerAdded {
+    pub ledger: Pubkey,
+    pub scope: Pubkey,
+    pub identifier: Pubkey,
+    pub name: String,
+}
+#[event]
+pub struct SubAccountAdded {
+    pub ledger: Pubkey,
+    pub parent: Pubkey,
+    pub relative: Pubkey,
+    pub is_credit: bool,
+}
+#[event]
+pub struct SubAccountGroupAdded {
+    pub ledger: Pubkey,
+    pub parent: Pubkey,
+    pub relative: Pubkey,
+    pub name: String,
+    pub is_credit: bool,
+}
+#[event]
+pub struct SubAccountRemoved {
+    pub ledger: Pubkey,
+    pub parent: Pubkey,
+    pub relative: Pubkey,
+}
+#[event]
+pub struct SubAccountGroupRemoved {
+    pub ledger: Pubkey,
+    pub parent: Pubkey,
+    pub relative: Pubkey,
+}
+#[event]
+pub struct Credit {
+    pub ledger: Pubkey,
     pub account: Pubkey,
-    pub root: Pubkey,
-    pub debit: u128,
-    pub credit: u128,
-    pub registered: bool,
+    pub amount: u128,
+    pub balance: u128,
+}
+#[event]
+pub struct Debit {
+    pub ledger: Pubkey,
+    pub account: Pubkey,
+    pub amount: u128,
+    pub balance: u128,
 }
 
 impl core::AddressDerivation<Pubkey> for SolanaHost<'_, '_> {

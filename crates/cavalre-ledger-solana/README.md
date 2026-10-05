@@ -97,8 +97,10 @@ instruction-building examples in `tests/runtime/ledger.rs`.
 
 Clients can deserialize public `Record` data after its eight-byte `CVLEDG01`
 header. Parent is at byte offset 40 for RPC filtering; filter registered records
-when listing registered children. `AccountChanged` reports updated balances and
-registration after mutations; this new schema is not ERC20 event compatibility.
+when listing registered children. `LedgerAdded`, leaf/group creation and removal,
+`Credit` and `Debit` report the original structural and posting semantics through
+Anchor logs. They replace the draft `AccountChanged` snapshots. Only consume
+events from successful transactions; see [event fields and compatibility](../../docs/EVENTS.md).
 
 ## Native SOL
 

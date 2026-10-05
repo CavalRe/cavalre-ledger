@@ -227,6 +227,21 @@ pub struct Balances {
     pub credit: u128,
 }
 
+/// Gross balance column changed by a posting, regardless of group polarity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BalanceSide {
+    Debit,
+    Credit,
+}
+impl Balances {
+    pub fn get(&self, side: BalanceSide) -> u128 {
+        match side {
+            BalanceSide::Debit => self.debit,
+            BalanceSide::Credit => self.credit,
+        }
+    }
+}
+
 pub trait AccountingStore<A>: Store<A> {
     fn balances(&self, absolute: &A) -> Result<Balances, Error>;
 }
@@ -242,6 +257,10 @@ pub struct BalanceChange<A> {
     pub absolute: A,
     pub before: Balances,
     pub after: Balances,
+    /// Credit/debit *posting* events, including zero-amount postings. The value
+    /// selects the resulting gross column; event direction is not polarity.
+    pub credit: Option<BalanceSide>,
+    pub debit: Option<BalanceSide>,
 }
 
 /// Original depth-aligned transfer walk. Callers resolve effective flags and
@@ -345,10 +364,23 @@ fn update<A: Copy + Eq>(
             absolute,
             before,
             after: before,
+            credit: None,
+            debit: None,
         });
         changes.len() - 1
     };
-    let balances = &mut changes[index].after;
+    let change = &mut changes[index];
+    let side = if credit {
+        BalanceSide::Credit
+    } else {
+        BalanceSide::Debit
+    };
+    if credit == increase {
+        change.credit = Some(side);
+    } else {
+        change.debit = Some(side);
+    }
+    let balances = &mut change.after;
     let balance = if credit {
         &mut balances.credit
     } else {

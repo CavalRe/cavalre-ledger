@@ -22,6 +22,54 @@ pub struct TokenBalances<A> {
     pub wallet: u128,
 }
 
+/// Semantic Ledger events. The host owns encoding and delivery, not their rules.
+/// Creation identifies the root and asset/quantity; external token metadata is
+/// queried separately rather than guessed or required for event emission.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Event<A> {
+    LedgerAdded {
+        ledger: A,
+        authority: Option<A>,
+        identifier: A,
+        name: String,
+    },
+    SubAccountAdded {
+        ledger: A,
+        parent: A,
+        relative: A,
+        is_credit: bool,
+    },
+    SubAccountGroupAdded {
+        ledger: A,
+        parent: A,
+        relative: A,
+        name: String,
+        is_credit: bool,
+    },
+    SubAccountRemoved {
+        ledger: A,
+        parent: A,
+        relative: A,
+    },
+    SubAccountGroupRemoved {
+        ledger: A,
+        parent: A,
+        relative: A,
+    },
+    Credit {
+        ledger: A,
+        account: A,
+        amount: u128,
+        balance: u128,
+    },
+    Debit {
+        ledger: A,
+        account: A,
+        amount: u128,
+        balance: u128,
+    },
+}
+
 /// Trusted host implementation, not an interface supplied by an end user.
 ///
 /// Authentication must bind identities to the current call/transaction. Authority
@@ -33,7 +81,7 @@ pub struct TokenBalances<A> {
 ///
 /// Account reads validate ownership, identity and root membership. `put` stages
 /// logical state; allocating storage must not grant authority or registration.
-/// `atomic` covers authentication, staged writes, token movement and `commit`.
+/// `atomic` covers authentication, staged writes, token movement, events and `commit`.
 /// On any error all effects except transaction fees must roll back. A runtime
 /// with transaction-wide rollback must propagate errors out of its entry point;
 /// it must not catch an error and commit the surrounding transaction.
@@ -47,6 +95,10 @@ pub trait Host<A: Copy + Eq>: ReadStore<A> + Sized {
     fn set_children(&mut self, address: A, children: u32) -> Result<(), Self::Error>;
     fn token_balances(&mut self) -> Result<TokenBalances<A>, Self::Error>;
     fn move_tokens(&mut self, deposit: bool, amount: u128) -> Result<(), Self::Error>;
+    /// Events belong to the enclosing transaction. Hosts must roll back buffered
+    /// events on failure, or expose transaction status with speculative logs so
+    /// consumers can discard every event from a failed transaction.
+    fn emit(&mut self, event: Event<A>) -> Result<(), Self::Error>;
     fn commit(&mut self) -> Result<(), Self::Error>;
     fn atomic(
         &mut self,
@@ -227,7 +279,7 @@ fn initialize<A: Copy + Eq, H: Host<A>>(
         implicit_allowed: true,
         children: 1,
         balances: Balances::default(),
-        name,
+        name: name.clone(),
     };
     host.put(root.address, account)?;
     let key = host.to_address(&root.address, &root.source);
@@ -248,7 +300,19 @@ fn initialize<A: Copy + Eq, H: Host<A>>(
             balances: Balances::default(),
             name: "Source".into(),
         },
-    )
+    )?;
+    host.emit(Event::SubAccountAdded {
+        ledger: root.address,
+        parent: root.address,
+        relative: root.source,
+        is_credit: true,
+    })?;
+    host.emit(Event::LedgerAdded {
+        ledger: root.address,
+        authority: root.authority,
+        identifier: root.identifier,
+        name,
+    })
 }
 fn add_account<A: Copy + Eq, H: Host<A>>(
     host: &mut H,
@@ -292,9 +356,26 @@ fn add_account<A: Copy + Eq, H: Host<A>>(
     account.registered = true;
     account.implicit_allowed = implicit_allowed;
     let children = children.checked_add(1).ok_or(Error::InvalidAccount)?;
+    let event = if kind.is_group() {
+        Event::SubAccountGroupAdded {
+            ledger: host.root().address,
+            parent: child.parent,
+            relative: child.relative,
+            name: name.clone(),
+            is_credit: kind.is_credit(),
+        }
+    } else {
+        Event::SubAccountAdded {
+            ledger: host.root().address,
+            parent: child.parent,
+            relative: child.relative,
+            is_credit: kind.is_credit(),
+        }
+    };
     let account = account.with_name(name);
     host.put(key, account)?;
-    host.set_children(child.parent, children)
+    host.set_children(child.parent, children)?;
+    host.emit(event)
 }
 fn remove_account<A: Copy + Eq, H: Host<A>>(
     host: &mut H,
@@ -334,11 +415,25 @@ fn remove_account<A: Copy + Eq, H: Host<A>>(
         .checked_sub(1)
         .ok_or(Error::InvalidAccount)?;
     host.put(key, account)?;
-    host.set_children(child.parent, children)
+    host.set_children(child.parent, children)?;
+    host.emit(if group {
+        Event::SubAccountGroupRemoved {
+            ledger: host.root().address,
+            parent: child.parent,
+            relative: child.relative,
+        }
+    } else {
+        Event::SubAccountRemoved {
+            ledger: host.root().address,
+            parent: child.parent,
+            relative: child.relative,
+        }
+    })
 }
 fn apply<A: Copy + Eq, H: Host<A>>(
     host: &mut H,
     changes: Vec<lib::BalanceChange<A>>,
+    amount: u128,
 ) -> Result<(), H::Error> {
     for change in changes {
         let account = get(host, &change.absolute)?;
@@ -346,6 +441,24 @@ fn apply<A: Copy + Eq, H: Host<A>>(
             return Err(Error::Accounting.into());
         }
         host.set_balances(change.absolute, change.after)?;
+        // The write buffer retains original walk order. When opposite-polarity
+        // paths share an ancestor, both columns change: Credit precedes Debit.
+        if let Some(side) = change.credit {
+            host.emit(Event::Credit {
+                ledger: host.root().address,
+                account: change.absolute,
+                amount,
+                balance: change.after.get(side),
+            })?;
+        }
+        if let Some(side) = change.debit {
+            host.emit(Event::Debit {
+                ledger: host.root().address,
+                account: change.absolute,
+                amount,
+                balance: change.after.get(side),
+            })?;
+        }
     }
     Ok(())
 }
@@ -377,7 +490,7 @@ fn transfer<A: Copy + Eq, H: Host<A>>(
     .map_err(|_| Error::Accounting)?;
     implicit(host, from)?;
     implicit(host, to)?;
-    apply(host, changes)
+    apply(host, changes, amount)
 }
 fn move_tokens<A: Copy + Eq, H: Host<A>>(
     host: &mut H,
@@ -440,5 +553,5 @@ fn move_tokens<A: Copy + Eq, H: Host<A>>(
         return Err(Error::Settlement.into());
     }
     implicit(host, child)?;
-    apply(host, changes)
+    apply(host, changes, amount)
 }

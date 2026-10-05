@@ -5,6 +5,8 @@ use ledger::ledger::LedgerError;
 use litesvm::types::{FailedTransactionMetadata, TransactionMetadata};
 use solana_instruction_error::InstructionError;
 use solana_transaction_error::TransactionError;
+#[path = "events.rs"]
+mod events;
 #[path = "execution_limits.rs"]
 mod execution_limits;
 #[path = "native_sol.rs"]

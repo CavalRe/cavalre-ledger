@@ -1,7 +1,7 @@
 //! A second host with integer identities and transactional memory storage.
 //! No Solana SDK, account layout, signing key or token program is involved.
 use cavalre_ledger_core::{
-    ledger::{execute, Account, Child, Command, Host, Role, Root, TokenBalances},
+    ledger::{execute, Account, Child, Command, Event, Host, Role, Root, TokenBalances},
     ledger_lib::{AccountKind, Balances, Error},
 };
 use std::{cell::Cell, collections::BTreeMap};
@@ -33,6 +33,7 @@ impl From<Error> for Failure {
 struct MemoryHost {
     root: Root<u64>,
     accounts: BTreeMap<u64, Account<u64>>,
+    events: Vec<Event<u64>>,
     tokens: TokenBalances<u64>,
     // Trusted execution context. These are verified runtime identities, not
     // command arguments or a suggested implementation of cryptography.
@@ -55,6 +56,7 @@ impl MemoryHost {
                 authority: internal.then_some(APP),
             },
             accounts: BTreeMap::new(),
+            events: Vec::new(),
             tokens: TokenBalances {
                 asset: 99,
                 owner: PAYER,
@@ -177,6 +179,11 @@ impl Host<u64> for MemoryHost {
             Ok(())
         }
     }
+    fn emit(&mut self, event: Event<u64>) -> Result<(), Failure> {
+        assert!(self.active);
+        self.events.push(event);
+        Ok(())
+    }
     fn atomic(
         &mut self,
         operation: impl FnOnce(&mut Self) -> Result<(), Failure>,
@@ -184,11 +191,13 @@ impl Host<u64> for MemoryHost {
         assert!(!self.active);
         let accounts = self.accounts.clone();
         let tokens = self.tokens;
+        let events = self.events.len();
         self.active = true;
         let result = operation(self);
         if result.is_err() {
             self.accounts = accounts;
             self.tokens = tokens;
+            self.events.truncate(events);
         }
         self.active = false;
         result
@@ -356,16 +365,20 @@ fn host_transaction_rolls_back_native_movement_and_all_ledger_writes() {
     let mut host = MemoryHost::new(false);
     let parent = host.initialize(true);
     let before = host.accounts.clone();
+    let events = host.events.clone();
     host.fail_commit = true;
     assert_eq!(host.move_funds(parent, 40, true), Err(Failure::Commit));
     assert_eq!(host.accounts, before);
+    assert_eq!(host.events, events);
     assert_eq!((host.tokens.wallet, host.tokens.vault), (1000, 0));
     host.fail_commit = false;
     host.move_funds(parent, 40, true).unwrap();
     let funded = host.accounts.clone();
+    let events = host.events.clone();
     host.fail_commit = true;
     assert_eq!(host.move_funds(parent, 40, false), Err(Failure::Commit));
     assert_eq!(host.accounts, funded);
+    assert_eq!(host.events, events);
     assert_eq!((host.tokens.wallet, host.tokens.vault), (960, 40));
 }
 
@@ -521,4 +534,294 @@ impl cavalre_ledger_core::ledger_lib::ReadStore<u64> for MemoryHost {
     fn account(&self, absolute: &u64) -> Result<Option<Account<u64, &str>>, Error> {
         Ok(self.accounts.get(absolute).map(Account::as_ref))
     }
+}
+
+#[test]
+fn lifecycle_events_preserve_source_order_relative_identity_and_silent_noops() {
+    let mut host = MemoryHost::new(true);
+    let parent = host.initialize(true);
+    assert_eq!(
+        host.events,
+        vec![
+            Event::SubAccountAdded {
+                ledger: ROOT,
+                parent: ROOT,
+                relative: SOURCE,
+                is_credit: true
+            },
+            Event::LedgerAdded {
+                ledger: ROOT,
+                authority: Some(APP),
+                identifier: 99,
+                name: "Ledger".into()
+            },
+            Event::SubAccountGroupAdded {
+                ledger: ROOT,
+                parent: ROOT,
+                relative: APP,
+                name: "App".into(),
+                is_credit: false
+            },
+        ]
+    );
+    host.events.clear();
+    let add = || Command::Add {
+        child: child(parent, USER),
+        name: "User".into(),
+        kind: AccountKind::DebitLedger,
+        implicit_allowed: true,
+    };
+    execute(&mut host, add()).unwrap();
+    assert_eq!(
+        host.events,
+        vec![Event::SubAccountAdded {
+            ledger: ROOT,
+            parent,
+            relative: USER,
+            is_credit: false
+        }]
+    );
+    host.events.clear();
+    execute(&mut host, add()).unwrap();
+    assert!(host.events.is_empty());
+    host.actor = Some(USER);
+    assert!(execute(&mut host, add()).is_err());
+    assert!(host.events.is_empty());
+    host.actor = Some(APP);
+    execute(
+        &mut host,
+        Command::Remove {
+            child: child(parent, USER),
+            group: false,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        host.events,
+        vec![Event::SubAccountRemoved {
+            ledger: ROOT,
+            parent,
+            relative: USER
+        }]
+    );
+    host.events.clear();
+    execute(
+        &mut host,
+        Command::Remove {
+            child: child(parent, USER),
+            group: false,
+        },
+    )
+    .unwrap();
+    assert!(host.events.is_empty());
+    execute(
+        &mut host,
+        Command::Remove {
+            child: child(ROOT, APP),
+            group: true,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        host.events,
+        vec![Event::SubAccountGroupRemoved {
+            ledger: ROOT,
+            parent: ROOT,
+            relative: APP
+        }]
+    );
+    host.events.clear();
+    execute(
+        &mut host,
+        Command::Remove {
+            child: child(ROOT, APP),
+            group: true,
+        },
+    )
+    .unwrap();
+    assert!(host.events.is_empty());
+}
+
+fn credit(account: u64, amount: u128, balance: u128) -> Event<u64> {
+    Event::Credit {
+        ledger: ROOT,
+        account,
+        amount,
+        balance,
+    }
+}
+fn debit(account: u64, amount: u128, balance: u128) -> Event<u64> {
+    Event::Debit {
+        ledger: ROOT,
+        account,
+        amount,
+        balance,
+    }
+}
+
+#[test]
+fn funding_events_preserve_unequal_depth_order_columns_and_implicit_identity() {
+    let mut host = MemoryHost::new(false);
+    let parent = host.initialize(true);
+    let source = address(ROOT, SOURCE);
+    let user = address(parent, USER);
+    host.events.clear();
+    host.move_funds(parent, 40, true).unwrap();
+    assert_eq!(
+        host.events,
+        vec![
+            debit(user, 40, 40),
+            credit(source, 40, 40),
+            debit(parent, 40, 40),
+            credit(ROOT, 40, 40),
+            debit(ROOT, 40, 40),
+        ]
+    );
+    assert!(!host.accounts[&user].registered);
+    host.events.clear();
+    host.move_funds(parent, 10, false).unwrap();
+    assert_eq!(
+        host.events,
+        vec![
+            credit(user, 10, 30),
+            credit(parent, 10, 30),
+            debit(source, 10, 30),
+            credit(ROOT, 10, 30),
+            debit(ROOT, 10, 30),
+        ]
+    );
+}
+
+#[test]
+fn posting_events_cancel_shared_ancestors_keep_zero_postings_and_skip_self_transfers() {
+    let mut host = MemoryHost::new(false);
+    let parent = host.initialize(true);
+    host.move_funds(parent, 40, true).unwrap();
+    let from = child(parent, USER);
+    let to = child(parent, USER + 1);
+    host.events.clear();
+    execute(
+        &mut host,
+        Command::Transfer {
+            from,
+            to,
+            amount: 10,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        host.events,
+        vec![
+            credit(address(parent, USER), 10, 30),
+            debit(address(parent, USER + 1), 10, 10)
+        ]
+    );
+    host.events.clear();
+    execute(
+        &mut host,
+        Command::Transfer {
+            from,
+            to,
+            amount: 0,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        host.events,
+        vec![
+            credit(address(parent, USER), 0, 30),
+            debit(address(parent, USER + 1), 0, 10)
+        ]
+    );
+    host.events.clear();
+    execute(
+        &mut host,
+        Command::Transfer {
+            from,
+            to: from,
+            amount: 30,
+        },
+    )
+    .unwrap();
+    assert!(host.events.is_empty());
+    assert!(execute(
+        &mut host,
+        Command::Transfer {
+            from,
+            to: from,
+            amount: 31
+        }
+    )
+    .is_err());
+    assert!(host.events.is_empty());
+}
+
+#[test]
+fn opposite_polarity_events_follow_leaf_columns_through_the_same_group() {
+    let mut host = MemoryHost::new(true);
+    let parent = host.initialize(true); // Debit group containing both account kinds.
+    let from = child(parent, USER);
+    let to = child(parent, USER + 1);
+    execute(
+        &mut host,
+        Command::Add {
+            child: from,
+            name: "Credit".into(),
+            kind: AccountKind::CreditLedger,
+            implicit_allowed: true,
+        },
+    )
+    .unwrap();
+    host.events.clear();
+    execute(
+        &mut host,
+        Command::Transfer {
+            from,
+            to,
+            amount: u128::MAX,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        host.events,
+        vec![
+            credit(address(parent, USER), u128::MAX, u128::MAX),
+            debit(address(parent, USER + 1), u128::MAX, u128::MAX),
+            credit(parent, u128::MAX, u128::MAX),
+            debit(parent, u128::MAX, u128::MAX),
+            credit(ROOT, u128::MAX, u128::MAX),
+            debit(ROOT, u128::MAX, u128::MAX),
+        ]
+    );
+    host.events.clear();
+    assert!(execute(
+        &mut host,
+        Command::Transfer {
+            from,
+            to,
+            amount: 1
+        }
+    )
+    .is_err());
+    assert!(host.events.is_empty());
+    execute(
+        &mut host,
+        Command::Transfer {
+            from: to,
+            to: from,
+            amount: u128::MAX,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        host.events,
+        vec![
+            credit(address(parent, USER + 1), u128::MAX, 0),
+            debit(address(parent, USER), u128::MAX, 0),
+            credit(parent, u128::MAX, 0),
+            debit(parent, u128::MAX, 0),
+            credit(ROOT, u128::MAX, 0),
+            debit(ROOT, u128::MAX, 0),
+        ]
+    );
 }

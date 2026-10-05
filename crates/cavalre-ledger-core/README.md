@@ -61,6 +61,7 @@ The `Host<A>` interface is defined by the core. A host supplies an address type
 | `account`, `put` | Borrow authenticated logical state; create or replace metadata without imposing a serialization or database format. |
 | `set_balances`, `set_children` | Update existing fields directly, preserving all unrelated metadata. Missing accounts must error. |
 | `token_balances`, `move_tokens` | Validate supported native assets, bind the vault and wallet to this operation, observe balances and execute native movement. |
+| `emit` | Encode/deliver semantic Ledger events within the transaction; discard failed events or expose transaction status with speculative logs. |
 | `atomic`, `commit` | Commit storage and token effects together, or roll all effects back on any error. |
 
 The acting authority can be an application identity distinct from the transaction
@@ -78,7 +79,7 @@ validate ownership, identities, root membership and malformed state before
 exposing records. Core account values are logical projections of the same
 authoritative store, not a second balance database.
 
-`execute` invokes `atomic` around authentication, all mutations, native movement
+`execute` invokes `atomic` around authentication, all mutations, events, native movement
 and commit. A transactional database host can restore a checkpoint on error.
 A host relying on runtime transaction rollback must propagate errors out of the
 entry point; swallowing an error and committing would violate the contract.
@@ -89,6 +90,9 @@ decodes each supplied record once, reserves its record buffer once, and tracks
 which entries changed. It uses runtime rollback and writes only changed records.
 The posting walk reserves one bounded change buffer for the two ancestor paths;
 its arithmetic, cancellation and validation order are unchanged.
+The same change buffer records credit/debit posting directions and gross columns
+for event emission, including zero amounts. No second event buffer or ancestor
+walk is needed. See [event semantics](../../docs/EVENTS.md).
 
 Host implementors must adapt the borrowed `account` return type and implement
 `set_balances`/`set_children` inside the same atomic boundary. This is a Rust
