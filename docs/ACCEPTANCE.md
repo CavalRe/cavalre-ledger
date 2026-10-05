@@ -127,8 +127,12 @@ apply monetary admission policy to removal.
   documented in EVENTS.md. Shared account lifecycle,
   admission, authority and settlement policy live in the core.
 - Arbitrary deeper workflows, additional CPI layers, versioned/batched transactions
-  and cluster throughput are not established by these measurements. Instructions still
-  lock the root writable, serializing mutations that share a root.
+  and cluster throughput are not established by these measurements. Minimal-write
+  runtime tests cover read-only common ancestors, equal/unequal-depth debit paths,
+  credit paths, opposite-polarity mint/burn, zero/self transfers with existing
+  storage, CPI and tree mutations. Each planned record write is tested for atomic
+  rejection when omitted. Shared non-Ledger writable accounts can still serialize
+  transactions.
 - Production identity, upgrade authority, deployment tooling and a deployed
   release rehearsal remain unfinished.
 - Unsupported Token-2022 extensions, cross-custodian transfers, off-chain

@@ -76,6 +76,50 @@ pub fn account<A: Copy + Eq>(
         admitted: original.is_some() || parent.implicit_allowed,
     })
 }
+
+/// Ledger records a transfer needs writable in this snapshot. Reuse the exact
+/// posting walk, including effective flags and common-ancestor cancellation.
+/// Include absent endpoints for the service's implicit storage allocation;
+/// allocated, unchanged records need no write access, even for zero/self transfers.
+/// This plans account access, not authorization or custody settlement. The host
+/// must revalidate current state and reject any required write not supplied.
+pub fn transfer_writable_accounts<A: Copy + Eq>(
+    store: &impl ReadStore<A>,
+    ledger: &A,
+    from: lib::Child<A>,
+    to: lib::Child<A>,
+    amount: u128,
+) -> Result<Vec<A>, Error> {
+    let source = account(store, ledger, &from.parent, &from.relative)?;
+    let destination = account(store, ledger, &to.parent, &to.relative)?;
+    let view = StoreView(store);
+    let changes = lib::transfer(
+        &view,
+        &view,
+        ledger,
+        lib::Endpoint {
+            relative: from.relative,
+            flags: source.flags,
+        },
+        lib::Endpoint {
+            relative: to.relative,
+            flags: destination.flags,
+        },
+        amount,
+    )?;
+    let mut writable: Vec<_> = changes
+        .into_iter()
+        .filter(|change| change.before != change.after)
+        .map(|change| change.absolute)
+        .collect();
+    for absolute in [source.absolute, destination.absolute] {
+        if store.account(&absolute)?.is_none() && !writable.contains(&absolute) {
+            writable.push(absolute);
+        }
+    }
+    Ok(writable)
+}
+
 pub fn name<A: Copy + Eq>(store: &impl ReadStore<A>, absolute: &A) -> Result<String, Error> {
     Ok(store
         .account(absolute)?

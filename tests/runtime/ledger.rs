@@ -34,6 +34,11 @@ fn ix(a: impl ToAccountMetas, d: impl InstructionData, rest: &[Address]) -> Inst
             is_writable: m.is_writable,
         })
         .collect();
+    // Existing acceptance fixtures retain their conservative write declarations.
+    // writable_accounts tests construct minimal permissions with Reader's planner.
+    if accounts.len() == 4 {
+        accounts[2].is_writable = true;
+    }
     accounts.extend(rest.iter().map(|k| AccountMeta::new(*k, false)));
     Instruction {
         program_id: sa(ledger::ID),

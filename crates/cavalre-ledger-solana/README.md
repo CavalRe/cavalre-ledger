@@ -158,6 +158,24 @@ and Source PDAs for allocation. Records whose data changes must be writable.
 The program verifies owners, canonical PDAs and root membership. See executable
 instruction-building examples in `tests/runtime/ledger.rs`.
 
+`LedgerAccounts.root` accepts read-only access. For transfers, use
+`Reader::transfer_writable_accounts` to determine exactly which Ledger records
+need write access from a consistent snapshot. Same-polarity paths stop below
+their lowest common ancestor, so that ancestor, the app group and token root
+can remain read-only when unchanged. Opposite-polarity postings change both
+gross columns through the token root. Missing endpoint storage requires write
+access for allocation. The helper reuses the core posting walk; it does not
+grant authority or replace runtime validation. See [client planning](../../docs/READS.md#transfer-write-planning)
+and executable minimal-permission examples in `tests/runtime/writable_accounts.rs`.
+
+Tree mutations need write access to the parent whose child count changes,
+including the token root when modifying its direct children. With generated
+`LedgerAccounts` metas, explicitly mark that root writable for such operations
+and for mint/burn transfers. Matching no-op mutations require no record writes.
+Registration and custody settlement retain their writable root declarations.
+Existing clients that supply extra writable accounts still work, but retain
+those unnecessary transaction locks.
+
 Clients can deserialize public `Record` data after its eight-byte `CVLEDG01`
 header. Parent is at byte offset 40 for RPC filtering; filter registered records
 when listing registered children. `LedgerAdded`, leaf/group creation and removal,
@@ -249,9 +267,10 @@ and [Token-2022 extensions](https://solana.com/docs/tokens/extensions).
 - Native SOL, classic SPL Token and the Token-2022 configurations above are supported.
 - Cross-custodian external-token transfers, off-chain intents, delegated app
   authority, upgrades/migration policy and rent reclamation are not implemented.
-- Group cancellation preserves the original accounting walk; the current
-  instruction contexts conservatively lock the root writable. Parallel account
-  scheduling and removal of unnecessary root locks remain optimization work.
+- Group cancellation preserves the original accounting walk. Unchanged roots
+  and ancestors can be supplied read-only; clients select the write set before
+  signing. Shared writable payers, wallets and other application state can still
+  prevent parallel execution.
 - No resource-based depth cap is imposed. Depth remains a checked `u8`, with
   root depth 2. Applications must budget their complete transactions, including
   other instructions and CPI calls. See [execution measurements](../../docs/EXECUTION_LIMITS.md)

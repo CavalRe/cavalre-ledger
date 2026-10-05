@@ -4,6 +4,7 @@ use cavalre_ledger_core::ledger_lib as core;
 pub use core::{AccountKind, Error, Store, TokenKind};
 
 pub type Flags = core::Flags<Pubkey>;
+pub type Child = core::Child<Pubkey>;
 
 /// Derivation neither allocates storage nor registers an account.
 pub fn to_address(program: &Pubkey, parent: &Pubkey, relative: &Pubkey) -> (Pubkey, u8) {

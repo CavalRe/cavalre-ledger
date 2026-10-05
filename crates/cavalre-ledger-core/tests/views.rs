@@ -177,6 +177,54 @@ fn snapshot() -> Snapshot {
 }
 
 #[test]
+fn transfer_write_planning_preserves_cancellation_and_distinguishes_absent_storage() {
+    use cavalre_ledger_core::ledger_lib::Child;
+    let mut state = snapshot();
+    let app = addr(ROOT, APP);
+    let from = Child {
+        parent: app,
+        relative: 20,
+    };
+    let to = Child {
+        parent: app,
+        relative: 21,
+    };
+    assert_eq!(
+        view::transfer_writable_accounts(&state, &ROOT, from, to, 10).unwrap(),
+        vec![addr(app, 20), addr(app, 21)]
+    );
+    assert!(view::transfer_writable_accounts(&state, &ROOT, from, to, 0)
+        .unwrap()
+        .is_empty());
+    assert!(
+        view::transfer_writable_accounts(&state, &ROOT, from, from, 10)
+            .unwrap()
+            .is_empty()
+    );
+    let absent = Child {
+        parent: app,
+        relative: 22,
+    };
+    // Current service allocates absent endpoints even on zero/self transfers.
+    assert_eq!(
+        view::transfer_writable_accounts(&state, &ROOT, from, absent, 0).unwrap(),
+        vec![addr(app, 22)]
+    );
+    let source = Child {
+        parent: ROOT,
+        relative: SOURCE,
+    };
+    let writes = view::transfer_writable_accounts(&state, &ROOT, source, from, 10).unwrap();
+    assert!(writes.contains(&ROOT));
+    assert!(writes.contains(&app));
+    state.records.remove(&addr(app, 22));
+    assert_eq!(
+        view::transfer_writable_accounts(&state, &ROOT, from, absent, 10),
+        Err(Error::MissingAccount)
+    );
+}
+
+#[test]
 fn field_reads_allocate_nothing_and_posting_allocates_one_change_buffer() {
     use cavalre_ledger_core::ledger_lib::{self as lib, AccountingStore, Store, StoreView};
     let mut state = snapshot();

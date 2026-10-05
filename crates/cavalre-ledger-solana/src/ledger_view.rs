@@ -255,6 +255,19 @@ impl Reader {
     ) -> std::result::Result<view::AccountView<Pubkey>, core::Error> {
         view::account(self, ledger, parent, relative)
     }
+    /// Exact Ledger record write set for a transfer, using the core posting walk.
+    /// Supply a consistent snapshot, including confirmed absent endpoints. Other
+    /// required records stay read-only; payer/signature privileges are separate.
+    /// This is a client planning helper, not an authorization check.
+    pub fn transfer_writable_accounts(
+        &self,
+        ledger: &Pubkey,
+        from: crate::ledger_lib::Child,
+        to: crate::ledger_lib::Child,
+        amount: u128,
+    ) -> std::result::Result<Vec<Pubkey>, core::Error> {
+        view::transfer_writable_accounts(self, ledger, from, to, amount)
+    }
     pub fn name(&self, absolute: &Pubkey) -> std::result::Result<String, core::Error> {
         view::name(self, absolute)
     }

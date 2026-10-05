@@ -19,8 +19,8 @@ pub struct LedgerAccounts<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
     pub authority: Signer<'info>,
-    /// CHECK: root identity, ownership and data authenticated by load/initialize.
-    #[account(mut)]
+    /// CHECK: load authenticates identity, ownership and data. Commit requires
+    /// write access only when this operation changes the root.
     pub root: UncheckedAccount<'info>,
     pub system_program: Program<'info, System>,
     // Remaining: endpoint records, parents, custody ancestors and changed ancestors.

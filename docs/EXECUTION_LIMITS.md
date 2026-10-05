@@ -141,13 +141,20 @@ layers and batched operations need their own measurements.
 
 ## Concurrency
 
-All current mutation contexts require the root writable. Consequently, mutations
-to different application branches of the same token still share a write lock.
-Deposits and withdrawals also write the shared Source and vault. Independent
-roots can avoid those shared locks, but a shared writable payer or token wallet
-can still serialize transactions. The account counts above are measured; no
-TPS, scheduling latency or cluster contention claim is made. Removing unnecessary
-root locks is separate optimization work.
+Transfer clients can supply unchanged ancestors, including the app group and
+token ledger root, read-only. `Reader::transfer_writable_accounts` uses the core
+posting walk to select changed records and absent endpoints requiring allocation.
+Same-polarity paths stop below their lowest common ancestor. Opposite-polarity
+postings change balances through the token root; deposits and withdrawals also
+write the shared Source and vault. Tree mutations write parents whose child
+counts change. Permissions must be selected before signing the transaction.
+
+Independent branches can avoid a shared root write lock, but shared writable
+payers, token wallets or other application state can still serialize transactions.
+Existing profiling fixtures retain conservative writable declarations; the account
+counts above are measured, but no TPS, scheduling latency or cluster contention
+claim is made. Minimal write declarations and atomic rejection are exercised
+separately in `tests/runtime/writable_accounts.rs`.
 
 ## Reproduce
 

@@ -56,6 +56,51 @@ behavior. Gross balances remain inspectable. Queries report a parent's admission
 restriction without refusing to inspect an implicit leaf. That reported admission
 status is not proof of monetary eligibility or spending permission.
 
+## Transfer write planning
+
+`ledger_view::transfer_writable_accounts` in the core and the matching Solana
+`Reader` method reuse the original posting walk to return the Ledger records a
+transfer changes. Both work with mutations disabled. The inputs are the ledger,
+two `(parent, relative)` endpoints and the amount; effective flags determine
+polarity, including inheritance for unregistered leaves.
+
+For same-polarity transfers, both paths stop below their lowest common ancestor.
+That ancestor and everything above it remain read-only. For opposite-polarity
+postings, both gross columns change through the token ledger root. Records
+already allocated but unchanged need no write access. Absent endpoints are
+included for storage allocation, including the service's current zero/self
+transfer allocation behavior. Storage allocation does not register a leaf.
+
+```rust,ignore
+use cavalre_ledger_solana::ledger_lib::Child;
+
+let writable = reader.transfer_writable_accounts(
+    &root,
+    Child { parent: from_parent, relative: from },
+    Child { parent: to_parent, relative: to },
+    amount,
+)?;
+// Apply only to Ledger record metas; retain payer and signer requirements.
+for meta in &mut ledger_record_metas {
+    meta.is_writable = writable.contains(&meta.pubkey);
+}
+```
+
+Supply the endpoints, parents, custody ancestors and posting paths from one
+consistent snapshot. Insert confirmed missing endpoints explicitly; omitted
+records are errors, never assumed absent. Continue passing unchanged records
+needed for authentication or inspection as read-only accounts. This helper
+plans Ledger record writes only: it does not authorize a transfer, select
+settlement accounts, or make a stale transaction valid. Runtime execution
+recomputes the walk from authenticated state. A missing required writable
+account fails atomically; refresh and rebuild if the tree changed.
+
+Account privileges are chosen before signing. Across multiple instructions,
+use the union of required writes. A CPI caller must supply those same privileges
+in the outer transaction. Payers, token wallets, vaults and other application
+state have their own write requirements. See `tests/runtime/writable_accounts.rs`
+for direct and CPI examples with unchanged ancestors supplied read-only.
+
 ## Solana readers
 
 `ledger_view::Reader::from_account_infos` accepts readonly, nonsigner accounts.

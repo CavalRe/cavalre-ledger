@@ -19,6 +19,8 @@ mod native_sol;
 mod root;
 #[path = "token2022.rs"]
 mod token2022;
+#[path = "writable_accounts.rs"]
+mod writable_accounts;
 
 fn run(
     h: &mut Harness,
