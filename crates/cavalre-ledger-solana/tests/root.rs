@@ -32,6 +32,8 @@ fn root(children: u32) -> Record {
         identifier: Pubkey::default(),
         bump,
         sub_index: 0,
+        symbol: String::new(),
+        decimals: 0,
     }
 }
 fn ledger(tag: u8) -> (Pubkey, Record) {
@@ -43,6 +45,7 @@ fn ledger(tag: u8) -> (Pubkey, Record) {
     record.identifier = identifier;
     record.depth = 2;
     record.sub_index = 1;
+    record.symbol = "UNIT".into();
     record.token_kind = 2;
     record.implicit_allowed = true;
     record.name = "Token".into();

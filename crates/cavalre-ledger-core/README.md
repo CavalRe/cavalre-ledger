@@ -16,8 +16,7 @@ account's custodian; it does not authorize spending.
 `ledger_view.rs` corresponds to `LedgerView.sol`. It depends only on the shared
 `ReadStore` and address derivation in `ledger_lib.rs`, with maintained child
 slots for indexed lookup and pagination. It has no dependency on `ledger.rs`,
-authentication,
-token settlement or commit. The mutation `Host` extends that read interface.
+authentication, token settlement or commit. The mutation `Host` extends that read interface.
 
 Read queries resolve names, effective account flags, custody, gross/net balances,
 total supply and registered children. They validate identities and parent/ledger
@@ -25,13 +24,13 @@ membership but do not enforce mutation permission or monetary admission. A
 restricted implicit leaf remains readable. `None` from `ReadStore::account`
 means confirmed absence; unavailable state must return an error.
 
-`symbol` and `decimals` validate a ledger root and read through the optional
-`TokenMetadata` trait. The host authenticates each metadata source and returns
-`None` for undefined fields, errors for missing/invalid input, and the actual
-base-unit precision (including zero). This adds no platform types, stored fields
-or metadata requirement to accounting-only hosts.
+Ledger metadata is stored in `Account` and read through `ReadStore`. Initialization
+requires a valid name, symbol and decimals. The host obtains external-token
+metadata from an authenticated issuer source; accounting-only metadata comes
+from the authorized caller. Matching repeated initialization is a no-op, while
+conflicts reject. Queries return the stored snapshot without revisiting issuers.
 
-`ReadStore::account` returns `Account<A, &str>` with a borrowed name. Flags,
+`ReadStore::account` returns `Account<A, &str>` with borrowed name and symbol. Flags,
 custody and balance reads use this borrowed projection and allocate nothing.
 `Account<A>` still defaults to an owned `String` for creation and metadata
 changes. Views that explicitly return names copy them into their result; numeric

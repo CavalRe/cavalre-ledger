@@ -79,6 +79,8 @@ impl MemoryHost {
             self,
             Command::Initialize {
                 name: "Ledger".into(),
+                symbol: "UNIT".into(),
+                decimals: 6,
             },
         )
         .unwrap();
@@ -236,6 +238,8 @@ fn every_command_requires_a_host_authenticated_actor() {
     for command in [
         Command::Initialize {
             name: "Ledger".into(),
+            symbol: "UNIT".into(),
+            decimals: 6,
         },
         Command::Add {
             child: child(ROOT, APP),
@@ -576,7 +580,9 @@ fn lifecycle_events_preserve_source_order_relative_identity_and_silent_noops() {
                 ledger: ROOT,
                 authority: Some(APP),
                 identifier: 99,
-                name: "Ledger".into()
+                name: "Ledger".into(),
+                symbol: "UNIT".into(),
+                decimals: 6,
             },
             Event::SubAccountGroupAdded {
                 ledger: ROOT,
@@ -854,6 +860,8 @@ fn root_child_count_is_atomic_with_ledger_and_source_creation() {
     let mut host = MemoryHost::new(true);
     let initialize = || Command::Initialize {
         name: "Units".into(),
+        symbol: "UNIT".into(),
+        decimals: 6,
     };
     host.fail_commit = true;
     assert_eq!(execute(&mut host, initialize()), Err(Failure::Commit));
@@ -864,7 +872,11 @@ fn root_child_count_is_atomic_with_ledger_and_source_creation() {
     assert_eq!(host.accounts[&0].children, 1);
     assert_eq!(host.accounts[&ROOT].flags.parent, 0);
     assert!(host.accounts[&address(ROOT, SOURCE)].registered);
-    assert!(execute(&mut host, initialize()).is_err());
+    let records = host.accounts.clone();
+    let events = host.events.clone();
+    execute(&mut host, initialize()).unwrap();
+    assert_eq!(host.accounts, records);
+    assert_eq!(host.events, events);
     assert_eq!(host.accounts[&0].children, 1);
     host.root.address = 2;
     host.root.parent = 99;
@@ -962,4 +974,49 @@ fn maintained_children_follow_solidity_insertion_swap_pop_and_reregistration() {
         }
     }
     assert_eq!(host.accounts[&parent].children, 0);
+}
+
+#[test]
+fn ledger_metadata_and_idempotence_follow_the_solidity_creation_contract() {
+    let mut host = MemoryHost::new(true);
+    let command = |name: &str, symbol: &str, decimals| Command::Initialize {
+        name: name.into(),
+        symbol: symbol.into(),
+        decimals,
+    };
+    for (name, symbol) in [
+        ("", "UNIT"),
+        ("Units", ""),
+        (&"N".repeat(65), "UNIT"),
+        ("Units", &"S".repeat(65)),
+    ] {
+        assert_eq!(
+            execute(&mut host, command(name, symbol, 0)),
+            Err(Error::InvalidName.into())
+        );
+        assert!(host.accounts.is_empty());
+    }
+    execute(&mut host, command("Units", "UNIT", 0)).unwrap();
+    let before = host.accounts.clone();
+    let children = host.children.clone();
+    let events = host.events.clone();
+    execute(&mut host, command("Units", "UNIT", 0)).unwrap();
+    for (name, symbol, decimals) in [
+        ("Other", "UNIT", 0),
+        ("Units", "OTHER", 0),
+        ("Units", "UNIT", 1),
+    ] {
+        assert_eq!(
+            execute(&mut host, command(name, symbol, decimals)),
+            Err(Error::MetadataConflict.into())
+        );
+    }
+    host.actor = Some(USER);
+    assert_eq!(
+        execute(&mut host, command("Units", "UNIT", 0)),
+        Err(Error::Unauthorized.into())
+    );
+    assert_eq!(host.accounts, before);
+    assert_eq!(host.children, children);
+    assert_eq!(host.events, events);
 }

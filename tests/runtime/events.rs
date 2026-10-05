@@ -9,7 +9,7 @@ use ledger::ledger::{
 
 // Logs can include other programs' events. Track invocation nesting instead of
 // assuming every Program data line was emitted by Ledger.
-fn event_bytes(logs: &[String]) -> Vec<Vec<u8>> {
+pub(super) fn event_bytes(logs: &[String]) -> Vec<Vec<u8>> {
     let mut stack = Vec::new();
     let mut events = Vec::new();
     let ledger = ledger::ID.to_string();
@@ -61,6 +61,15 @@ fn created(root: Address, scope: Address, identifier: Address, name: &str) -> Ve
             scope: ap(scope),
             identifier: ap(identifier),
             name: name.into(),
+            symbol: if scope != SYSTEM {
+                "UNIT"
+            } else if identifier == SYSTEM {
+                "SOL"
+            } else {
+                "TOK"
+            }
+            .into(),
+            decimals: if identifier == SYSTEM { 9 } else { 6 },
         }
         .data(),
     ]
@@ -82,6 +91,15 @@ fn initialization_and_account_lifecycle_emit_original_event_families() {
         instruction::AddLedger {
             id: ap(identifier),
             name: "Scale".into(),
+            symbol: if scope != SYSTEM {
+                "UNIT"
+            } else if identifier == SYSTEM {
+                "SOL"
+            } else {
+                "TOK"
+            }
+            .into(),
+            decimals: if identifier == SYSTEM { 9 } else { 6 },
         },
         &[child(root, sa(SOURCE))],
     );
@@ -172,7 +190,7 @@ fn custody_and_transfer_events_decode_through_direct_and_application_cpi_calls()
         for cpi in [false, true] {
             let mut h = Harness::new();
             let e = External::setup(&mut h, 60, 1, program);
-            let registration = e.registration(&h, "Token");
+            let registration = e.registration(&h);
             assert_events(
                 &mut h,
                 &[0],

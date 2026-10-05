@@ -217,7 +217,9 @@ fn native_sol_prefunding_and_donations_create_no_claims() {
     assert_eq!(sol.custody(&h), AMOUNT);
     assert_eq!(h.record(sol.root).credit, 0);
     let i = sol.registration(&h);
-    rejects(&mut h, &[0], i, LedgerError::InvalidAccount.into());
+    succeeds(&mut h, &[0], i);
+    assert_eq!(sol.custody(&h), AMOUNT);
+    assert_eq!(h.record(sol.root).credit, 0);
     let parent = branch(&mut h, sol.root, 0, true);
     let receiver = h.key(2);
     let i = sol.movement(
@@ -383,4 +385,32 @@ fn native_sol_late_commit_rolls_back_deposit_withdrawal_and_allocation() {
     rejects(&mut h, &[0], withdrawal, LedgerError::InvalidAccount.into());
     assert_eq!(sol.custody(&h), AMOUNT);
     assert_eq!(h.record(child(parent, user)).debit, u128::from(AMOUNT));
+}
+
+#[test]
+fn native_ledger_registration_is_idempotent_without_rent_or_events() {
+    let mut h = Harness::new();
+    let sol = Sol::new(&mut h);
+    let instruction = h.indexed(sol.registration(&h));
+    let before: Vec<_> = instruction
+        .accounts
+        .iter()
+        .map(|m| (m.pubkey, h.svm.get_account(&m.pubkey)))
+        .collect();
+    let result = run_raw(&mut h, &[0], instruction).unwrap();
+    assert!(events::event_bytes(&result.logs).is_empty());
+    for (key, old) in before {
+        let mut current = h.svm.get_account(&key);
+        if key == h.key(0) {
+            current.as_mut().unwrap().lamports += result.fee;
+        }
+        assert_eq!(current, old);
+    }
+    assert_eq!(
+        (
+            h.record(sol.root).symbol.as_str(),
+            h.record(sol.root).decimals
+        ),
+        ("SOL", 9)
+    );
 }

@@ -54,24 +54,25 @@ The regression performs **2205 measured transactions** across 90 scenarios:
 leaf depths 4 through 13, three deterministic address sets, and three invocation
 modes: internal accounting, direct classic SPL Token calls, and an application
 PDA calling through the test consumer. Token-2022 and native SOL functional
-coverage is separate from this resource profile. Roots, groups and registered endpoints use
-the maximum 64-byte names. The external direct deposit has separate fee payer,
+coverage is separate from this resource profile. Accounting roots, groups and registered endpoints use 64-byte names; classic
+SPL roots use Metaplex's maximum 32-byte names. Accounting symbols use four bytes
+and classic SPL symbols use three bytes. The external direct deposit has separate fee payer,
 application authority and token payer; the CPI path uses its own program-signed
 authority and a separate token payer. Internal paths diverge at the root;
 external paths diverge immediately below the shared application group.
 
 | Leaf depth | Maximum compute units | Maximum transaction bytes | Maximum account keys | Maximum writable keys |
 | --- | ---: | ---: | ---: | ---: |
-| 4 | 120340 | 793 | 15 | 7 |
-| 5 | 102209 | 826 | 16 | 8 |
-| 6 | 119675 | 859 | 17 | 10 |
-| 7 | 149537 | 892 | 18 | 12 |
-| 8 | 162367 | 925 | 19 | 14 |
-| 9 | 170461 | 967 | 20 | 16 |
-| 10 | 197705 | 1033 | 22 | 18 |
-| 11 | 202636 | 1099 | 24 | 20 |
-| 12 | 212257 | 1165 | 26 | 22 |
-| 13 | 226190 | 1231 | 28 | 24 |
+| 4 | 121556 | 793 | 15 | 7 |
+| 5 | 103671 | 826 | 16 | 8 |
+| 6 | 121562 | 859 | 17 | 10 |
+| 7 | 152014 | 892 | 18 | 12 |
+| 8 | 165680 | 925 | 19 | 14 |
+| 9 | 173926 | 967 | 20 | 16 |
+| 10 | 201664 | 1033 | 22 | 18 |
+| 11 | 207089 | 1099 | 24 | 20 |
+| 12 | 217204 | 1165 | 26 | 22 |
+| 13 | 232104 | 1231 | 28 | 24 |
 
 Each column is its own maximum across that depth's measured operations. Compute
 need not increase monotonically because PDA bump searches vary with addresses.
@@ -91,19 +92,19 @@ as test setup; all Ledger tree state is created through actual instructions.
 
 | Operation at depth 13 | Maximum compute units | Maximum bytes | New storage funding (SOL) |
 | --- | ---: | ---: | ---: |
-| Create group | 117731 | 891 | 0.00590208 |
-| Create registered leaf | 112813 | 923 | 0.00590208 |
-| Register funded leaf | 109665 | 923 | 0.00144768 |
-| Remove registered leaf | 104866 | 853 | 0 |
-| First deposit / Source issuance | 165696 | 1090 | 0.0044544 |
-| Repeated deposit / Source issuance | 159253 | 1090 | 0 |
-| First transfer to implicit leaf | 217562 | 1231 | 0.0044544 |
-| Repeated transfer | 211012 | 1231 | 0 |
-| Transfer between registered leaves | 211108 | 1231 | 0 |
-| Withdraw / retire to Source | 157126 | 994 | 0 |
-| First issuance from deep credit leaf | 226190 | 1168 | 0.0044544 |
-| Issuance from registered deep credit leaf | 219772 | 1168 | 0 |
-| Retirement to deep credit leaf | 219857 | 1168 | 0 |
+| Create group | 119183 | 891 | 0.00590208 |
+| Create registered leaf | 114380 | 923 | 0.00590208 |
+| Register funded leaf | 111311 | 923 | 0.00144768 |
+| Remove registered leaf | 106597 | 853 | 0 |
+| First deposit / Source issuance | 169134 | 1090 | 0.0044544 |
+| Repeated deposit / Source issuance | 162794 | 1090 | 0 |
+| First transfer to implicit leaf | 223345 | 1231 | 0.0044544 |
+| Repeated transfer | 216898 | 1231 | 0 |
+| Transfer between registered leaves | 216970 | 1231 | 0 |
+| Withdraw / retire to Source | 160661 | 994 | 0 |
+| First issuance from deep credit leaf | 232104 | 1168 | 0.0044544 |
+| Issuance from registered deep credit leaf | 225777 | 1168 | 0 |
+| Retirement to deep credit leaf | 225862 | 1168 | 0 |
 
 The complete generated report includes registration and removal measurements.
 The suite verifies final leaf, Source, root and custody balances. A separate

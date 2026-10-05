@@ -26,8 +26,8 @@ core. Its `atomic` contract uses Solana transaction rollback: every error is
 propagated directly to the entry point. The host is consumed by each call.
 
 Ledger PDA derivation and the 512-byte record allocation are unchanged. The
-record now appends a one-based `sub_index` in previously reserved space. Earlier
-draft records without reverse indexes and child slots require fresh initialization;
+record stores a one-based `sub_index`, symbol and decimals in previously reserved space. Earlier
+draft records without these metadata fields and child indexes require fresh initialization;
 they are not a supported upgrade target. No deployed-state migration or deployment
 is included.
 
@@ -54,7 +54,8 @@ PDA signer through CPI; its administrator wallet cannot substitute for that PDA.
 Tree operations use runtime signatures, not off-chain intents.
 
 `Record` stores identity, flags, custody ancestry, current `u128` debit and
-credit balances, registration, parent admission, child count, reverse index and name. Metadata
+credit balances, registration, parent admission, child count, reverse index, name,
+symbol and decimals. Metadata
 and balances share a 512-byte account; logical registration is independent of
 storage allocation. First receipt allocates the destination with the transaction's
 rent payer, without requiring the recipient's signature or registration.
@@ -79,7 +80,8 @@ The first successful ledger creation initializes Root automatically. The payer
 receives no global authority. Creating a ledger sets its parent to Root and
 increments Root's child count through the same core storage operations used
 for other groups. Root, ledger, Source and any vault initialization commit
-together. Failed or duplicate creation changes none of them.
+together. Failed creation changes none of them. Matching repeat creation succeeds without
+writes, allocation or events; conflicting metadata rejects.
 
 `add_ledger` uses `RegisterLedger`; `RegisterToken` and `RegisterSol` also include
 a writable `global_root` account. The remaining accounts include writable Source,
@@ -123,10 +125,13 @@ and must be rebuilt. Readers need only their requested slots, not all siblings.
 
 ## Instructions
 
-- `add_ledger`: create an accounting-only root and Source.
+- `add_ledger(id, name, symbol, decimals)`: create an accounting-only root and Source.
 - `add_native_sol`: permissionlessly create the shared SOL root, Source and vault.
-- `add_external_token`: permissionlessly create a supported mint's root,
-  Source and vault. The initializer acquires no special spending authority.
+- `add_external_token()`: read and validate issuer name, symbol and mint decimals,
+  then create the supported mint's root, Source and vault with that snapshot.
+  Supply required canonical Metaplex metadata as a readonly remaining account;
+  inline Token-2022 metadata is read from the mint. No metadata arguments or
+  special spending authority are granted to the initializer.
 - `add_sub_account`, `add_sub_account_group`: register accounts with custodian
   authorization and existing balance/kind checks.
 - `remove_sub_account`, `remove_sub_account_group`: unregister empty accounts;
@@ -165,14 +170,14 @@ events from successful transactions; see [event fields and compatibility](../../
 `NATIVE_SOL` is the zero public key, also the System Program address. It cannot
 be a token mint. SOL has one root `["ledger", zero, NATIVE_SOL]`, one protected
 Source, and a System-owned, empty-data vault at `["vault", root]`. Only Ledger
-can sign for that vault PDA. The root reports `TokenKind::Native`; existing
-Ledger record layouts are unchanged.
+can sign for that vault PDA. The root reports `TokenKind::Native`.
 
-`add_native_sol` initializes the fixed name `SOL` and funds the vault to the
+`add_native_sol` initializes name `SOL`, symbol `SOL` and decimals `9` and funds the vault to the
 runtime's rent-exempt minimum for a zero-data account. An already-funded vault
 is accepted. Any excess funding is surplus custody and creates no claim.
 Root/Source storage funding and vault rent are separate from customer balances.
-Repeated registration fails without changing existing state.
+Matching repeated registration succeeds without changing state, funding storage
+or emitting creation events.
 
 `wrap_sol` and `unwrap_sol` take `parent`, `relative` and a `u64` lamport amount.
 Supply `payer`, `authority`, `funding_authority`, `root`, `vault`, `wallet` and
@@ -226,15 +231,15 @@ confidential transfers, nontransferable/pausable tokens, default account states,
 CPI guards and memo requirements. This version has no settlement mechanism for
 those configurations. Fee and hook extensions are rejected even when their
 current fee is zero or their hook is disabled. Unknown extension data cannot
-silently become supported. Custody compatibility is independent of symbol
-availability. `LedgerView` reads native SOL metadata, mint decimals, Metaplex
-symbols and Token-2022 inline symbols; see [read interfaces](../../docs/READS.md)
-for source validation, metadata pointers and undefined-field behavior.
+silently become supported. Registration also requires valid issuer name and
+symbol metadata, which is stored with mint decimals. `LedgerView` reads that
+snapshot without querying the issuer again; see [read interfaces](../../docs/READS.md).
 
 Both token programs retain their own mint/freeze authority behavior. Runtime
 settlement failures roll back token movement, accounting and new allocations.
-Existing token instruction arguments, account order and stored record layout
-are unchanged; clients select the appropriate token program.
+Settlement instruction arguments and account order are unchanged; clients
+select the appropriate token program. Registration and creation-event clients
+must use the metadata interfaces above.
 
 References: [Anchor token interface](https://www.anchor-lang.com/docs/tokens/basics/transfer-tokens)
 and [Token-2022 extensions](https://solana.com/docs/tokens/extensions).

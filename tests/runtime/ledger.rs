@@ -196,6 +196,35 @@ impl Harness {
             .unwrap()
             .amount
     }
+    // Published Metaplex prefix as issuer-owned test setup; Ledger must verify
+    // both the canonical PDA and owner. Token-2022 inline tests use its real program.
+    fn metadata(&mut self, mint: Address, name: &str, symbol: &str) -> Address {
+        use anchor_lang::AnchorSerialize;
+        let key = sa(ledger::ledger_view::metadata_address(&ap(mint)));
+        let mut data = vec![4];
+        data.extend_from_slice(self.key(0).as_ref());
+        data.extend_from_slice(mint.as_ref());
+        name.serialize(&mut data).unwrap();
+        symbol.serialize(&mut data).unwrap();
+        "https://example.invalid/token"
+            .serialize(&mut data)
+            .unwrap();
+        0u16.serialize(&mut data).unwrap();
+        data.extend_from_slice(&[0; 9]);
+        self.svm
+            .set_account(
+                key,
+                Account {
+                    lamports: self.svm.minimum_balance_for_rent_exemption(data.len()),
+                    data,
+                    owner: sa(ledger::ledger_view::METAPLEX_METADATA_PROGRAM),
+                    executable: false,
+                    rent_epoch: 0,
+                },
+            )
+            .unwrap();
+        key
+    }
     fn registration(&self, n: usize, root: Address) -> accounts::RegisterLedger {
         accounts::RegisterLedger {
             payer: ap(self.key(n)),
@@ -216,6 +245,8 @@ impl Harness {
             instruction::AddLedger {
                 id: ap(self.key(2)),
                 name: name.into(),
+                symbol: "UNIT".into(),
+                decimals: 6,
             },
             &[source],
         );
@@ -372,6 +403,7 @@ fn external_token_deposit_transfer_withdraw_and_isolation() {
             close_authority: COption::None,
         },
     );
+    let metadata = h.metadata(mint, "Token", "TOK");
     let root = sa(ledger::ledger::root_address(&ap(SYSTEM), &ap(mint)).0);
     let source = child(root, sa(SOURCE));
     let vault = sa(anchor_lang::prelude::Pubkey::find_program_address(
@@ -391,10 +423,8 @@ fn external_token_deposit_transfer_withdraw_and_isolation() {
                 token_program: ap(TOKEN),
                 system_program: ap(SYSTEM)
             },
-            instruction::AddExternalToken {
-                name: "USDC".into()
-            },
-            &[source]
+            instruction::AddExternalToken {},
+            &[source, metadata]
         )
     ));
     let group = child(root, h.key(0));
@@ -581,6 +611,7 @@ fn application_pda_can_create_its_branch_but_another_application_cannot() {
             freeze_authority: COption::None,
         },
     );
+    let metadata = h.metadata(mint, "Token", "TOK");
     let root = sa(ledger::ledger::root_address(&ap(SYSTEM), &ap(mint)).0);
     let source = child(root, sa(SOURCE));
     let vault = sa(anchor_lang::prelude::Pubkey::find_program_address(
@@ -600,10 +631,8 @@ fn application_pda_can_create_its_branch_but_another_application_cannot() {
                 token_program: ap(TOKEN),
                 system_program: ap(SYSTEM)
             },
-            instruction::AddExternalToken {
-                name: "Token".into()
-            },
-            &[source]
+            instruction::AddExternalToken {},
+            &[source, metadata]
         )
     ));
     let app = Address::new_from_array([41; 32]);

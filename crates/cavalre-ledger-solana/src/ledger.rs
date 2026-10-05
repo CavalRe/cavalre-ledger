@@ -49,7 +49,7 @@ pub struct RegisterToken<'info> {
     pub root: UncheckedAccount<'info>,
     #[account(mint::token_program=token_program)]
     pub mint: InterfaceAccount<'info, Mint>,
-    #[account(init, payer=payer, seeds=[b"vault", root.key().as_ref()], bump,
+    #[account(init_if_needed, payer=payer, seeds=[b"vault", root.key().as_ref()], bump,
         token::mint=mint, token::authority=root, token::token_program=token_program)]
     pub vault: InterfaceAccount<'info, TokenAccount>,
     pub token_program: Interface<'info, TokenInterface>,
@@ -371,9 +371,13 @@ impl<'a, 'info> SolanaHost<'a, 'info> {
                 LedgerError::InvalidAccount
             );
             (
-                State {
-                    records: Vec::with_capacity(rest.len() + 2),
-                    children: Vec::new(),
+                if root_info.data_is_empty() {
+                    State {
+                        records: Vec::with_capacity(rest.len() + 2),
+                        children: Vec::new(),
+                    }
+                } else {
+                    load(&root_info, rest)?
                 },
                 scope,
                 identifier,
@@ -548,6 +552,8 @@ impl service::Host<Pubkey> for SolanaHost<'_, '_> {
             identifier,
             bump,
             sub_index: account.sub_index,
+            symbol: account.symbol,
+            decimals: account.decimals,
         };
         if let Some(existing) = self.state.records.iter_mut().find(|a| a.key == key) {
             existing.changed |= existing.record != r;
@@ -794,11 +800,15 @@ impl service::Host<Pubkey> for SolanaHost<'_, '_> {
                 authority,
                 identifier,
                 name,
+                symbol,
+                decimals,
             } => emit!(LedgerAdded {
                 ledger,
                 scope: authority.unwrap_or_default(),
                 identifier,
-                name
+                name,
+                symbol,
+                decimals
             }),
             Event::SubAccountAdded {
                 ledger,
@@ -881,6 +891,8 @@ pub fn add_ledger<'info>(
     ctx: &Context<'info, RegisterLedger<'info>>,
     id: Pubkey,
     name: String,
+    symbol: String,
+    decimals: u8,
 ) -> Result<()> {
     SolanaHost::new(
         ctx.accounts.root.to_account_info(),
@@ -891,14 +903,29 @@ pub fn add_ledger<'info>(
         Some((ctx.accounts.authority.key(), id)),
     )?
     .with_global_root(ctx.accounts.global_root.to_account_info())?
-    .run(service::Command::Initialize { name })
+    .run(service::Command::Initialize {
+        name,
+        symbol,
+        decimals,
+    })
 }
-pub fn add_external_token<'info>(
-    ctx: Context<'info, RegisterToken<'info>>,
-    name: String,
-) -> Result<()> {
+pub fn add_external_token<'info>(ctx: Context<'info, RegisterToken<'info>>) -> Result<()> {
     validate_mint(&ctx.accounts.mint.to_account_info())?;
     validate_token_account(&ctx.accounts.vault.to_account_info())?;
+    let mint = ctx.accounts.mint.to_account_info();
+    let mut metadata = crate::ledger_view::Reader::new();
+    metadata.insert(*mint.key, mint.owner, &mint.try_borrow_data()?)?;
+    let metadata_address = crate::ledger_view::metadata_address(mint.key);
+    if let Some(account) = ctx
+        .remaining_accounts
+        .iter()
+        .find(|a| *a.key == metadata_address)
+    {
+        metadata.insert(*account.key, account.owner, &account.try_borrow_data()?)?;
+    }
+    let (name, symbol, decimals) = metadata
+        .external_metadata(mint.key)
+        .map_err(|e| HostError::from(e).0)?;
     SolanaHost::new(
         ctx.accounts.root.to_account_info(),
         ctx.remaining_accounts,
@@ -908,7 +935,11 @@ pub fn add_external_token<'info>(
         Some((Pubkey::default(), ctx.accounts.mint.key())),
     )?
     .with_global_root(ctx.accounts.global_root.to_account_info())?
-    .run(service::Command::Initialize { name })
+    .run(service::Command::Initialize {
+        name,
+        symbol,
+        decimals,
+    })
 }
 pub fn add_native_sol<'info>(ctx: Context<'info, RegisterSol<'info>>) -> Result<()> {
     let reserve = Rent::get()?.minimum_balance(0);
@@ -934,7 +965,11 @@ pub fn add_native_sol<'info>(ctx: Context<'info, RegisterSol<'info>>) -> Result<
         Some((Pubkey::default(), NATIVE_SOL)),
     )?
     .with_global_root(ctx.accounts.global_root.to_account_info())?
-    .run(service::Command::Initialize { name: "SOL".into() })
+    .run(service::Command::Initialize {
+        name: "SOL".into(),
+        symbol: "SOL".into(),
+        decimals: 9,
+    })
 }
 pub fn add_account<'info>(
     ctx: &Context<'info, LedgerAccounts<'info>>,
@@ -1049,6 +1084,8 @@ pub struct LedgerAdded {
     pub scope: Pubkey,
     pub identifier: Pubkey,
     pub name: String,
+    pub symbol: String,
+    pub decimals: u8,
 }
 #[event]
 pub struct SubAccountAdded {

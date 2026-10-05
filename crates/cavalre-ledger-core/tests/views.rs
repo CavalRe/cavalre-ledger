@@ -106,6 +106,12 @@ fn record(
         implicit_allowed: true,
         children: 0,
         sub_index: u32::from(registered),
+        symbol: if depth == 2 {
+            "UNIT".into()
+        } else {
+            String::new()
+        },
+        decimals: 0,
         balances: if kind.is_credit() {
             Balances {
                 debit: 0,
@@ -374,53 +380,26 @@ fn queries_validate_root_parent_and_registered_leaf_eligibility_as_parent() {
 }
 
 #[test]
-fn metadata_queries_validate_roots_and_preserve_undefined_zero_and_errors() {
-    struct Metadata {
-        state: Snapshot,
-        symbol: Result<Option<String>, Error>,
-        decimals: Option<u8>,
-    }
-    impl AddressDerivation<u64> for Metadata {
-        fn to_address(&self, parent: &u64, relative: &u64) -> u64 {
-            self.state.to_address(parent, relative)
-        }
-    }
-    impl ReadStore<u64> for Metadata {
-        fn account(&self, key: &u64) -> Result<Option<Account<u64, &str>>, Error> {
-            self.state.account(key)
-        }
-    }
-    impl view::TokenMetadata<u64> for Metadata {
-        fn token_symbol(&self, _: &u64) -> Result<Option<String>, Error> {
-            self.symbol.clone()
-        }
-        fn token_decimals(&self, _: &u64) -> Result<Option<u8>, Error> {
-            Ok(self.decimals)
-        }
-    }
-    let mut store = Metadata {
-        state: snapshot(),
-        symbol: Ok(Some("UNIT".into())),
-        decimals: Some(0),
-    };
-    assert_eq!(view::symbol(&store, &ROOT), Ok(Some("UNIT".into())));
-    assert_eq!(view::decimals(&store, &ROOT), Ok(Some(0)));
+fn metadata_queries_read_stored_ledger_values_including_zero_decimals() {
+    let mut state = snapshot();
+    assert_eq!(view::symbol(&state, &ROOT), Ok(Some("UNIT".into())));
+    assert_eq!(view::decimals(&state, &ROOT), Ok(Some(0)));
     assert_eq!(
-        view::symbol(&store, &addr(ROOT, APP)),
+        view::symbol(&state, &addr(ROOT, APP)),
         Err(Error::InvalidAccount)
     );
     assert_eq!(
-        view::decimals(&store, &addr(ROOT, APP)),
+        view::decimals(&state, &addr(ROOT, APP)),
         Err(Error::InvalidAccount)
     );
-    store.symbol = Ok(None);
-    store.decimals = None;
-    assert_eq!(view::symbol(&store, &ROOT), Ok(None));
-    assert_eq!(view::decimals(&store, &ROOT), Ok(None));
-    store.symbol = Err(Error::MissingAccount);
-    assert_eq!(view::symbol(&store, &ROOT), Err(Error::MissingAccount));
-    store.symbol = Err(Error::InvalidMetadata);
-    assert_eq!(view::symbol(&store, &ROOT), Err(Error::InvalidMetadata));
+    state
+        .records
+        .get_mut(&ROOT)
+        .unwrap()
+        .as_mut()
+        .unwrap()
+        .decimals = 255;
+    assert_eq!(view::decimals(&state, &ROOT), Ok(Some(255)));
 }
 
 #[test]

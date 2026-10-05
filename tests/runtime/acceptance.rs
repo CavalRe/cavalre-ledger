@@ -11,6 +11,8 @@ mod children;
 mod events;
 #[path = "execution_limits.rs"]
 mod execution_limits;
+#[path = "metadata.rs"]
+mod metadata;
 #[path = "native_sol.rs"]
 mod native_sol;
 #[path = "root.rs"]
@@ -113,7 +115,8 @@ impl External {
     }
     fn named(h: &mut Harness, tag: u8, owner: usize, name: &str) -> Self {
         let token = Self::setup(h, tag, owner, TOKEN);
-        succeeds(h, &[0], token.registration(h, name));
+        h.metadata(token.mint, name, "TOK");
+        succeeds(h, &[0], token.registration(h));
         token
     }
     // Native mint/wallet fixtures; Ledger registration and settlement execute sBPF.
@@ -145,6 +148,7 @@ impl External {
             },
             token_program,
         );
+        h.metadata(mint, "Token", "TOK");
         let root = sa(ledger::ledger::root_address(&ap(SYSTEM), &ap(mint)).0);
         let source = child(root, sa(SOURCE));
         let vault = sa(anchor_lang::prelude::Pubkey::find_program_address(
@@ -161,8 +165,8 @@ impl External {
             vault,
         }
     }
-    fn registration(&self, h: &Harness, name: &str) -> Instruction {
-        ix(
+    fn registration(&self, h: &Harness) -> Instruction {
+        let mut instruction = ix(
             accounts::RegisterToken {
                 global_root: ledger::ledger_lib::global_root_address().0,
                 payer: ap(h.key(0)),
@@ -172,9 +176,14 @@ impl External {
                 token_program: ap(self.token_program),
                 system_program: ap(SYSTEM),
             },
-            instruction::AddExternalToken { name: name.into() },
+            instruction::AddExternalToken {},
             &[self.source],
-        )
+        );
+        instruction.accounts.push(AccountMeta::new_readonly(
+            sa(ledger::ledger_view::metadata_address(&ap(self.mint))),
+            false,
+        ));
+        instruction
     }
 
     fn movement(

@@ -9,7 +9,7 @@ No event queue, second accounting store or additional account layout is introduc
 
 | Event | Solana fields | Emission rule |
 | --- | --- | --- |
-| `LedgerAdded` | `ledger`, `scope`, `identifier`, `name` | Once after creating the root and its Source |
+| `LedgerAdded` | `ledger`, `scope`, `identifier`, `name`, `symbol`, `decimals` | Once after creating the root and its Source |
 | `SubAccountAdded` | `ledger`, `parent`, `relative`, `is_credit` | A leaf becomes registered, including Source creation |
 | `SubAccountGroupAdded` | `ledger`, `parent`, `relative`, `name`, `is_credit` | A group becomes registered |
 | `SubAccountRemoved` | `ledger`, `parent`, `relative` | A registered empty leaf is removed |
@@ -22,7 +22,7 @@ No event queue, second accounting store or additional account layout is introduc
 using both. All monetary values are `u128` raw base units.
 
 Initialization emits `SubAccountAdded` for the protected credit Source before
-`LedgerAdded`, matching the original order. Repeated matching leaf/group
+`LedgerAdded`, matching the original order. Repeated matching ledger, leaf or group
 registration emits nothing. Removal of an unregistered target emits nothing.
 Funding an implicit leaf emits posting events without claiming it was registered;
 later explicit registration emits the corresponding structural event.
@@ -52,10 +52,10 @@ Solana separates the ledger PDA from the asset identity. `LedgerAdded` therefore
 includes `ledger`, `identifier` and `scope`: external mints and native SOL use
 zero scope; accounting-only roots use their owning authority. The identifier is
 the mint, `NATIVE_SOL`, or the application's accounting quantity identifier.
-`name` is the name stored at registration. Solidity's `symbol` and `decimals`
-event fields are omitted because the current Solana registration stores neither;
-read them through [LedgerView](READS.md). No defaults are fabricated and no extra
-metadata accounts are required to emit a creation event.
+`name`, `symbol` and `decimals` are the stored registration snapshot, preserving
+the original Solidity creation metadata. External-token values come from the
+validated issuer source; accounting-only values come from the authorized caller.
+Native SOL stores `SOL`, `SOL`, `9`. Matching repeat registration emits no event.
 
 `SubAccountGroupAdded` also includes the relative identifier. It cannot be
 reconstructed from the name when an application supplies an independent identity.

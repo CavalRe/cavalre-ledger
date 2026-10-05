@@ -23,8 +23,7 @@ pub struct TokenBalances<A> {
 }
 
 /// Semantic Ledger events. The host owns encoding and delivery, not their rules.
-/// Creation identifies the root and asset/quantity; external token metadata is
-/// queried separately rather than guessed or required for event emission.
+/// Creation includes the metadata snapshot validated at registration.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event<A> {
     LedgerAdded {
@@ -32,6 +31,8 @@ pub enum Event<A> {
         authority: Option<A>,
         identifier: A,
         name: String,
+        symbol: String,
+        decimals: u8,
     },
     SubAccountAdded {
         ledger: A,
@@ -112,6 +113,8 @@ pub trait Host<A: Copy + Eq>: crate::ledger_view::ChildIndex<A> + Sized {
 pub enum Command<A> {
     Initialize {
         name: String,
+        symbol: String,
+        decimals: u8,
     },
     Add {
         child: Child<A>,
@@ -144,7 +147,11 @@ pub fn execute<A: Copy + Eq, H: Host<A>>(
     host.atomic(|host| {
         let authority = host.authenticate(Role::Authority, &command)?;
         match command {
-            Command::Initialize { name } => initialize(host, authority, name)?,
+            Command::Initialize {
+                name,
+                symbol,
+                decimals,
+            } => initialize(host, authority, name, symbol, decimals)?,
             Command::Add {
                 child,
                 name,
@@ -248,6 +255,8 @@ fn implicit<A: Copy + Eq, H: Host<A>>(host: &mut H, child: Child<A>) -> Result<A
             sub_index: 0,
             balances: Balances::default(),
             name: String::new(),
+            symbol: String::new(),
+            decimals: 0,
         };
         host.put(key, account)?;
     }
@@ -257,14 +266,37 @@ fn initialize<A: Copy + Eq, H: Host<A>>(
     host: &mut H,
     authority: A,
     name: String,
+    symbol: String,
+    decimals: u8,
 ) -> Result<(), H::Error> {
     valid_name(&name)?;
+    valid_name(&symbol)?;
     let root = host.root();
     if root.authority.is_some_and(|owner| owner != authority) {
         return Err(Error::Unauthorized.into());
     }
-    if host.account(&root.address)?.is_some() {
-        return Err(Error::InvalidAccount.into());
+    if let Some(existing) = host.account(&root.address)? {
+        let token_kind_matches = if root.authority.is_some() {
+            existing.flags.token_kind == TokenKind::Internal
+        } else {
+            matches!(
+                existing.flags.token_kind,
+                TokenKind::External | TokenKind::Native
+            )
+        };
+        if existing.registered
+            && existing.flags.depth == 2
+            && existing.flags.parent == root.parent
+            && existing.flags.account_kind == AccountKind::DebitGroup
+            && existing.relative == root.identifier
+            && token_kind_matches
+            && existing.name == name
+            && existing.symbol == symbol
+            && existing.decimals == decimals
+        {
+            return Ok(());
+        }
+        return Err(Error::MetadataConflict.into());
     }
     // Root is the parent account. Creating a ledger uses the same stored
     // child index as any other group; there is no second discovery registry.
@@ -289,6 +321,8 @@ fn initialize<A: Copy + Eq, H: Host<A>>(
                 sub_index: 0,
                 balances: Balances::default(),
                 name: lib::ROOT_NAME.into(),
+                symbol: String::new(),
+                decimals: 0,
             },
         )?;
     }
@@ -322,6 +356,8 @@ fn initialize<A: Copy + Eq, H: Host<A>>(
         sub_index: children,
         balances: Balances::default(),
         name: name.clone(),
+        symbol: symbol.clone(),
+        decimals,
     };
     host.put(root.address, account)?;
     let key = host.to_address(&root.address, &root.source);
@@ -342,6 +378,8 @@ fn initialize<A: Copy + Eq, H: Host<A>>(
             sub_index: 1,
             balances: Balances::default(),
             name: "Source".into(),
+            symbol: String::new(),
+            decimals: 0,
         },
     )?;
     host.set_child(root.parent, children - 1, Some(root.address))?;
@@ -358,6 +396,8 @@ fn initialize<A: Copy + Eq, H: Host<A>>(
         authority: root.authority,
         identifier: root.identifier,
         name,
+        symbol,
+        decimals,
     })
 }
 fn add_account<A: Copy + Eq, H: Host<A>>(

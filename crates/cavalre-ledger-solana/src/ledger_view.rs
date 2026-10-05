@@ -40,19 +40,23 @@ pub const fn native_decimals() -> u8 {
     9
 }
 
-enum SymbolSource {
+#[derive(Clone)]
+struct Labels {
+    name: String,
+    symbol: String,
+}
+enum MetadataSource {
     Undefined,
-    Inline(String),
+    Inline(Labels),
     Metaplex(Pubkey),
 }
 struct MintMetadata {
     decimals: u8,
-    // A broken/unsupported symbol must not prevent reading base-unit precision.
-    symbol: std::result::Result<SymbolSource, core::Error>,
+    // Unsupported metadata remains an error until the selected source is resolved.
+    labels: std::result::Result<MetadataSource, core::Error>,
 }
 
-// Decode only the shared metadata prefix, borrowing strings before returning the
-// symbol. URI, creators and arbitrary additional metadata need no heap copies.
+// Decode only the shared metadata prefix, borrowing name and symbol. URI, creators and arbitrary additional metadata need no heap copies.
 // The authenticated owner and source address are checked by callers first.
 fn metadata_prefix(data: &[u8]) -> std::result::Result<(Pubkey, &str, &str), core::Error> {
     fn string<'a>(data: &mut &'a [u8]) -> std::result::Result<&'a str, core::Error> {
@@ -76,7 +80,7 @@ fn mint_metadata(address: &Pubkey, owner: &Pubkey, data: &[u8]) -> Result<MintMe
         let mint = Mint::unpack(data).map_err(|_| error!(LedgerError::InvalidAccount))?;
         return Ok(MintMetadata {
             decimals: mint.decimals,
-            symbol: Ok(SymbolSource::Metaplex(metadata_address(address))),
+            labels: Ok(MetadataSource::Metaplex(metadata_address(address))),
         });
     }
     require_keys_eq!(
@@ -89,41 +93,44 @@ fn mint_metadata(address: &Pubkey, owner: &Pubkey, data: &[u8]) -> Result<MintMe
     let extensions = state
         .get_extension_types()
         .map_err(|_| error!(LedgerError::InvalidAccount))?;
-    let symbol = (|| {
+    let labels = (|| {
         if !extensions.contains(&ExtensionType::MetadataPointer) {
-            return Ok(SymbolSource::Metaplex(metadata_address(address)));
+            return Ok(MetadataSource::Metaplex(metadata_address(address)));
         }
         let pointer = state
             .get_extension::<MetadataPointer>()
             .map_err(|_| core::Error::InvalidMetadata)?;
         let Some(target) = Option::<Pubkey>::from(pointer.metadata_address) else {
-            return Ok(SymbolSource::Undefined);
+            return Ok(MetadataSource::Undefined);
         };
         if target == *address {
             if !extensions.contains(&ExtensionType::TokenMetadata) {
-                return Ok(SymbolSource::Undefined);
+                return Ok(MetadataSource::Undefined);
             }
             let data = state
                 .get_extension_bytes::<TokenMetadata>()
                 .map_err(|_| core::Error::InvalidMetadata)?;
-            let (mint, _, symbol) = metadata_prefix(data)?;
+            let (mint, name, symbol) = metadata_prefix(data)?;
             if mint != *address {
                 return Err(core::Error::InvalidMetadata);
             }
-            Ok(SymbolSource::Inline(symbol.to_owned()))
+            Ok(MetadataSource::Inline(Labels {
+                name: name.to_owned(),
+                symbol: symbol.to_owned(),
+            }))
         } else if target == metadata_address(address) {
-            Ok(SymbolSource::Metaplex(target))
+            Ok(MetadataSource::Metaplex(target))
         } else {
             Err(core::Error::UnsupportedMetadata)
         }
     })();
     Ok(MintMetadata {
         decimals: state.base.decimals,
-        symbol,
+        labels,
     })
 }
 
-fn metaplex_symbol(address: &Pubkey, data: &[u8]) -> Result<String> {
+fn metaplex_labels(address: &Pubkey, data: &[u8]) -> Result<Labels> {
     // Metaplex Key::MetadataV1 = 4. Its stable Borsh prefix is update authority,
     // mint, name and symbol. Later optional fields are irrelevant to this query.
     require!(data.first() == Some(&4), LedgerError::InvalidAccount);
@@ -138,7 +145,10 @@ fn metaplex_symbol(address: &Pubkey, data: &[u8]) -> Result<String> {
         name.len() <= 32 && symbol.len() <= 10,
         LedgerError::InvalidAccount
     );
-    Ok(symbol.trim_end_matches('\0').to_owned())
+    Ok(Labels {
+        name: name.trim_end_matches('\0').to_owned(),
+        symbol: symbol.trim_end_matches('\0').to_owned(),
+    })
 }
 
 pub fn account(info: &AccountInfo) -> Result<Record> {
@@ -162,7 +172,7 @@ pub struct Reader {
     records: BTreeMap<Pubkey, Option<Record>>,
     children: BTreeMap<Pubkey, ChildSlot>,
     mints: BTreeMap<Pubkey, MintMetadata>,
-    symbols: BTreeMap<Pubkey, String>,
+    metadata: BTreeMap<Pubkey, Labels>,
 }
 impl Reader {
     pub fn new() -> Self {
@@ -194,8 +204,8 @@ impl Reader {
             let record = decode_data(&address, owner, data)?;
             self.records.insert(address, Some(record));
         } else if *owner == METAPLEX_METADATA_PROGRAM {
-            let symbol = metaplex_symbol(&address, data)?;
-            self.symbols.insert(address, symbol);
+            let labels = metaplex_labels(&address, data)?;
+            self.metadata.insert(address, labels);
         } else {
             let metadata = mint_metadata(&address, owner, data)?;
             self.mints.insert(address, metadata);
@@ -210,6 +220,33 @@ impl Reader {
         Ok(())
     }
 
+    /// Read issuer metadata before creating an external-token ledger. Pointer
+    /// selection and source authentication are shared with all metadata decoding.
+    /// Ledger initialization validates and stores the returned snapshot.
+    pub fn external_metadata(
+        &self,
+        mint: &Pubkey,
+    ) -> std::result::Result<(String, String, u8), core::Error> {
+        let metadata = self.mint(mint)?;
+        let labels = match metadata.labels.as_ref().map_err(|e| *e)? {
+            MetadataSource::Undefined => return Err(core::Error::InvalidMetadata),
+            MetadataSource::Inline(labels) => labels,
+            MetadataSource::Metaplex(address) => {
+                self.metadata
+                    .get(address)
+                    .ok_or(if self.contains(address) {
+                        core::Error::InvalidMetadata
+                    } else {
+                        core::Error::MissingAccount
+                    })?
+            }
+        };
+        Ok((
+            labels.name.clone(),
+            labels.symbol.clone(),
+            metadata.decimals,
+        ))
+    }
     pub fn account_view(
         &self,
         ledger: &Pubkey,
@@ -232,15 +269,7 @@ impl Reader {
         self.records.contains_key(address)
             || self.children.contains_key(address)
             || self.mints.contains_key(address)
-            || self.symbols.contains_key(address)
-    }
-
-    fn root_record(&self, ledger: &Pubkey) -> std::result::Result<&Record, core::Error> {
-        view::total_supply(self, ledger)?;
-        self.records
-            .get(ledger)
-            .and_then(Option::as_ref)
-            .ok_or(core::Error::InvalidAccount)
+            || self.metadata.contains_key(address)
     }
 
     fn mint(&self, address: &Pubkey) -> std::result::Result<&MintMetadata, core::Error> {
@@ -332,46 +361,6 @@ impl Reader {
             }
         }
         Ok(roots)
-    }
-}
-impl view::TokenMetadata<Pubkey> for Reader {
-    fn token_symbol(&self, ledger: &Pubkey) -> std::result::Result<Option<String>, core::Error> {
-        let root = self.root_record(ledger)?;
-        match root.flags().token_kind {
-            core::TokenKind::Native => Ok(Some(native_symbol().into())),
-            core::TokenKind::Internal => Ok(None),
-            core::TokenKind::External => match self
-                .mint(&root.identifier)?
-                .symbol
-                .as_ref()
-                .map_err(|e| *e)?
-            {
-                SymbolSource::Undefined => Ok(None),
-                SymbolSource::Inline(symbol) => Ok(Some(symbol.clone())),
-                SymbolSource::Metaplex(address) => {
-                    if let Some(symbol) = self.symbols.get(address) {
-                        Ok(Some(symbol.clone()))
-                    } else if matches!(self.records.get(address), Some(None)) {
-                        Ok(None)
-                    } else if self.contains(address) {
-                        Err(core::Error::InvalidMetadata)
-                    } else {
-                        Err(core::Error::MissingAccount)
-                    }
-                }
-            },
-            core::TokenKind::Unregistered => Err(core::Error::InvalidAccount),
-        }
-    }
-
-    fn token_decimals(&self, ledger: &Pubkey) -> std::result::Result<Option<u8>, core::Error> {
-        let root = self.root_record(ledger)?;
-        match root.flags().token_kind {
-            core::TokenKind::Native => Ok(Some(native_decimals())),
-            core::TokenKind::Internal => Ok(None),
-            core::TokenKind::External => Ok(Some(self.mint(&root.identifier)?.decimals)),
-            core::TokenKind::Unregistered => Err(core::Error::InvalidAccount),
-        }
     }
 }
 impl core::AddressDerivation<Pubkey> for Reader {

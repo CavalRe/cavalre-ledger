@@ -42,7 +42,7 @@ remain available for reads.
 | --- | --- |
 | `account` / Solana `Reader::account_view` | Absolute/relative identities, ledger, effective flags, custody, registration, name, gross balances and parent admission status |
 | `name` | Registered name; empty for confirmed unregistered/absent accounts |
-| `symbol`, `decimals` | Root asset metadata through the read-only `TokenMetadata` provider; undefined fields return `None` |
+| `symbol`, `decimals` | Name, symbol and decimals are snapshots stored at ledger registration; no mint or metadata account is needed for these queries |
 | `debit_balance_of`, `credit_balance_of` | Current gross balances with ledger/parent validation |
 | `balance_of` | Debit minus credit for debit accounts; credit minus debit for credit accounts, using effective polarity |
 | `total_supply` | Root gross debits, as in the original Solidity view; not root net balance |
@@ -125,50 +125,45 @@ Views and Root decoding remain available with mutations excluded. See
 
 ## Asset metadata
 
-Native SOL roots are identified by `NATIVE_SOL` and report `TokenKind::Native`.
-Their gross/net balances and supply are expressed in lamports. `native_symbol()`
-returns `SOL` and `native_decimals()` returns `9`; root queries return those same
-values without requiring a mint account.
+Ledger stores `name`, `symbol` and `decimals` together at registration, following
+Solidity `addLedger` and `addExternalToken`. Name and symbol must contain 1–64
+UTF-8 bytes. Zero decimals is valid. Queries use only the ledger record; later
+issuer metadata changes do not alter the stored values. `symbol` and `decimals`
+retain their existing optional Rust return types for compatibility, but a valid
+initialized ledger has both values, including accounting-only ledgers.
 
-`Reader::symbol(&root)` returns `Result<Option<String>, Error>` and
-`Reader::decimals(&root)` returns `Result<Option<u8>, Error>`. Supply the root
-record and its mint through `insert` or `from_account_infos`. A decimals query
-requires only the mint, whose address must match the root's asset identifier and
-whose owner/layout must be the classic SPL or Token-2022 program. Zero decimals
-is valid. Decimals describe raw base units; interest/scaled-UI extensions do not
-change this value or Ledger's accounting units.
+`add_ledger(id, name, symbol, decimals)` accepts explicit metadata from the
+accounting ledger's authenticated authority. Native SOL stores `SOL`, `SOL`, `9`.
+`add_external_token()` accepts no caller-supplied metadata. It reads mint decimals
+and authenticated issuer metadata using the following source rules:
 
-| Symbol source | Validation and selection |
+| Token metadata source | Registration behavior |
 | --- | --- |
-| Classic SPL | Canonical Metaplex PDA derived from the root's mint; Metaplex owner, MetadataV1 discriminator and embedded mint must match |
-| Token-2022, no metadata pointer | Same canonical Metaplex source |
-| Token-2022, pointer to itself | Read the mint's TokenMetadata extension and verify its embedded mint |
-| Token-2022, pointer to canonical Metaplex account | Read that authenticated Metaplex account |
-| Token-2022, cleared pointer or self-pointer without initialized metadata | `None` |
-| Token-2022, pointer to another metadata format | `UnsupportedMetadata`; decimals and balance queries remain available |
+| Classic SPL | Requires the canonical Metaplex metadata PDA for the mint |
+| Token-2022 without a metadata pointer | Requires canonical Metaplex metadata |
+| Token-2022 pointing to itself | Requires inline TokenMetadata with matching mint |
+| Token-2022 pointing to canonical Metaplex | Requires that account; inline metadata does not override the pointer |
+| Cleared pointer or missing inline metadata | Rejects registration |
+| Another metadata format | Rejects as unsupported |
 
-The pointer takes precedence over any old inline or Metaplex symbol. Metaplex
-strings have trailing NUL padding removed. Symbols are issuer-controlled labels,
-not unique token identities. The reader borrows the published metadata prefix
-(authority, mint, name, symbol), validates its lengths and UTF-8, and copies only
-the returned symbol. It does not fetch URI content or copy unrelated metadata.
+Supply required Metaplex metadata as a readonly remaining account. Its owner,
+PDA, discriminator, embedded mint, UTF-8 and string lengths are validated.
+Metaplex's own limits of 32 name bytes and 10 symbol bytes apply; trailing NUL
+padding is removed. Inline Token-2022 fields use Ledger's 64-byte limits. Empty,
+missing, forged or malformed required metadata cannot create a ledger, Source,
+child index entry or vault. All initialization effects roll back on rejection.
+URI contents and unrelated optional metadata fields are not fetched.
 
-For a required Metaplex account, omitted input is `MissingAccount`. Confirmed
-absence supplied through `insert_missing` (or an empty System-owned runtime
-account) yields `None`. A missing/closed mint cannot establish decimals and is an
-error. Wrong owners/addresses and malformed data reject; a malformed inline
-symbol yields `InvalidMetadata` without preventing a decimals query. Read all
-inputs at one snapshot and construct a new reader after mint/metadata updates.
+`Reader::external_metadata(mint)` exposes the authenticated issuer fields for
+pre-registration reads; it requires the mint and selected metadata source.
+This is distinct from stored ledger metadata. Ledger initialization applies the
+name/symbol validity rules to those fields and saves the snapshot.
 
-Accounting-only roots return `None` for both fields because their current record
-format defines neither. No symbol is derived from a name and no precision is
-invented. Queries accept ledger roots, not descendants; callers that have a leaf
-use their known root. This explicitly differs from Solidity's stored per-address
-metadata getters. Existing `name` continues to return Ledger's stored name.
-
-Metadata reads add no record fields, token-admission rules or metadata write
-instructions. Custom metadata formats and accounting-only
-metadata configuration remain outside this implementation.
+Matching repeated registration is a successful no-op, with no new allocation,
+child index changes or creation events. Conflicting name, symbol or decimals
+reject. External registration re-reads issuer metadata on each request, as the
+original Solidity does: if an issuer changes it after initial registration,
+registration rejects the conflict while existing Ledger reads remain unchanged.
 
 Sources: [Solana metadata pointers](https://solana.com/docs/tokens/extensions/metadata),
 [Metaplex metadata layout](https://github.com/metaplex-foundation/mpl-token-metadata/blob/main/clients/rust/src/generated/accounts/metadata.rs).

@@ -16,14 +16,13 @@ pub mod cavalre_ledger_solana {
         ctx: Context<'info, RegisterLedger<'info>>,
         id: Pubkey,
         name: String,
+        symbol: String,
+        decimals: u8,
     ) -> Result<()> {
-        ledger::add_ledger(&ctx, id, name)
+        ledger::add_ledger(&ctx, id, name, symbol, decimals)
     }
-    pub fn add_external_token<'info>(
-        ctx: Context<'info, RegisterToken<'info>>,
-        name: String,
-    ) -> Result<()> {
-        ledger::add_external_token(ctx, name)
+    pub fn add_external_token<'info>(ctx: Context<'info, RegisterToken<'info>>) -> Result<()> {
+        ledger::add_external_token(ctx)
     }
     pub fn add_native_sol<'info>(ctx: Context<'info, RegisterSol<'info>>) -> Result<()> {
         ledger::add_native_sol(ctx)

@@ -194,7 +194,7 @@ impl Profile {
 
     fn exercise(&mut self) {
         let external = (self.mode != "internal")
-            .then(|| External::named(&mut self.h, 100 + self.seed * 2, 1, &"T".repeat(64)));
+            .then(|| External::named(&mut self.h, 100 + self.seed * 2, 1, &"T".repeat(32)));
         let (root, source) = external
             .as_ref()
             .map(|e| (e.root, e.source))

@@ -5,9 +5,9 @@ artifacts before running tests. Runtime tests load those artifacts into LiteSVM;
 they do not substitute native Rust handlers. This is local runtime validation,
 not a deployed-cluster test or a security audit.
 
-There are 90 test functions: 31 core tests (including 14 independent host
+There are 96 test functions: 32 core tests (including 15 independent host
 tests and ten view tests), six Solana address/effective-flag tests, thirteen Solana
-view/metadata/Root tests and 40 runtime tests. View suites also run with mutations excluded;
+view/metadata/Root tests and 45 runtime tests. View suites also run with mutations excluded;
 those repeat executions are not additional test functions.
 One core test replays all 162 saved Solidity posting
 cases, including expected rejections and every node's resulting gross balances.
@@ -19,7 +19,7 @@ original runtime scenarios are in [ledger.rs](../tests/runtime/ledger.rs).
 
 | Area | Runtime evidence |
 | --- | --- |
-| Global Root | Internal, classic SPL, Token-2022 and native SOL ledgers are discovered through ordinary Root child queries. Failed first/later initialization, duplicate creation, fake/readonly Root and child-count overflow reject atomically. Stale append-slot inputs reject atomically and succeed after refreshing the required slot. Posting leaves Root unchanged and does not need it as an input. |
+| Global Root | Internal, classic SPL, Token-2022 and native SOL ledgers are discovered through ordinary Root child queries. Failed first/later initialization, conflicting repeated creation, fake/readonly Root and child-count overflow reject atomically. Stale append-slot inputs reject atomically and succeed after refreshing the required slot. Posting leaves Root unchanged and does not need it as an input. |
 | Application authentication | An application PDA creates its branch through CPI; another program cannot sign for it; its administrator wallet cannot substitute for it when withdrawing. |
 | Distinct token payer | The application PDA and a separate token owner authorize funding together. Missing payer signatures and a generic SPL delegation do not authorize the deposit. Withdrawal needs no recipient signature. |
 | Tree authority | Another branch cannot be created, captured, mutated or removed by an unrelated authority. Applications cannot create external-token credits or mutate reserved Source metadata. |
@@ -66,12 +66,14 @@ duplicate input, invalid children and incomplete snapshots, and preserve page
 bounds. The independent host verifies that Root's child count and ledger/Source
 creation roll back together.
 
-Metadata tests cover native SOL, undefined internal metadata, zero decimals,
-canonical Metaplex sources, Token-2022 pointer precedence, malformed/spoofed
-sources and missing versus confirmed absent metadata. The runtime consumer reads
-a mint initialized by the actual Token-2022 program using only readonly,
-nonsigner query accounts, without invoking Ledger. After a token metadata update,
-a fresh read returns the updated symbol while preserving mint and Ledger state.
+Metadata tests cover stored external, native SOL and explicit accounting-only
+metadata; zero decimals; authenticated Metaplex/Token-2022 sources; pointer
+precedence; malformed/spoofed sources; and missing, empty and overlong fields.
+Runtime tests verify atomic rejection, stored snapshots after issuer updates,
+and matching repeated internal, classic SPL, Token-2022 and native SOL creation
+without writes, rent allocation or events. Conflicting metadata rejects. The
+runtime consumer reads stored metadata using only the ledger record, without
+invoking Ledger. Inline issuer updates execute the actual Token-2022 program.
 
 Event tests preserve original Source/ledger initialization order, structural
 registration/removal and silent no-ops. Core tests verify posting order, gross
@@ -121,8 +123,7 @@ apply monetary admission policy to removal.
   remain useful additional coverage.
 - Core balance/account query semantics and the independent read boundary are
   implemented, including native/token symbol and decimals queries. Custom metadata
-  formats, accounting-only metadata configuration, a complete Solana root-discovery
-  client remain; see READS.md. Event semantics and compatibility decisions are
+  formats and a complete Solana root-discovery client remain; see READS.md. Event semantics and compatibility decisions are
   documented in EVENTS.md. Shared account lifecycle,
   admission, authority and settlement policy live in the core.
 - Arbitrary deeper workflows, additional CPI layers, versioned/batched transactions

@@ -46,6 +46,12 @@ fn root(scope: Pubkey, mint: Pubkey) -> (Pubkey, Vec<u8>) {
         identifier: mint,
         bump,
         sub_index: 1,
+        symbol: if mint == NATIVE_SOL {
+            "SOL".into()
+        } else {
+            "CACHED".into()
+        },
+        decimals: if mint == NATIVE_SOL { 9 } else { 3 },
     };
     let mut data = vec![0; 512];
     data[..8].copy_from_slice(b"CVLEDG01");
@@ -120,7 +126,7 @@ fn metaplex(mint: Pubkey) -> Vec<u8> {
 }
 
 #[test]
-fn native_internal_and_nonroot_queries_do_not_invent_metadata() {
+fn native_internal_and_external_queries_read_stored_metadata() {
     let (reader, native) = reader(NATIVE_SOL);
     assert_eq!(native_symbol(), "SOL");
     assert_eq!(native_decimals(), 9);
@@ -129,8 +135,8 @@ fn native_internal_and_nonroot_queries_do_not_invent_metadata() {
     let (internal, data) = root(key(1), key(2));
     let mut reader = Reader::new();
     reader.insert(internal, &ID, &data).unwrap();
-    assert_eq!(reader.symbol(&internal), Ok(None));
-    assert_eq!(reader.decimals(&internal), Ok(None));
+    assert_eq!(reader.symbol(&internal), Ok(Some("CACHED".into())));
+    assert_eq!(reader.decimals(&internal), Ok(Some(3)));
     assert_eq!(reader.name(&internal), Ok("Ledger name".into()));
     assert_eq!(reader.symbol(&key(8)), Err(CoreError::MissingAccount));
     reader.insert_missing(key(8)).unwrap();
@@ -141,8 +147,11 @@ fn native_internal_and_nonroot_queries_do_not_invent_metadata() {
 fn classic_metadata_checks_canonical_source_and_distinguishes_missing_from_absent() {
     let mint = key(2);
     for decimals in [0, 6, 9, 255] {
-        let (mut reader, root) = reader(mint);
-        assert_eq!(reader.decimals(&root), Err(CoreError::MissingAccount));
+        let mut reader = Reader::new();
+        assert_eq!(
+            reader.external_metadata(&mint),
+            Err(CoreError::MissingAccount)
+        );
         reader
             .insert(
                 mint,
@@ -150,8 +159,10 @@ fn classic_metadata_checks_canonical_source_and_distinguishes_missing_from_absen
                 &plain_mint(decimals),
             )
             .unwrap();
-        assert_eq!(reader.decimals(&root), Ok(Some(decimals)));
-        assert_eq!(reader.symbol(&root), Err(CoreError::MissingAccount));
+        assert_eq!(
+            reader.external_metadata(&mint),
+            Err(CoreError::MissingAccount)
+        );
         reader
             .insert(
                 metadata_address(&mint),
@@ -159,9 +170,12 @@ fn classic_metadata_checks_canonical_source_and_distinguishes_missing_from_absen
                 &metaplex(mint),
             )
             .unwrap();
-        assert_eq!(reader.symbol(&root), Ok(Some("SPL".into())));
+        assert_eq!(
+            reader.external_metadata(&mint),
+            Ok(("Token name".into(), "SPL".into(), decimals))
+        );
     }
-    let (mut reader, root) = reader(mint);
+    let mut reader = Reader::new();
     reader
         .insert(
             mint,
@@ -170,28 +184,27 @@ fn classic_metadata_checks_canonical_source_and_distinguishes_missing_from_absen
         )
         .unwrap();
     reader.insert_missing(metadata_address(&mint)).unwrap();
-    assert_eq!(reader.symbol(&root), Ok(None));
-    assert_eq!(reader.decimals(&root), Ok(Some(6)));
-    assert!(reader
-        .insert(
-            metadata_address(&mint),
-            &METAPLEX_METADATA_PROGRAM,
-            &metaplex(mint)
-        )
-        .is_err());
+    assert_eq!(
+        reader.external_metadata(&mint),
+        Err(CoreError::InvalidMetadata)
+    );
 }
 
 #[test]
-fn token2022_pointer_selects_metadata_and_does_not_fall_back_to_stale_inline_symbols() {
+fn token2022_pointer_selects_metadata_and_does_not_fall_back_to_stale_inline_fields() {
     let mint = key(2);
     for (target, inline, expected) in [
-        (Some(mint), true, Ok(Some("T22".into()))),
-        (Some(mint), false, Ok(None)),
-        (None, true, Ok(None)),
-        (Some(metadata_address(&mint)), true, Ok(Some("SPL".into()))),
+        (Some(mint), true, Ok(("Token name".into(), "T22".into(), 6))),
+        (Some(mint), false, Err(CoreError::InvalidMetadata)),
+        (None, true, Err(CoreError::InvalidMetadata)),
+        (
+            Some(metadata_address(&mint)),
+            true,
+            Ok(("Token name".into(), "SPL".into(), 6)),
+        ),
         (Some(key(3)), true, Err(CoreError::UnsupportedMetadata)),
     ] {
-        let (mut reader, root) = reader(mint);
+        let mut reader = Reader::new();
         reader
             .insert(
                 mint,
@@ -206,10 +219,9 @@ fn token2022_pointer_selects_metadata_and_does_not_fall_back_to_stale_inline_sym
                 &metaplex(mint),
             )
             .unwrap();
-        assert_eq!(reader.symbol(&root), expected);
-        assert_eq!(reader.decimals(&root), Ok(Some(6)));
+        assert_eq!(reader.external_metadata(&mint), expected);
     }
-    let (mut reader, root) = reader(mint);
+    let mut reader = Reader::new();
     reader
         .insert(mint, &spl_token_2022_interface::ID, &plain_mint(0))
         .unwrap();
@@ -220,8 +232,10 @@ fn token2022_pointer_selects_metadata_and_does_not_fall_back_to_stale_inline_sym
             &metaplex(mint),
         )
         .unwrap();
-    assert_eq!(reader.symbol(&root), Ok(Some("SPL".into())));
-    assert_eq!(reader.decimals(&root), Ok(Some(0)));
+    assert_eq!(
+        reader.external_metadata(&mint),
+        Ok(("Token name".into(), "SPL".into(), 0))
+    );
 }
 
 #[test]
@@ -272,7 +286,7 @@ fn metadata_rejects_spoofed_sources_mints_discriminators_and_truncated_strings()
 }
 
 #[test]
-fn malformed_inline_metadata_does_not_block_decimals_or_ledger_balances() {
+fn malformed_issuer_metadata_cannot_change_stored_metadata_or_balances() {
     use spl_token_2022_interface::extension::BaseStateWithExtensions;
     let mint = key(2);
     for wrong_mint in [false, true] {
@@ -290,8 +304,12 @@ fn malformed_inline_metadata_does_not_block_decimals_or_ledger_balances() {
         reader
             .insert(mint, &spl_token_2022_interface::ID, &data)
             .unwrap();
-        assert_eq!(reader.symbol(&root), Err(CoreError::InvalidMetadata));
-        assert_eq!(reader.decimals(&root), Ok(Some(6)));
+        assert_eq!(
+            reader.external_metadata(&mint),
+            Err(CoreError::InvalidMetadata)
+        );
+        assert_eq!(reader.symbol(&root), Ok(Some("CACHED".into())));
+        assert_eq!(reader.decimals(&root), Ok(Some(3)));
         assert_eq!(reader.total_supply(&root), Ok(0));
     }
     // A real mint for another asset cannot fill the selected root's missing mint.
@@ -299,7 +317,11 @@ fn malformed_inline_metadata_does_not_block_decimals_or_ledger_balances() {
     reader
         .insert(key(3), &spl_token_2022_interface::ID, &plain_mint(6))
         .unwrap();
-    assert_eq!(reader.decimals(&root), Err(CoreError::MissingAccount));
+    assert_eq!(
+        reader.external_metadata(&mint),
+        Err(CoreError::MissingAccount)
+    );
+    assert_eq!(reader.decimals(&root), Ok(Some(3)));
 }
 
 #[test]
@@ -323,8 +345,8 @@ fn runtime_account_infos_read_metadata_with_no_signers_writes_or_mutation_module
         })
         .collect();
     let reader = Reader::from_account_infos(&infos).unwrap();
-    assert_eq!(reader.symbol(&root), Ok(Some("T22".into())));
-    assert_eq!(reader.decimals(&root), Ok(Some(6)));
+    assert_eq!(reader.symbol(&root), Ok(Some("CACHED".into())));
+    assert_eq!(reader.decimals(&root), Ok(Some(3)));
     drop(infos);
     assert_eq!(entries, before);
 }

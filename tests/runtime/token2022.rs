@@ -20,7 +20,7 @@ fn data(h: &mut Harness, address: Address, bytes: Vec<u8>) {
 }
 
 // Initialize mint, optional metadata, immutable wallet and supply through Token-2022.
-fn initialized(h: &mut Harness, metadata: bool) -> External {
+pub(super) fn initialized(h: &mut Harness, metadata: bool) -> External {
     let e = External::setup(h, 60, 1, TOKEN_2022);
     let program = ap(TOKEN_2022);
     let mint = ap(e.mint);
@@ -98,7 +98,7 @@ fn plain_and_metadata_tokens_settle_directly_and_through_cpi() {
         for cpi in [false, true] {
             let mut h = Harness::new();
             let e = initialized(&mut h, metadata);
-            let i = e.registration(&h, "Token-2022");
+            let i = e.registration(&h);
             succeeds(&mut h, &[0], i);
             assert_eq!(h.svm.get_account(&e.vault).unwrap().owner, TOKEN_2022);
             let app = Address::new_from_array([62; 32]);
@@ -181,7 +181,7 @@ fn metadata_views_execute_in_a_consumer_without_calling_ledger() {
     use anchor_lang::AnchorDeserialize;
     let mut h = Harness::new();
     let e = initialized(&mut h, true);
-    let i = e.registration(&h, "Token-2022");
+    let i = e.registration(&h);
     succeeds(&mut h, &[0], i);
     let consumer = Address::new_from_array([62; 32]);
     h.svm
@@ -196,10 +196,7 @@ fn metadata_views_execute_in_a_consumer_without_calling_ledger() {
         .unwrap();
     let read = Instruction {
         program_id: consumer,
-        accounts: vec![
-            AccountMeta::new_readonly(e.root, false),
-            AccountMeta::new_readonly(e.mint, false),
-        ],
+        accounts: vec![AccountMeta::new_readonly(e.root, false)],
         data: b"metadata".to_vec(),
     };
     for symbol in ["META", "UPDATED"] {
@@ -221,7 +218,8 @@ fn metadata_views_execute_in_a_consumer_without_calling_ledger() {
         assert_eq!(result.return_data.program_id, consumer);
         let fields =
             <(Option<String>, Option<u8>)>::deserialize(&mut &result.return_data.data[..]).unwrap();
-        assert_eq!(fields, (Some(symbol.into()), Some(6)));
+        assert_eq!(fields, (Some("META".into()), Some(6)));
+        assert_eq!(h.record(e.root).name, "Metadata token");
         assert!(!result
             .logs
             .iter()
@@ -287,7 +285,7 @@ fn incompatible_mints_reject_registration_without_allocating_ledger_state() {
         let mut h = Harness::new();
         let e = External::setup(&mut h, 60, 1, TOKEN_2022);
         mint_extension(&mut h, &e, extension);
-        let i = e.registration(&h, "Unsupported");
+        let i = e.registration(&h);
         rejects(&mut h, &[0], i, LedgerError::UnsupportedToken.into());
         for address in [e.root, e.source, e.vault] {
             assert!(h.svm.get_account(&address).is_none());
@@ -304,7 +302,7 @@ fn ui_amount_extensions_preserve_raw_unit_settlement() {
         let mut h = Harness::new();
         let e = External::setup(&mut h, 60, 1, TOKEN_2022);
         mint_extension(&mut h, &e, extension);
-        let i = e.registration(&h, "Raw units");
+        let i = e.registration(&h);
         succeeds(&mut h, &[0], i);
         let parent = branch(&mut h, e.root, 0, true);
         let user = h.key(2);
@@ -327,7 +325,7 @@ fn ui_amount_extensions_preserve_raw_unit_settlement() {
 fn mint_and_account_extensions_are_rechecked_on_each_settlement() {
     let mut h = Harness::new();
     let e = initialized(&mut h, false);
-    let i = e.registration(&h, "Token");
+    let i = e.registration(&h);
     succeeds(&mut h, &[0], i);
     let parent = branch(&mut h, e.root, 0, true);
     let user = h.key(2);
@@ -374,7 +372,7 @@ fn mint_and_account_extensions_are_rechecked_on_each_settlement() {
 fn token_program_must_match_mint_vault_and_wallet() {
     let mut h = Harness::new();
     let e = initialized(&mut h, false);
-    let mut i = e.registration(&h, "Token");
+    let mut i = e.registration(&h);
     for account in &mut i.accounts {
         if account.pubkey == TOKEN_2022 {
             account.pubkey = TOKEN;
@@ -383,7 +381,7 @@ fn token_program_must_match_mint_vault_and_wallet() {
     // Anchor initializes the vault before running non-init constraints. The
     // selected token program rejects the foreign mint; all allocation rolls back.
     rejects_with_error(&mut h, &[0], i, InstructionError::IncorrectProgramId);
-    let i = e.registration(&h, "Token");
+    let i = e.registration(&h);
     succeeds(&mut h, &[0], i);
     let parent = branch(&mut h, e.root, 0, true);
     let user = h.key(2);
@@ -419,7 +417,7 @@ fn token_program_must_match_mint_vault_and_wallet() {
 fn failed_token2022_settlement_and_late_commit_roll_back() {
     let mut h = Harness::new();
     let e = initialized(&mut h, true);
-    let i = e.registration(&h, "Token");
+    let i = e.registration(&h);
     succeeds(&mut h, &[0], i);
     let parent = branch(&mut h, e.root, 0, true);
     let user = h.key(2);

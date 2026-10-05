@@ -17,6 +17,9 @@ pub struct Account<A, Name = String> {
     pub sub_index: u32,
     pub balances: Balances,
     pub name: Name,
+    /// Ledger metadata snapshot; empty/zero on non-ledger accounts.
+    pub symbol: Name,
+    pub decimals: u8,
 }
 
 impl<A: Copy, Name: AsRef<str>> Account<A, Name> {
@@ -32,11 +35,13 @@ impl<A: Copy, Name: AsRef<str>> Account<A, Name> {
             sub_index: self.sub_index,
             balances: self.balances,
             name: self.name.as_ref(),
+            symbol: self.symbol.as_ref(),
+            decimals: self.decimals,
         }
     }
 }
 
-impl<A, Name> Account<A, Name> {
+impl<A, Name: AsRef<str>> Account<A, Name> {
     /// Supply an owned name only when creating or changing account metadata.
     pub fn with_name(self, name: String) -> Account<A> {
         Account {
@@ -49,6 +54,8 @@ impl<A, Name> Account<A, Name> {
             sub_index: self.sub_index,
             balances: self.balances,
             name,
+            symbol: String::from(self.symbol.as_ref()),
+            decimals: self.decimals,
         }
     }
 }

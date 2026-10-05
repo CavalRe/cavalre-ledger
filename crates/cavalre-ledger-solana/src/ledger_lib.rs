@@ -70,6 +70,8 @@ pub struct Record {
     pub bump: u8,
     /// One-based child position, zero for unregistered leaves and global Root.
     pub sub_index: u32,
+    pub symbol: String,
+    pub decimals: u8,
 }
 impl Record {
     pub fn flags(&self) -> core::Flags<Pubkey> {
@@ -134,6 +136,8 @@ pub fn decode_data(address: &Pubkey, owner: &Pubkey, data: &[u8]) -> Result<Reco
         r.kind <= 3
             && r.depth >= 1
             && r.name.len() <= 64
+            && r.symbol.len() <= 64
+            && (r.depth != 2 || !r.symbol.is_empty())
             && if r.registered && r.depth > 1 {
                 r.sub_index > 0
             } else {
@@ -193,6 +197,8 @@ impl Record {
                 credit: self.credit,
             },
             name: &self.name,
+            symbol: &self.symbol,
+            decimals: self.decimals,
         }
     }
 }

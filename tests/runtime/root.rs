@@ -12,6 +12,8 @@ fn add_internal(h: &Harness, id: Address, source: bool) -> Instruction {
         instruction::AddLedger {
             id: ap(id),
             name: "Units".into(),
+            symbol: "UNIT".into(),
+            decimals: 6,
         },
         &if source {
             vec![child(root, sa(SOURCE))]
@@ -26,7 +28,7 @@ fn all_ledger_kinds_are_discovered_as_root_children() {
     let (internal, _) = h.internal();
     let classic = External::new(&mut h, 60, 0);
     let token2022 = External::setup(&mut h, 61, 0, TOKEN_2022);
-    let registration = token2022.registration(&h, "Token2022");
+    let registration = token2022.registration(&h);
     succeeds(&mut h, &[0], registration);
     let native =
         sa(ledger::ledger_lib::root_address(&ap(SYSTEM), &ledger::ledger_lib::NATIVE_SOL).0);
@@ -123,7 +125,7 @@ fn root_child_creation_is_atomic_and_stale_append_positions_are_rejected() {
         &mut h,
         &[0],
         duplicate,
-        LedgerError::InvalidAccount as u32 + 6000,
+        LedgerError::MetadataConflict as u32 + 6000,
     );
     let failed = add_internal(&h, Address::new_from_array([99; 32]), false);
     rejects(

@@ -10,7 +10,7 @@ proof of complete parity with this baseline.
 | --- | --- | --- |
 | `LedgerLib.sol` | `cavalre-ledger-core/src/ledger_lib.rs` | Identity, effective flags, custody lookup and posting walk implemented |
 | `Ledger.sol` | Core `ledger.rs`, plus the Solana host adapter | Shared account management, permissions, transfers and settlement policy implemented |
-| `LedgerView.sol` | Core and Solana `ledger_view.rs` | Independent account, balance, custody, registered-child queries, including ledger discovery through Root; metadata differences documented in READS.md |
+| `LedgerView.sol` | Core and Solana `ledger_view.rs` | Independent account, balance, custody, registered-child queries, including ledger discovery through Root; stored metadata snapshots and issuer-source rules documented in READS.md |
 | `ILedger` / `LedgerLib` events | Core `ledger::Event`, host `emit`, Solana Anchor events | Original structural and posting event families; payload adaptations and transaction-status requirements in EVENTS.md |
 
 The reusable core holds shared rules and the `Host` interface without platform dependencies.

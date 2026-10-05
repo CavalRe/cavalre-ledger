@@ -76,6 +76,8 @@ impl Fixture {
             identifier: mint,
             bump,
             sub_index: 1,
+            symbol: "UNIT".into(),
+            decimals: 6,
         };
         let mut records = vec![stored(root, base.clone())];
         let (source, bump) = to_address(&ID, &root, &SOURCE);
