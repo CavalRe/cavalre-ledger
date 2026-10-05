@@ -83,6 +83,32 @@ pub fn name<A: Copy + Eq>(store: &impl ReadStore<A>, absolute: &A) -> Result<Str
         .map(|a| String::from(a.name))
         .unwrap_or_default())
 }
+
+/// Authenticated asset metadata from the same snapshot as the ledger records.
+/// None means the field is undefined; missing input or invalid sources are errors.
+/// Hosts supply native values and token metadata without a mutation/settlement host.
+pub trait TokenMetadata<A: Copy + Eq>: ReadStore<A> {
+    fn token_symbol(&self, ledger: &A) -> Result<Option<String>, Error>;
+    fn token_decimals(&self, ledger: &A) -> Result<Option<u8>, Error>;
+}
+
+/// Asset metadata belongs to a ledger root, not an application or leaf.
+pub fn symbol<A: Copy + Eq>(
+    store: &impl TokenMetadata<A>,
+    ledger: &A,
+) -> Result<Option<String>, Error> {
+    root(store, ledger)?;
+    store.token_symbol(ledger)
+}
+
+/// Base-unit precision, not a UI scaling multiplier. Zero decimals is valid.
+pub fn decimals<A: Copy + Eq>(
+    store: &impl TokenMetadata<A>,
+    ledger: &A,
+) -> Result<Option<u8>, Error> {
+    root(store, ledger)?;
+    store.token_decimals(ledger)
+}
 pub fn debit_balance_of<A: Copy + Eq>(
     store: &impl ReadStore<A>,
     ledger: &A,

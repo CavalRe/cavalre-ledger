@@ -10,6 +10,25 @@ use anchor_lang::solana_program::{
 #[cfg(not(feature = "no-entrypoint"))]
 anchor_lang::solana_program::entrypoint!(process);
 pub fn process(id: &Pubkey, accounts: &[AccountInfo], data: &[u8]) -> ProgramResult {
+    if data == b"metadata" {
+        use anchor_lang::AnchorSerialize;
+        use cavalre_ledger_solana::ledger_view::Reader;
+        let root = accounts
+            .first()
+            .ok_or(ProgramError::NotEnoughAccountKeys)?
+            .key;
+        let reader = Reader::from_account_infos(accounts)?;
+        let symbol = reader
+            .symbol(root)
+            .map_err(|_| ProgramError::InvalidAccountData)?;
+        let decimals = reader
+            .decimals(root)
+            .map_err(|_| ProgramError::InvalidAccountData)?;
+        let mut bytes = Vec::new();
+        (symbol, decimals).serialize(&mut bytes)?;
+        anchor_lang::solana_program::program::set_return_data(&bytes);
+        return Ok(());
+    }
     let [user, program, rest @ ..] = accounts else {
         return Err(ProgramError::NotEnoughAccountKeys);
     };

@@ -176,6 +176,66 @@ fn plain_and_metadata_tokens_settle_directly_and_through_cpi() {
     }
 }
 
+#[test]
+fn metadata_views_execute_in_a_consumer_without_calling_ledger() {
+    use anchor_lang::AnchorDeserialize;
+    let mut h = Harness::new();
+    let e = initialized(&mut h, true);
+    let i = e.registration(&h, "Token-2022");
+    succeeds(&mut h, &[0], i);
+    let consumer = Address::new_from_array([62; 32]);
+    h.svm
+        .add_program(
+            consumer,
+            &std::fs::read(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../target/deploy/cavalre_ledger_test_consumer.so"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let read = Instruction {
+        program_id: consumer,
+        accounts: vec![
+            AccountMeta::new_readonly(e.root, false),
+            AccountMeta::new_readonly(e.mint, false),
+        ],
+        data: b"metadata".to_vec(),
+    };
+    for symbol in ["META", "UPDATED"] {
+        if symbol == "UPDATED" {
+            let ix = spl_token_metadata_interface::instruction::update_field(
+                &ap(TOKEN_2022),
+                &ap(e.mint),
+                &ap(h.key(0)),
+                spl_token_metadata_interface::state::Field::Symbol,
+                symbol.into(),
+            );
+            succeeds(&mut h, &[0], ix);
+        }
+        let before = (
+            h.svm.get_account(&e.root).unwrap(),
+            h.svm.get_account(&e.mint).unwrap(),
+        );
+        let result = run(&mut h, &[0], read.clone()).unwrap();
+        assert_eq!(result.return_data.program_id, consumer);
+        let fields =
+            <(Option<String>, Option<u8>)>::deserialize(&mut &result.return_data.data[..]).unwrap();
+        assert_eq!(fields, (Some(symbol.into()), Some(6)));
+        assert!(!result
+            .logs
+            .iter()
+            .any(|line| line.contains(&format!("Program {} invoke", cavalre_ledger_solana::ID))));
+        assert_eq!(
+            (
+                h.svm.get_account(&e.root).unwrap(),
+                h.svm.get_account(&e.mint).unwrap()
+            ),
+            before
+        );
+    }
+}
+
 // Deliberately constructed extension states exercise admission, not mint permissions.
 fn mint_extension(h: &mut Harness, e: &External, extension: ExtensionType) {
     let base =

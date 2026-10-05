@@ -63,15 +63,15 @@ external paths diverge immediately below the shared application group.
 
 | Leaf depth | Maximum compute units | Maximum transaction bytes | Maximum account keys | Maximum writable keys |
 | --- | ---: | ---: | ---: | ---: |
-| 4 | 110406 | 793 | 15 | 7 |
+| 4 | 110405 | 793 | 15 | 7 |
 | 5 | 92427 | 826 | 16 | 8 |
-| 6 | 109514 | 859 | 17 | 10 |
-| 7 | 139525 | 892 | 18 | 12 |
+| 6 | 109513 | 859 | 17 | 10 |
+| 7 | 139524 | 892 | 18 | 12 |
 | 8 | 151965 | 925 | 19 | 14 |
-| 9 | 160021 | 967 | 20 | 16 |
-| 10 | 187051 | 1033 | 22 | 18 |
-| 11 | 191768 | 1099 | 24 | 20 |
-| 12 | 201175 | 1165 | 26 | 22 |
+| 9 | 160020 | 967 | 20 | 16 |
+| 10 | 187050 | 1033 | 22 | 18 |
+| 11 | 191767 | 1099 | 24 | 20 |
+| 12 | 201174 | 1165 | 26 | 22 |
 | 13 | 214247 | 1231 | 28 | 24 |
 
 Each column is its own maximum across that depth's measured operations. Compute
@@ -88,10 +88,10 @@ as test setup; all Ledger tree state is created through actual instructions.
 
 | Operation at depth 13 | Maximum compute units | Maximum bytes | New storage funding (SOL) |
 | --- | ---: | ---: | ---: |
-| Create group | 94868 | 858 | 0.0044544 |
-| Create registered leaf | 90117 | 890 | 0.0044544 |
-| First deposit / Source issuance | 154825 | 1090 | 0.0044544 |
-| Repeated deposit / Source issuance | 148389 | 1090 | 0 |
+| Create group | 94867 | 858 | 0.0044544 |
+| Create registered leaf | 90116 | 890 | 0.0044544 |
+| First deposit / Source issuance | 154824 | 1090 | 0.0044544 |
+| Repeated deposit / Source issuance | 148388 | 1090 | 0 |
 | First transfer to implicit leaf | 206090 | 1231 | 0.0044544 |
 | Repeated transfer | 199557 | 1231 | 0 |
 | Transfer between registered leaves | 199651 | 1231 | 0 |

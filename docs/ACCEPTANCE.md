@@ -5,9 +5,9 @@ artifacts before running tests. Runtime tests load those artifacts into LiteSVM;
 they do not substitute native Rust handlers. This is local runtime validation,
 not a deployed-cluster test or a security audit.
 
-There are 64 test functions: 23 core tests (including eight independent host
-tests and eight view tests), six Solana address/effective-flag tests, four Solana
-view tests and 31 runtime tests. View suites also run with mutations excluded;
+There are 72 test functions: 24 core tests (including eight independent host
+tests and nine view tests), six Solana address/effective-flag tests, ten Solana
+view/metadata tests and 32 runtime tests. View suites also run with mutations excluded;
 those repeat executions are not additional test functions.
 One core test replays all 162 saved Solidity posting
 cases, including expected rejections and every node's resulting gross balances.
@@ -58,6 +58,13 @@ nonsigner accounts and verifies that neither bytes nor lamports change. A runtim
 test also reads actual persisted records after a withdrawal is rejected for
 insufficient total backing.
 
+Metadata tests cover native SOL, undefined internal metadata, zero decimals,
+canonical Metaplex sources, Token-2022 pointer precedence, malformed/spoofed
+sources and missing versus confirmed absent metadata. The runtime consumer reads
+a mint initialized by the actual Token-2022 program using only readonly,
+nonsigner query accounts, without invoking Ledger. After a token metadata update,
+a fresh read returns the updated symbol while preserving mint and Ledger state.
+
 The execution suite measures 2205 transactions across sampled depths, direct
 calls, application CPI and internal debit/credit postings. It checks signed
 packet size, compute headroom, first-use rent and final accounting balances.
@@ -96,7 +103,8 @@ apply monetary admission policy to removal.
   conformance. Randomized operation sequences and broader adversarial review
   remain useful additional coverage.
 - Core balance/account query semantics and the independent read boundary are
-  implemented. Token/native metadata parity, a complete Solana root-discovery
+  implemented, including native/token symbol and decimals queries. Custom metadata
+  formats, accounting-only metadata configuration, a complete Solana root-discovery
   client and event compatibility remain; see READS.md. Shared account lifecycle,
   admission, authority and settlement policy live in the core.
 - Arbitrary deeper workflows, additional CPI layers, versioned/batched transactions

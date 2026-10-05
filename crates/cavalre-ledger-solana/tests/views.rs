@@ -1,4 +1,4 @@
-//! Also compiled and run without the mutating program or SPL dependency.
+//! Also compiled and run without the mutating program or Anchor SPL movement dependency.
 use anchor_lang::{prelude::*, AnchorSerialize};
 use cavalre_ledger_core::ledger_lib::Error as CoreError;
 use cavalre_ledger_solana::{

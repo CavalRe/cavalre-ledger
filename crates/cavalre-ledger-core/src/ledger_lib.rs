@@ -135,6 +135,8 @@ pub enum Error {
     Undercollateralized,
     IncompleteIndex,
     InvalidIndex,
+    InvalidMetadata,
+    UnsupportedMetadata,
 }
 
 /// Host-specific deterministic address derivation. The implementation must bind

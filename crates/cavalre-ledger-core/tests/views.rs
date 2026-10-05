@@ -357,3 +357,53 @@ fn queries_validate_root_parent_and_registered_leaf_eligibility_as_parent() {
     );
     assert_eq!(view::total_supply(&state, &app), Err(Error::InvalidAccount));
 }
+
+#[test]
+fn metadata_queries_validate_roots_and_preserve_undefined_zero_and_errors() {
+    struct Metadata {
+        state: Snapshot,
+        symbol: Result<Option<String>, Error>,
+        decimals: Option<u8>,
+    }
+    impl AddressDerivation<u64> for Metadata {
+        fn to_address(&self, parent: &u64, relative: &u64) -> u64 {
+            self.state.to_address(parent, relative)
+        }
+    }
+    impl ReadStore<u64> for Metadata {
+        fn account(&self, key: &u64) -> Result<Option<Account<u64, &str>>, Error> {
+            self.state.account(key)
+        }
+    }
+    impl view::TokenMetadata<u64> for Metadata {
+        fn token_symbol(&self, _: &u64) -> Result<Option<String>, Error> {
+            self.symbol.clone()
+        }
+        fn token_decimals(&self, _: &u64) -> Result<Option<u8>, Error> {
+            Ok(self.decimals)
+        }
+    }
+    let mut store = Metadata {
+        state: snapshot(),
+        symbol: Ok(Some("UNIT".into())),
+        decimals: Some(0),
+    };
+    assert_eq!(view::symbol(&store, &ROOT), Ok(Some("UNIT".into())));
+    assert_eq!(view::decimals(&store, &ROOT), Ok(Some(0)));
+    assert_eq!(
+        view::symbol(&store, &addr(ROOT, APP)),
+        Err(Error::InvalidAccount)
+    );
+    assert_eq!(
+        view::decimals(&store, &addr(ROOT, APP)),
+        Err(Error::InvalidAccount)
+    );
+    store.symbol = Ok(None);
+    store.decimals = None;
+    assert_eq!(view::symbol(&store, &ROOT), Ok(None));
+    assert_eq!(view::decimals(&store, &ROOT), Ok(None));
+    store.symbol = Err(Error::MissingAccount);
+    assert_eq!(view::symbol(&store, &ROOT), Err(Error::MissingAccount));
+    store.symbol = Err(Error::InvalidMetadata);
+    assert_eq!(view::symbol(&store, &ROOT), Err(Error::InvalidMetadata));
+}

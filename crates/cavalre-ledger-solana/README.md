@@ -166,8 +166,10 @@ confidential transfers, nontransferable/pausable tokens, default account states,
 CPI guards and memo requirements. This version has no settlement mechanism for
 those configurations. Fee and hook extensions are rejected even when their
 current fee is zero or their hook is disabled. Unknown extension data cannot
-silently become supported. Metadata support here is custody compatibility;
-completing metadata queries is separate work.
+silently become supported. Custody compatibility is independent of symbol
+availability. `LedgerView` reads native SOL metadata, mint decimals, Metaplex
+symbols and Token-2022 inline symbols; see [read interfaces](../../docs/READS.md)
+for source validation, metadata pointers and undefined-field behavior.
 
 Both token programs retain their own mint/freeze authority behavior. Runtime
 settlement failures roll back token movement, accounting and new allocations.

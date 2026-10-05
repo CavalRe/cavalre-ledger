@@ -24,6 +24,12 @@ membership but do not enforce mutation permission or monetary admission. A
 restricted implicit leaf remains readable. `None` from `ReadStore::account`
 means confirmed absence; unavailable state must return an error.
 
+`symbol` and `decimals` validate a ledger root and read through the optional
+`TokenMetadata` trait. The host authenticates each metadata source and returns
+`None` for undefined fields, errors for missing/invalid input, and the actual
+base-unit precision (including zero). This adds no platform types, stored fields
+or metadata requirement to accounting-only hosts.
+
 `ReadStore::account` returns `Account<A, &str>` with a borrowed name. Flags,
 custody and balance reads use this borrowed projection and allocate nothing.
 `Account<A>` still defaults to an owned `String` for creation and metadata
