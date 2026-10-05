@@ -549,11 +549,17 @@ fn apply<A: Copy + Eq, H: Host<A>>(
     amount: u128,
 ) -> Result<(), H::Error> {
     for change in changes {
-        let account = get(host, &change.absolute)?;
-        if account.balances != change.before {
+        let balances = host
+            .account(&change.absolute)?
+            .map(|account| account.balances)
+            .unwrap_or_default();
+        if balances != change.before {
             return Err(Error::Accounting.into());
         }
-        host.set_balances(change.absolute, change.after)?;
+        // Zero postings still emit their original events, but need no storage.
+        if change.before != change.after {
+            host.set_balances(change.absolute, change.after)?;
+        }
         // The write buffer retains original walk order. When opposite-polarity
         // paths share an ancestor, both columns change: Credit precedes Debit.
         if let Some(side) = change.credit {
@@ -601,8 +607,12 @@ fn transfer<A: Copy + Eq, H: Host<A>>(
         )
     }
     .map_err(|_| Error::Accounting)?;
-    implicit(host, from)?;
-    implicit(host, to)?;
+    // The validated walk is empty for self-transfers. Zero-amount walks retain
+    // posting events, but neither case needs endpoint allocation.
+    if amount != 0 && !changes.is_empty() {
+        implicit(host, from)?;
+        implicit(host, to)?;
+    }
     apply(host, changes, amount)
 }
 fn move_tokens<A: Copy + Eq, H: Host<A>>(
@@ -665,6 +675,8 @@ fn move_tokens<A: Copy + Eq, H: Host<A>>(
     if !exact || after.asset != before.asset || after.owner != before.owner {
         return Err(Error::Settlement.into());
     }
-    implicit(host, child)?;
+    if amount != 0 {
+        implicit(host, child)?;
+    }
     apply(host, changes, amount)
 }

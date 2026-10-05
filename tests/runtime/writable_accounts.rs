@@ -44,6 +44,203 @@ fn readonly(ix: &mut Instruction, key: Address) {
     }
 }
 
+#[test]
+fn zero_and_self_transfers_leave_absent_accounts_unallocated_and_only_charge_fees() {
+    use anchor_lang::Event;
+    use ledger::ledger::{Credit, Debit};
+    let mut h = Harness::new();
+    let e = External::new(&mut h, 210, 0);
+    let app = branch(&mut h, e.root, 0, true);
+    let a = h.key(1);
+    let b = h.key(2);
+    let from = child(app, a);
+    let to = child(app, b);
+    let parent_before = [e.root, app].map(|key| h.svm.get_account(&key));
+    for receiver in [b, a] {
+        // Construct the intended read-only transaction independently of the
+        // planner, so a regression in both cannot hide unnecessary allocation.
+        let mut ix = transfer(&h, e.root, h.key(0), (app, a), (app, receiver), 0, &[]);
+        for meta in ix.accounts.iter_mut().skip(2) {
+            meta.is_writable = false;
+        }
+        let payer_before = h.svm.get_account(&h.key(0)).unwrap().lamports;
+        let result = run(&mut h, &[0], ix).unwrap();
+        assert_eq!(
+            h.svm.get_account(&h.key(0)).unwrap().lamports + result.fee,
+            payer_before
+        );
+        assert_eq!(
+            events::event_bytes(&result.logs),
+            if receiver == a {
+                vec![]
+            } else {
+                vec![
+                    Credit {
+                        ledger: ap(e.root),
+                        account: ap(from),
+                        amount: 0,
+                        balance: 0,
+                    }
+                    .data(),
+                    Debit {
+                        ledger: ap(e.root),
+                        account: ap(to),
+                        amount: 0,
+                        balance: 0,
+                    }
+                    .data(),
+                ]
+            }
+        );
+        assert!(h.svm.get_account(&from).is_none());
+        assert!(h.svm.get_account(&to).is_none());
+        assert_eq!(
+            [e.root, app].map(|key| h.svm.get_account(&key)),
+            parent_before
+        );
+    }
+    // The helper must agree even when both endpoints have no storage.
+    let ix = planned(
+        &h,
+        transfer(&h, e.root, h.key(0), (app, a), (app, b), 0, &[]),
+    );
+    check_plan(&mut h, ix, &[]);
+    // A self-transfer still checks the public debit sender's available balance.
+    let ix = planned(
+        &h,
+        transfer(&h, e.root, h.key(0), (app, a), (app, a), 1, &[]),
+    );
+    rejects(&mut h, &[0], ix, LedgerError::Accounting.into());
+    // Zero amounts do not bypass custody or parent admission.
+    let ix = planned(
+        &h,
+        transfer(&h, e.root, h.key(1), (app, a), (app, b), 0, &[]),
+    );
+    rejects(&mut h, &[0, 1], ix, LedgerError::Accounting.into());
+    let closed = add_group(&mut h, e.root, app, 212, &[app]);
+    // Create a separate registered-only group; the existing group's policy is immutable.
+    let relative = Address::new_from_array([213; 32]);
+    let create = group(&h, e.root, h.key(0), closed, relative, false, &[app]);
+    succeeds(&mut h, &[0], create);
+    let restricted = child(closed, relative);
+    let ix = planned(
+        &h,
+        transfer(
+            &h,
+            e.root,
+            h.key(0),
+            (restricted, a),
+            (restricted, b),
+            0,
+            &[app, closed],
+        ),
+    );
+    rejects(&mut h, &[0], ix, LedgerError::InvalidAccount.into());
+}
+
+#[test]
+fn zero_mint_burn_preserve_events_without_allocating_or_writing_ledger_records() {
+    use anchor_lang::Event;
+    use ledger::ledger::{Credit, Debit};
+    let mut h = Harness::new();
+    let (root, source) = h.internal();
+    let relative = h.key(1);
+    let leaf = child(root, relative);
+    for mint in [true, false] {
+        let (from, to) = if mint {
+            ((root, sa(SOURCE)), (root, relative))
+        } else {
+            ((root, relative), (root, sa(SOURCE)))
+        };
+        let ix = planned(&h, transfer(&h, root, h.key(0), from, to, 0, &[]));
+        assert!(ix.accounts.iter().skip(2).all(|meta| !meta.is_writable));
+        let before = [root, source].map(|key| h.svm.get_account(&key));
+        let result = run(&mut h, &[0], ix).unwrap();
+        let (from, to) = if mint { (source, leaf) } else { (leaf, source) };
+        assert_eq!(
+            events::event_bytes(&result.logs),
+            vec![
+                Credit {
+                    ledger: ap(root),
+                    account: ap(from),
+                    amount: 0,
+                    balance: 0
+                }
+                .data(),
+                Debit {
+                    ledger: ap(root),
+                    account: ap(to),
+                    amount: 0,
+                    balance: 0
+                }
+                .data(),
+                Credit {
+                    ledger: ap(root),
+                    account: ap(root),
+                    amount: 0,
+                    balance: 0
+                }
+                .data(),
+                Debit {
+                    ledger: ap(root),
+                    account: ap(root),
+                    amount: 0,
+                    balance: 0
+                }
+                .data(),
+            ]
+        );
+        assert!(h.svm.get_account(&leaf).is_none());
+        assert_eq!([root, source].map(|key| h.svm.get_account(&key)), before);
+    }
+}
+
+#[test]
+fn zero_token_settlement_keeps_absent_receiver_unallocated_and_checks_funder() {
+    for token_program in [TOKEN, TOKEN_2022] {
+        let mut h = Harness::new();
+        let e = External::setup(&mut h, 220, 0, token_program);
+        // Match the runtime's rent-exempt marker before comparing full account
+        // snapshots; the generic token fixture starts with rent_epoch = 0.
+        let mut wallet = h.svm.get_account(&e.wallet).unwrap();
+        wallet.rent_epoch = u64::MAX;
+        h.svm.set_account(e.wallet, wallet).unwrap();
+        h.metadata(e.mint, "Token", "TOK");
+        let register = e.registration(&h);
+        succeeds(&mut h, &[0], register);
+        let app = branch(&mut h, e.root, 0, true);
+        let relative = h.key(2);
+        let receiver = child(app, relative);
+        let before = [e.root, e.source, app, e.wallet, e.vault].map(|key| h.svm.get_account(&key));
+        for deposit in [true, false] {
+            let mut ix = e.movement(&h, (h.key(0), 0), (app, relative), 0, deposit, &[]);
+            // Custody's fixed root/vault/wallet declarations remain unchanged.
+            for key in [e.source, app, receiver] {
+                readonly(&mut ix, key);
+            }
+            let payer_before = h.svm.get_account(&h.key(0)).unwrap().lamports;
+            let result = run(&mut h, &[0], ix).unwrap();
+            assert_eq!(
+                h.svm.get_account(&h.key(0)).unwrap().lamports + result.fee,
+                payer_before
+            );
+            assert!(h.svm.get_account(&receiver).is_none());
+            assert_eq!(
+                [e.root, e.source, app, e.wallet, e.vault].map(|key| h.svm.get_account(&key)),
+                before
+            );
+            assert_eq!(events::event_bytes(&result.logs).len(), 5);
+        }
+        let wrong_funder = e.movement(&h, (h.key(0), 1), (app, relative), 0, true, &[]);
+        rejects(
+            &mut h,
+            &[0, 1],
+            wrong_funder,
+            LedgerError::Unauthorized.into(),
+        );
+    }
+}
+
 fn check_plan(h: &mut Harness, ix: Instruction, expected: &[Address]) {
     let mut actual: Vec<_> = ix
         .accounts

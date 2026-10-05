@@ -205,10 +205,19 @@ fn transfer_write_planning_preserves_cancellation_and_distinguishes_absent_stora
         parent: app,
         relative: 22,
     };
-    // Current service allocates absent endpoints even on zero/self transfers.
+    assert!(
+        view::transfer_writable_accounts(&state, &ROOT, from, absent, 0)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        view::transfer_writable_accounts(&state, &ROOT, absent, absent, 10)
+            .unwrap()
+            .is_empty()
+    );
     assert_eq!(
-        view::transfer_writable_accounts(&state, &ROOT, from, absent, 0).unwrap(),
-        vec![addr(app, 22)]
+        view::transfer_writable_accounts(&state, &ROOT, from, absent, 10).unwrap(),
+        vec![addr(app, 20), addr(app, 22)]
     );
     let source = Child {
         parent: ROOT,

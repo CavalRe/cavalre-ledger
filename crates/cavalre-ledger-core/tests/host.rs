@@ -45,6 +45,7 @@ struct MemoryHost {
     fail_commit: bool,
     short_receipt: bool,
     authenticated_deposit: Option<u128>,
+    record_writes: usize,
 }
 impl MemoryHost {
     fn new(internal: bool) -> Self {
@@ -72,6 +73,7 @@ impl MemoryHost {
             fail_commit: false,
             short_receipt: false,
             authenticated_deposit: None,
+            record_writes: 0,
         }
     }
     fn initialize(&mut self, implicit: bool) -> u64 {
@@ -138,6 +140,7 @@ impl Host<u64> for MemoryHost {
     }
     fn put(&mut self, absolute: u64, account: Account<u64>) -> Result<(), Failure> {
         assert!(self.active);
+        self.record_writes += 1;
         self.accounts.insert(absolute, account);
         Ok(())
     }
@@ -146,6 +149,7 @@ impl Host<u64> for MemoryHost {
     }
     fn set_balances(&mut self, address: u64, balances: Balances) -> Result<(), Failure> {
         assert!(self.active);
+        self.record_writes += 1;
         self.accounts
             .get_mut(&address)
             .ok_or(Error::MissingAccount)?
@@ -685,6 +689,76 @@ fn debit(account: u64, amount: u128, balance: u128) -> Event<u64> {
         account,
         amount,
         balance,
+    }
+}
+
+#[test]
+fn no_balance_change_needs_no_record_writes_or_endpoint_storage() {
+    for internal in [false, true] {
+        let mut host = MemoryHost::new(internal);
+        let parent = host.initialize(true);
+        let before = host.accounts.clone();
+        let writes = host.record_writes;
+        let from = child(parent, USER);
+        let to = child(parent, USER + 1);
+        host.events.clear();
+        execute(
+            &mut host,
+            Command::Transfer {
+                from,
+                to,
+                amount: 0,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            host.events,
+            vec![
+                credit(address(parent, USER), 0, 0),
+                debit(address(parent, USER + 1), 0, 0)
+            ]
+        );
+        host.events.clear();
+        execute(
+            &mut host,
+            Command::Transfer {
+                from,
+                to: from,
+                amount: 0,
+            },
+        )
+        .unwrap();
+        assert!(host.events.is_empty());
+        if internal {
+            // Original internal same-account posting is a no-op after validation.
+            execute(
+                &mut host,
+                Command::Transfer {
+                    from,
+                    to: from,
+                    amount: 1,
+                },
+            )
+            .unwrap();
+        } else {
+            assert_eq!(
+                execute(
+                    &mut host,
+                    Command::Transfer {
+                        from,
+                        to: from,
+                        amount: 1
+                    }
+                ),
+                Err(Failure::Rule(Error::Accounting))
+            );
+            // Zero settlement still authenticates its payer and checks exact deltas.
+            host.move_funds(parent, 0, true).unwrap();
+            host.move_funds(parent, 0, false).unwrap();
+            assert!(host.payer_checks.get() > 0);
+        }
+        assert_eq!(host.accounts, before);
+        assert_eq!(host.record_writes, writes);
     }
 }
 

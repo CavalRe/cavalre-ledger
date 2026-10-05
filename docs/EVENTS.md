@@ -41,6 +41,8 @@ way up the tree, regardless of ancestor group classifications. `balance` is that
 column's resulting gross balance, never the net balance. Self-transfers emit no
 Ledger debit/credit events, after the required authorization and balance checks.
 Zero-amount transfers between distinct endpoints still emit their posting events.
+These events do not require Ledger writes or endpoint allocation. An absent
+endpoint's resulting balance is zero; existing balances remain unchanged.
 
 ## Explicit compatibility decisions
 

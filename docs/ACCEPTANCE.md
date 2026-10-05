@@ -129,8 +129,11 @@ apply monetary admission policy to removal.
 - Arbitrary deeper workflows, additional CPI layers, versioned/batched transactions
   and cluster throughput are not established by these measurements. Minimal-write
   runtime tests cover read-only common ancestors, equal/unequal-depth debit paths,
-  credit paths, opposite-polarity mint/burn, zero/self transfers with existing
-  storage, CPI and tree mutations. Each planned record write is tested for atomic
+  credit paths, opposite-polarity mint/burn, zero/self transfers with existing or
+  absent storage, CPI and tree mutations. No-op tests verify event contents,
+  unchanged records, no endpoint allocation and fee-only payer debits. Zero
+  custody operations cover classic SPL Token, Token-2022 and native SOL.
+  Each planned record write is tested for atomic
   rejection when omitted. Shared non-Ledger writable accounts can still serialize
   transactions.
 - Production identity, upgrade authority, deployment tooling and a deployed

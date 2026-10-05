@@ -163,8 +163,11 @@ instruction-building examples in `tests/runtime/ledger.rs`.
 need write access from a consistent snapshot. Same-polarity paths stop below
 their lowest common ancestor, so that ancestor, the app group and token root
 can remain read-only when unchanged. Opposite-polarity postings change both
-gross columns through the token root. Missing endpoint storage requires write
-access for allocation. The helper reuses the core posting walk; it does not
+gross columns through the token root. Changed absent endpoints require write
+access for allocation. Zero-amount and self-transfers allocate no storage and
+need no writable Ledger records, including when endpoints are absent. All
+required checks still run, and zero-amount posting events are preserved. The
+transaction fee payer remains writable. The helper reuses the core posting walk; it does not
 grant authority or replace runtime validation. See [client planning](../../docs/READS.md#transfer-write-planning)
 and executable minimal-permission examples in `tests/runtime/writable_accounts.rs`.
 
@@ -173,6 +176,8 @@ including the token root when modifying its direct children. With generated
 `LedgerAccounts` metas, explicitly mark that root writable for such operations
 and for mint/burn transfers. Matching no-op mutations require no record writes.
 Registration and custody settlement retain their writable root declarations.
+Zero-amount custody operations also avoid endpoint allocation, while retaining
+their token/System calls, settlement checks and fixed account declarations.
 Existing clients that supply extra writable accounts still work, but retain
 those unnecessary transaction locks.
 

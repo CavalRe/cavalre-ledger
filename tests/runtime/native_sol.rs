@@ -91,6 +91,34 @@ fn lamports(h: &Harness, address: Address) -> u64 {
 }
 
 #[test]
+fn zero_sol_settlement_never_allocates_receiver_storage() {
+    let mut h = Harness::new();
+    let sol = Sol::new(&mut h);
+    let app = branch(&mut h, sol.root, 0, true);
+    let receiver = h.key(2);
+    let leaf = child(app, receiver);
+    let before =
+        [sol.root, sol.source, app, sol.vault, h.key(1)].map(|key| h.svm.get_account(&key));
+    for deposit in [true, false] {
+        let mut ix = sol.movement(&h, (h.key(0), 1), h.key(1), (app, receiver), 0, deposit);
+        for meta in &mut ix.accounts {
+            if [sol.source, app, leaf].contains(&meta.pubkey) {
+                meta.is_writable = false;
+            }
+        }
+        let payer_before = lamports(&h, h.key(0));
+        let result = run(&mut h, &[0, 1], ix).unwrap();
+        assert_eq!(lamports(&h, h.key(0)) + result.fee, payer_before);
+        assert!(h.svm.get_account(&leaf).is_none());
+        assert_eq!(
+            [sol.root, sol.source, app, sol.vault, h.key(1)].map(|key| h.svm.get_account(&key)),
+            before
+        );
+        assert_eq!(super::events::event_bytes(&result.logs).len(), 5);
+    }
+}
+
+#[test]
 fn native_sol_round_trip_with_distinct_payer_and_unsigned_recipient_direct_and_cpi() {
     for cpi in [false, true] {
         let mut h = Harness::new();

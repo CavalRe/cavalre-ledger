@@ -79,8 +79,8 @@ pub fn account<A: Copy + Eq>(
 
 /// Ledger records a transfer needs writable in this snapshot. Reuse the exact
 /// posting walk, including effective flags and common-ancestor cancellation.
-/// Include absent endpoints for the service's implicit storage allocation;
-/// allocated, unchanged records need no write access, even for zero/self transfers.
+/// Changed absent endpoints need storage allocation. Zero/self transfers return
+/// no record writes, including when the endpoints have no storage yet.
 /// This plans account access, not authorization or custody settlement. The host
 /// must revalidate current state and reject any required write not supplied.
 pub fn transfer_writable_accounts<A: Copy + Eq>(
@@ -107,17 +107,11 @@ pub fn transfer_writable_accounts<A: Copy + Eq>(
         },
         amount,
     )?;
-    let mut writable: Vec<_> = changes
+    Ok(changes
         .into_iter()
         .filter(|change| change.before != change.after)
         .map(|change| change.absolute)
-        .collect();
-    for absolute in [source.absolute, destination.absolute] {
-        if store.account(&absolute)?.is_none() && !writable.contains(&absolute) {
-            writable.push(absolute);
-        }
-    }
-    Ok(writable)
+        .collect())
 }
 
 pub fn name<A: Copy + Eq>(store: &impl ReadStore<A>, absolute: &A) -> Result<String, Error> {

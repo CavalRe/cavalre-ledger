@@ -68,8 +68,11 @@ For same-polarity transfers, both paths stop below their lowest common ancestor.
 That ancestor and everything above it remain read-only. For opposite-polarity
 postings, both gross columns change through the token ledger root. Records
 already allocated but unchanged need no write access. Absent endpoints are
-included for storage allocation, including the service's current zero/self
-transfer allocation behavior. Storage allocation does not register a leaf.
+included only when a posting changes their balance and therefore needs storage.
+Zero-amount and self-transfers return an empty Ledger write set even when the
+endpoints have no storage. Authorization, admission and applicable balance
+checks still run; zero-amount posting events are preserved. Storage allocation
+does not register a leaf.
 
 ```rust,ignore
 use cavalre_ledger_solana::ledger_lib::Child;
