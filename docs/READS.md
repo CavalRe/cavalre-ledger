@@ -41,7 +41,7 @@ remain available for reads.
 | Query | Behavior |
 | --- | --- |
 | `account` / Solana `Reader::account_view` | Absolute/relative identities, ledger, effective flags, custody, registration, name, gross balances and parent admission status |
-| `name` | Registered name; empty for confirmed unregistered/absent accounts |
+| `name` | Registered name, which may be empty for a leaf; also empty for confirmed unregistered/absent accounts. Use `account_view.registered` to determine registration. |
 | `symbol`, `decimals` | Name, symbol and decimals are snapshots stored at ledger registration; no mint or metadata account is needed for these queries |
 | `debit_balance_of`, `credit_balance_of` | Current gross balances with ledger/parent validation |
 | `balance_of` | Debit minus credit for debit accounts; credit minus debit for credit accounts, using effective polarity |

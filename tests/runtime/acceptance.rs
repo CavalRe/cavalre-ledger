@@ -514,6 +514,85 @@ fn transfers_require_same_custodian_leaf_kind_membership_and_self_transfer_funds
 }
 
 #[test]
+fn registered_leaf_labels_allow_empty_names_and_keep_the_byte_limit() {
+    let mut h = Harness::new();
+    let (root, source) = h.internal();
+    let relative = h.key(1);
+    let account = child(root, relative);
+    let fund = transfer(
+        &h,
+        root,
+        h.key(0),
+        (root, sa(SOURCE)),
+        (root, relative),
+        17,
+        &[],
+    );
+    succeeds(&mut h, &[0], fund);
+    let register = leaf(&h, root, h.key(0), root, relative, "", false);
+    succeeds(&mut h, &[0], register.clone());
+    let record = h.record(account);
+    assert!(record.registered);
+    assert!(record.name.is_empty());
+    assert_eq!((record.kind, record.debit, record.sub_index), (2, 17, 2));
+    let mut reader = ledger::ledger_view::Reader::new();
+    for key in [root, account] {
+        let a = h.svm.get_account(&key).unwrap();
+        reader.insert(ap(key), &ap(a.owner), &a.data).unwrap();
+    }
+    let view = reader
+        .account_view(&ap(root), &ap(root), &ap(relative))
+        .unwrap();
+    assert!(view.registered);
+    assert!(view.name.is_empty());
+    assert_eq!(view.balances.debit, 17);
+    // Matching empty-label registration retains funded state, index and rent.
+    let before = [root, source, account].map(|key| h.svm.get_account(&key));
+    let payer_before = h.svm.get_account(&h.key(0)).unwrap().lamports;
+    let repeat = run(&mut h, &[0], register).unwrap();
+    assert!(events::event_bytes(&repeat.logs).is_empty());
+    assert_eq!(
+        h.svm.get_account(&h.key(0)).unwrap().lamports + repeat.fee,
+        payer_before
+    );
+    assert_eq!(
+        [root, source, account].map(|key| h.svm.get_account(&key)),
+        before
+    );
+    let conflict = leaf(&h, root, h.key(0), root, relative, "Changed", false);
+    rejects(&mut h, &[0], conflict, LedgerError::MetadataConflict.into());
+    let credit_relative = h.key(2);
+    let credit = leaf(&h, root, h.key(0), root, credit_relative, "", true);
+    succeeds(&mut h, &[0], credit);
+    assert_eq!(h.record(child(root, credit_relative)).kind, 3);
+    // Names are bounded in UTF-8 bytes, not characters.
+    let long_relative = Address::new_from_array([231; 32]);
+    let max_name = "é".repeat(32);
+    let named = leaf(&h, root, h.key(0), root, long_relative, &max_name, false);
+    succeeds(&mut h, &[0], named);
+    assert_eq!(h.record(child(root, long_relative)).name, max_name);
+    let invalid_relative = Address::new_from_array([232; 32]);
+    for name in ["N".repeat(65), "é".repeat(33)] {
+        let invalid = leaf(&h, root, h.key(0), root, invalid_relative, &name, false);
+        rejects(&mut h, &[0], invalid, LedgerError::InvalidName.into());
+    }
+    for name in [String::new(), "N".repeat(65)] {
+        let invalid = ix(
+            base(&h, root, h.key(0)),
+            instruction::AddSubAccountGroup {
+                parent: ap(root),
+                relative: ap(invalid_relative),
+                name,
+                credit: false,
+                implicit_allowed: true,
+            },
+            &[child(root, invalid_relative)],
+        );
+        rejects(&mut h, &[0], invalid, LedgerError::InvalidName.into());
+    }
+}
+
+#[test]
 fn registration_preserves_funded_implicit_balances_and_checks_repeated_calls() {
     let mut h = Harness::new();
     let e = External::new(&mut h, 60, 0);

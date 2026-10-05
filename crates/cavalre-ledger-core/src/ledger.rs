@@ -408,7 +408,10 @@ fn add_account<A: Copy + Eq, H: Host<A>>(
     kind: AccountKind,
     implicit_allowed: bool,
 ) -> Result<(), H::Error> {
-    valid_name(&name)?;
+    // Groups require names; explicit-address leaves may have an empty label.
+    if kind.is_group() || !name.is_empty() {
+        valid_name(&name)?;
+    }
     authorize(host, authority, child)?;
     ordinary(host.root(), child)?;
     let parent = get(host, &child.parent)?;

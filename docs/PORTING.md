@@ -60,6 +60,11 @@ The original `transfer` ancestor walk is the source for the new accounting
 implementation. The old Rust arithmetic can help compare results, but does not
 define the new structure or permissions.
 
+Registered group names require 1–64 UTF-8 bytes. Explicit-address leaf labels
+allow 0–64 bytes. Allowing an empty leaf label follows the original overload;
+retaining a maximum length for leaves is an intentional product policy. The
+original explicit-address leaf overload did not impose that length limit.
+
 Rust and Agave pins, the sBPF build/stack checks, and the original Solidity
 reference tooling remain in the working tree. Old deployment scripts and
 program identities were removed because they target the superseded program.

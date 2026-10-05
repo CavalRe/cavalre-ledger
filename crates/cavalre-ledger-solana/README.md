@@ -280,7 +280,9 @@ and [Token-2022 extensions](https://solana.com/docs/tokens/extensions).
   root depth 2. Applications must budget their complete transactions, including
   other instructions and CPI calls. See [execution measurements](../../docs/EXECUTION_LIMITS.md)
   for compute, signed packet sizes, rent and client construction guidance.
-- Names are bounded to 64 bytes. External mint decimals come from the mint.
+- Group names require 1–64 UTF-8 bytes; registered leaf labels allow 0–64 bytes.
+  An empty leaf label does not affect registration, identity or permissions.
+  External mint decimals come from the mint.
   Internal units are raw integers; presentation precision is application policy.
 - No deployed service, production program identity or upgrade authority has been
   selected. The checked-in ID and test-consumer identities are simulation-only.
