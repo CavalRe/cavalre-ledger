@@ -12,7 +12,13 @@ import json
 with open("target/execution-profile.json") as stream:
     rows = json.load(stream)
 assert rows and all(row["status"] == "ok" for row in rows)
-print(f"\n{len(rows)} measured transactions; signed legacy packets; 300000 CU budget.")
+v0 = [row for row in rows if row["format"] == "v0"]
+print(f"\n{len(rows)} measured transactions; {len(rows)-len(v0)} signed legacy, "
+      f"{len(v0)} signed v0/lookup-table packets; 300000 CU budget.")
+print(f"Largest legacy encoding: {max(row['legacy_bytes'] for row in rows)} bytes.")
+print("Lookup table setup is measured separately; aggregate fees "
+      f"{sum(row['lookup_setup_fee_lamports'] for row in rows)} lamports, "
+      f"storage funding {sum(row['lookup_setup_rent_lamports'] for row in rows)} lamports.")
 print("\n| Leaf depth | Max CU | Max bytes | Max account keys | Max writable keys |")
 print("| --- | --- | --- | --- | --- |")
 for depth in sorted({row["depth"] for row in rows}):

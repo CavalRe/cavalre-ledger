@@ -5,8 +5,8 @@ artifacts before running tests. Runtime tests load those artifacts into LiteSVM;
 they do not substitute native Rust handlers. This is local runtime validation,
 not a deployed-cluster test or a security audit.
 
-There are 126 test functions: 37 core tests, 26 Solana library tests and
-63 runtime tests. View suites also run with mutations excluded;
+There are 130 test functions: 39 core tests, 26 Solana library tests and
+65 runtime tests. View suites also run with mutations excluded;
 those repeat executions are not additional test functions.
 One core test replays all 162 saved Solidity posting
 cases, including expected rejections and every node's resulting gross balances.
@@ -46,7 +46,7 @@ independent-host replay in [host.rs](../crates/cavalre-ledger-core/tests/host.rs
 | Settlement atomicity | Frozen token accounts reject. A late commit failure after token movement and new-leaf allocation rolls back token balances, ledger writes and rent allocation. |
 | Custody root access | Zero-amount classic SPL, Token-2022 and native SOL wrap/unwrap run with all Ledger records read-only, directly and through raw CPI with and without in-place preparation, for absent and funded endpoints. Nonzero unprepared calls with a read-only root reject at commit and roll back settlement/allocation; prepared calls reject missing outer write privileges before entering Ledger. The same calls succeed when root writes are supplied. Application PDA signing and remaining records are preserved; a signed but incorrect token funder still rejects. Preparation tests check all four encoded layouts, high-bit amounts, idempotence, unchanged data/other metas and malformed-input rejection without modifications. |
 | Shared custody | Two application branches share one Source and root totals. Direct donations increase backing without claims; an empty payer cannot use existing custody surplus to fund a deposit. |
-| Withdrawal backing | A vault that covers an individual withdrawal but not all recorded claims rejects that withdrawal. |
+| Full-ledger backing freeze | Any custody shortfall rejects all mutations, including deposits, transfers, tree changes, repeated initialization and zero/self/no-op calls. Classic SPL and Token-2022 cases run directly and through application CPI; native SOL excludes rent. Rejections preserve all accounts apart from fees. Missing, substituted, malformed, wrong-owner, wrong-mint and wrong-authority custody inputs reject. Reads remain available; partial uncredited top-ups remain frozen, full top-ups restore operation, and unrelated token/accounting-only ledgers continue. |
 | Internal accounting | Authorized issuance and retirement support the full `u128` range; overflow rejects atomically and internal issuance changes no external-token claims. |
 | Logical token identity | Classic SPL and Token-2022 roots use their mint addresses in discovery, records, parent links, reads and events. Custody and write planning use separate authenticated storage accounts. Arbitrary name-hash leaf identifiers need no Solana account or signature. Mint data remains unchanged; forged logical roots and copies at the mint address reject. Reads accept both mint metadata and its Ledger record and distinguish an existing mint from absent Ledger storage. |
 | Stored-value reads | `total_supply`, `symbol` and `decimals` return stored fields without requiring a registered ledger root, matching the original Solidity getters. Confirmed absence returns zero/empty defaults; omitted input and invalid storage still reject. Core and Solana library cases run with mutations enabled and excluded. Runtime metadata reads cover a Source leaf and an absent PDA without invoking Ledger, writing records or allocating storage. |
@@ -70,8 +70,9 @@ exercise registered and implicit properties, restricted-parent visibility,
 gross/net/supply semantics, confirmed absence versus missing input, enumeration
 completeness and decoder rejection. The Solana fixture supplies only readonly,
 nonsigner accounts and verifies that neither bytes nor lamports change. A runtime
-test also reads actual persisted records after a withdrawal is rejected for
-insufficient total backing.
+test also reads actual persisted records while all mutations are rejected for
+insufficient total backing. Recovery uses actual token/System transfers to the
+vault and proves those repairs create no internal claims.
 
 Root view tests use the shared record decoder and verify that discovery returns
 exactly the same results as Root child queries. They reject forged Root state,

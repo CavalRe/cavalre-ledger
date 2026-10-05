@@ -485,9 +485,84 @@ fn native_sol_full_backing_and_rent_reserve_are_enforced() {
     for balance in [reserve + AMOUNT / 2, reserve - 1] {
         vault.lamports = balance;
         h.svm.set_account(sol.vault, vault.clone()).unwrap();
-        let i = sol.movement(&h, (h.key(0), 0), h.key(2), (parent, receiver), 1, false);
-        rejects(&mut h, &[0], i, LedgerError::Undercollateralized.into());
+        for deposit in [false, true] {
+            for amount in [0, 1] {
+                let i = sol.movement(
+                    &h,
+                    (h.key(0), 0),
+                    h.key(0),
+                    (parent, receiver),
+                    amount,
+                    deposit,
+                );
+                rejects(&mut h, &[0], i, LedgerError::Undercollateralized.into());
+            }
+        }
+        let fresh = Address::new_from_array([77; 32]);
+        for i in [
+            transfer(
+                &h,
+                sol.root,
+                h.key(0),
+                (parent, receiver),
+                (parent, fresh),
+                1,
+                &[],
+            ),
+            transfer(
+                &h,
+                sol.root,
+                h.key(0),
+                (parent, receiver),
+                (parent, receiver),
+                0,
+                &[],
+            ),
+            leaf(&h, sol.root, h.key(0), parent, fresh, "New", false),
+            group(&h, sol.root, h.key(0), parent, fresh, true, &[]),
+            remove(&h, sol.root, h.key(0), parent, fresh, false),
+            remove(&h, sol.root, h.key(0), parent, fresh, true),
+            sol.registration(&h),
+        ] {
+            rejects(&mut h, &[0], i, LedgerError::Undercollateralized.into());
+        }
+        let mut reader = ledger::ledger_view::Reader::new();
+        for key in [sol.root_storage, parent, child(parent, receiver)] {
+            let account = h.svm.get_account(&key).unwrap();
+            reader
+                .insert(ap(key), &ap(account.owner), &account.data)
+                .unwrap();
+        }
+        assert_eq!(
+            reader.total_supply(&NATIVE_SOL).unwrap(),
+            u128::from(AMOUNT)
+        );
+        assert_eq!(
+            reader
+                .account_view(&NATIVE_SOL, &ap(parent), &ap(receiver))
+                .unwrap()
+                .balances
+                .debit,
+            u128::from(AMOUNT)
+        );
     }
+    let before = [
+        sol.root_storage,
+        sol.source,
+        parent,
+        child(parent, receiver),
+    ]
+    .map(|key| (key, h.svm.get_account(&key)));
+    // Repair with a real System transfer. Rent is restored but never credited.
+    let repair = system_instruction::transfer(&ap(h.key(0)), &ap(sol.vault), AMOUNT + 1);
+    succeeds(&mut h, &[0], repair);
+    for (key, account) in before {
+        assert_eq!(h.svm.get_account(&key), account);
+    }
+    let i = sol.movement(&h, (h.key(0), 0), h.key(2), (parent, receiver), 1, false);
+    succeeds(&mut h, &[0], i);
+    assert_eq!(sol.custody(&h), AMOUNT - 1);
+    assert_eq!(h.record(sol.root).credit, u128::from(AMOUNT - 1));
 }
 
 #[test]

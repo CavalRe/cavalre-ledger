@@ -26,6 +26,7 @@ pub struct LedgerAccounts<'info> {
     pub system_program: Program<'info, System>,
     // Remaining: endpoint records, parents, custody ancestors and changed ancestors.
     // New endpoint/Source PDAs must be supplied writable for allocation.
+    // External/native ledgers also require their canonical vault, read-only.
 }
 #[derive(Accounts)]
 pub struct RegisterLedger<'info> {
@@ -368,6 +369,7 @@ struct SolanaHost<'a, 'info> {
     system: AccountInfo<'info>,
     global_root_info: Option<AccountInfo<'info>>,
     settlement: Option<Settlement<'a, 'info>>,
+    backing: Option<service::Backing<Pubkey>>,
     root: service::Root<Pubkey>,
     state: State,
     derived: RefCell<Vec<DerivedAddress>>,
@@ -460,6 +462,7 @@ impl<'a, 'info> SolanaHost<'a, 'info> {
             system,
             global_root_info: None,
             settlement: None,
+            backing: None,
             root,
             state,
             derived: RefCell::new(Vec::new()),
@@ -495,14 +498,63 @@ impl<'a, 'info> SolanaHost<'a, 'info> {
     where
         'info: 'a,
     {
-        Self::new(
+        let mut host = Self::new(
             ctx.accounts.root.to_account_info(),
             ctx.remaining_accounts,
             ctx.accounts.payer.to_account_info(),
             ctx.accounts.authority.to_account_info(),
             ctx.accounts.system_program.to_account_info(),
             None,
-        )
+        )?;
+        if host.root.authority.is_none() {
+            let vault_key =
+                Pubkey::find_program_address(&[b"vault", host.root_info.key.as_ref()], &crate::ID)
+                    .0;
+            let vault = info(&host.root_info, host.rest, &vault_key)?;
+            let amount = if host.root.identifier == NATIVE_SOL {
+                require_keys_eq!(
+                    *vault.owner,
+                    system_program::ID,
+                    LedgerError::InvalidAccount
+                );
+                require!(vault.data_is_empty(), LedgerError::InvalidAccount);
+                native_backing(vault.lamports(), Rent::get()?.minimum_balance(0))?
+            } else {
+                require!(
+                    vault.owner == &anchor_spl::token::ID || vault.owner == &token::ID,
+                    LedgerError::InvalidAccount
+                );
+                let data = vault.try_borrow_data()?;
+                let state =
+                    StateWithExtensions::<token::spl_token_2022::state::Account>::unpack(&data)?;
+                require_keys_eq!(
+                    state.base.mint,
+                    host.root.identifier,
+                    LedgerError::InvalidAccount
+                );
+                require_keys_eq!(
+                    state.base.owner,
+                    *host.root_info.key,
+                    LedgerError::InvalidAccount
+                );
+                for extension in state.get_extension_types()? {
+                    require!(
+                        extension == ExtensionType::ImmutableOwner,
+                        LedgerError::UnsupportedToken
+                    );
+                }
+                u128::from(state.base.amount)
+            };
+            host.backing = Some(service::Backing {
+                asset: host.root.identifier,
+                amount,
+            });
+        }
+        Ok(host)
+    }
+    fn with_backing(mut self, asset: Pubkey, amount: u128) -> Self {
+        self.backing = Some(service::Backing { asset, amount });
+        self
     }
     fn with_global_root(mut self, global: AccountInfo<'info>) -> Result<Self> {
         require_keys_eq!(*global.key, self.root.parent, LedgerError::InvalidAccount);
@@ -556,6 +608,10 @@ impl service::Host<Pubkey> for SolanaHost<'_, '_> {
     type Error = HostError;
     fn root(&self) -> service::Root<Pubkey> {
         self.root
+    }
+    fn backing(&self) -> std::result::Result<service::Backing<Pubkey>, HostError> {
+        self.backing
+            .ok_or_else(|| core::Error::MissingAccount.into())
     }
     fn authenticate(
         &self,
@@ -1023,6 +1079,10 @@ pub fn add_external_token<'info>(ctx: Context<'info, RegisterToken<'info>>) -> R
         ctx.accounts.system_program.to_account_info(),
         Some((Pubkey::default(), ctx.accounts.mint.key())),
     )?
+    .with_backing(
+        ctx.accounts.mint.key(),
+        u128::from(ctx.accounts.vault.amount),
+    )
     .with_global_root(ctx.accounts.global_root.to_account_info())?
     .run(service::Command::Initialize {
         name,
@@ -1030,8 +1090,20 @@ pub fn add_external_token<'info>(ctx: Context<'info, RegisterToken<'info>>) -> R
         decimals,
     })
 }
+fn native_backing(lamports: u64, rent_reserve: u64) -> Result<u128> {
+    lamports
+        .checked_sub(rent_reserve)
+        .map(u128::from)
+        .ok_or_else(|| error!(LedgerError::Undercollateralized))
+}
+
 pub fn add_native_sol<'info>(ctx: Context<'info, RegisterSol<'info>>) -> Result<()> {
     let reserve = Rent::get()?.minimum_balance(0);
+    // Repeated initialization is subject to the same backing rule; it must
+    // not silently repair an existing vault's rent reserve before checking.
+    if !ctx.accounts.root.data_is_empty() {
+        native_backing(ctx.accounts.vault.lamports(), reserve)?;
+    }
     let required = reserve.saturating_sub(ctx.accounts.vault.lamports());
     if required > 0 {
         system_program::transfer(
@@ -1053,6 +1125,10 @@ pub fn add_native_sol<'info>(ctx: Context<'info, RegisterSol<'info>>) -> Result<
         ctx.accounts.system_program.to_account_info(),
         Some((Pubkey::default(), NATIVE_SOL)),
     )?
+    .with_backing(
+        NATIVE_SOL,
+        native_backing(ctx.accounts.vault.lamports(), reserve)?,
+    )
     .with_global_root(ctx.accounts.global_root.to_account_info())?
     .run(service::Command::Initialize {
         name: "SOL".into(),
@@ -1131,6 +1207,10 @@ pub fn move_tokens<'info>(
         ctx.accounts.system_program.to_account_info(),
         None,
     )?;
+    host.backing = Some(service::Backing {
+        asset: ctx.accounts.mint.key(),
+        amount: u128::from(ctx.accounts.vault.amount),
+    });
     host.settlement = Some(Settlement::Tokens(ctx.accounts));
     host.run(service::Command::MoveTokens {
         child: service::Child { parent, relative },
@@ -1154,10 +1234,15 @@ pub fn move_sol<'info>(
         ctx.accounts.system_program.to_account_info(),
         None,
     )?;
+    let rent_reserve = Rent::get()?.minimum_balance(0);
+    host.backing = Some(service::Backing {
+        asset: NATIVE_SOL,
+        amount: native_backing(ctx.accounts.vault.lamports(), rent_reserve)?,
+    });
     host.settlement = Some(Settlement::Sol {
         accounts: ctx.accounts,
         vault_bump: ctx.bumps.vault,
-        rent_reserve: Rent::get()?.minimum_balance(0),
+        rent_reserve,
     });
     host.run(service::Command::MoveTokens {
         child: service::Child { parent, relative },

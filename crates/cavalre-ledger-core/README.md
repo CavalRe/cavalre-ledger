@@ -48,7 +48,12 @@ it does not add a pause flag. See [query semantics and host integration](../../d
 registration and removal, transfers, deposits and withdrawals. It owns name,
 kind, balance, child-count, parent admission and custodian permission checks,
 including repeated and no-op operations. It verifies exact native settlement
-and full-liability backing before withdrawals.
+and full-liability backing before every external/native ledger mutation, including
+initialization, deposits, tree changes and zero/self/repeated operations.
+When custody is below the root's credit total, mutations fail atomically with
+`Undercollateralized`. Reads remain available. Direct, uncredited custody top-ups
+restore operation as soon as all claims are backed; no administrator or stored
+freeze flag is involved. Accounting-only ledgers do not need external custody.
 
 The `Host<A>` interface is defined by the core. A host supplies an address type
 (`Copy + Eq`) and the following capabilities:
@@ -57,6 +62,7 @@ The `Host<A>` interface is defined by the core. A host supplies an address type
 | --- | --- |
 | `root` | Bind the selected ledger, its global Root parent, asset/identifier, reserved Source identity and accounting-only owner. |
 | `authenticate(role, command)` | Establish the acting authority or token payer from the current execution context. Verify signatures or consume the runtime's verified result. |
+| `backing` | Observe this ledger's authenticated canonical custody and asset in the current transaction, excluding native rent reserves. Required for every external/native command; never trust a supplied balance or stale observation. |
 | `to_address` | Derive a child identity from its absolute parent and relative identifier in this service's domain. |
 | `account`, `put` | Borrow authenticated logical state; create or replace metadata without imposing a serialization or database format. |
 | `set_balances`, `set_children` | Update existing fields directly, preserving all unrelated metadata. Missing accounts must error. |

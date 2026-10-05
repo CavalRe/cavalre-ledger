@@ -1,6 +1,8 @@
-//! Reproducible execution measurements using real sBPF and signed legacy packets.
+//! Real sBPF with signed legacy packets, or v0/ALT when legacy exceeds wire size.
 use super::*;
 use solana_compute_budget_interface::ComputeBudgetInstruction;
+use solana_message::{v0, AddressLookupTableAccount, VersionedMessage};
+use solana_transaction::versioned::VersionedTransaction;
 
 const PACKET_BYTES: usize = 1232;
 const COMPUTE_UNITS: u32 = 300_000;
@@ -15,6 +17,7 @@ struct Profile {
     seed: u8,
     app: Option<Address>,
     authority: Address,
+    lookup: Option<AddressLookupTableAccount>,
 }
 impl Profile {
     fn new(mode: &'static str, depth: u8, seed: u8) -> Self {
@@ -47,6 +50,7 @@ impl Profile {
             seed,
             app,
             authority,
+            lookup: None,
         }
     }
 
@@ -65,17 +69,18 @@ impl Profile {
         if self.mode == "direct" {
             signers.push(&self.h.keys[2]);
         }
+        let instructions = [
+            ComputeBudgetInstruction::set_compute_unit_limit(COMPUTE_UNITS),
+            ComputeBudgetInstruction::set_compute_unit_price(0),
+            instruction,
+        ];
         let tx = Transaction::new_signed_with_payer(
-            &[
-                ComputeBudgetInstruction::set_compute_unit_limit(COMPUTE_UNITS),
-                ComputeBudgetInstruction::set_compute_unit_price(0),
-                instruction,
-            ],
+            &instructions,
             Some(&self.h.key(0)),
             &signers,
             self.h.svm.latest_blockhash(),
         );
-        let bytes = wincode::serialize(&tx).unwrap().len();
+        let legacy_bytes = wincode::serialize(&tx).unwrap().len();
         let accounts = tx.message.account_keys.len();
         let writable = (0..accounts)
             .filter(|i| {
@@ -85,14 +90,84 @@ impl Profile {
                 )
             })
             .count();
-        let before: Vec<_> = tx
-            .message
-            .account_keys
+        let account_keys = tx.message.account_keys.clone();
+        let mut setup_fee = 0;
+        let mut setup_rent = 0;
+        let mut setup_compute = 0;
+        let tx =
+            if legacy_bytes <= PACKET_BYTES {
+                VersionedTransaction::from(tx)
+            } else {
+                use solana_address_lookup_table_interface::instruction::{
+                    create_lookup_table, extend_lookup_table,
+                };
+                // Exercise the real lookup-table program, including warm-up. Setup
+                // costs are separate from the measured Ledger operation, not hidden.
+                let payer = self.h.key(0);
+                let payer_before = self.h.svm.get_account(&payer).unwrap().lamports;
+                let slot = self.h.svm.get_sysvar::<anchor_lang::prelude::Clock>().slot;
+                let mut setup = Vec::new();
+                let mut table = self.lookup.take().unwrap_or_else(|| {
+                    let (create, key) = create_lookup_table(payer, payer, slot);
+                    setup.push(create);
+                    AddressLookupTableAccount {
+                        key,
+                        addresses: Vec::new(),
+                    }
+                });
+                let addresses = account_keys
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, _)| !tx.message.is_signer(*index))
+                    .map(|(_, address)| *address)
+                    .filter(|address| !table.addresses.contains(address))
+                    .collect::<Vec<_>>();
+                setup.extend(addresses.chunks(20).map(|chunk| {
+                    extend_lookup_table(table.key, payer, Some(payer), chunk.to_vec())
+                }));
+                table.addresses.extend(addresses);
+                for instruction in setup {
+                    let tx = Transaction::new_signed_with_payer(
+                        &[instruction],
+                        Some(&payer),
+                        &[&self.h.keys[0]],
+                        self.h.svm.latest_blockhash(),
+                    );
+                    assert!(wincode::serialize(&tx).unwrap().len() <= PACKET_BYTES);
+                    let result = self.h.svm.send_transaction(tx).unwrap();
+                    setup_fee += result.fee;
+                    setup_compute += result.compute_units_consumed;
+                }
+                setup_rent =
+                    payer_before - self.h.svm.get_account(&payer).unwrap().lamports - setup_fee;
+                self.h.svm.warp_to_slot(slot + 1);
+                let message = v0::Message::try_compile(
+                    &payer,
+                    &instructions,
+                    std::slice::from_ref(&table),
+                    self.h.svm.latest_blockhash(),
+                )
+                .unwrap();
+                self.lookup = Some(table);
+                let mut signers = vec![&self.h.keys[0]];
+                if funding {
+                    signers.push(&self.h.keys[1]);
+                }
+                if self.mode == "direct" {
+                    signers.push(&self.h.keys[2]);
+                }
+                VersionedTransaction::try_new(VersionedMessage::V0(message), &signers).unwrap()
+            };
+        let bytes = wincode::serialize(&tx).unwrap().len();
+        let before: Vec<_> = account_keys
             .iter()
             .map(|key| (*key, self.h.svm.get_account(key)))
             .collect();
         let mut row = serde_json::json!({"mode":self.mode,"depth":self.depth,"seed":self.seed,
-            "operation":operation,"bytes":bytes,"accounts":accounts,"writable":writable});
+            "operation":operation,"bytes":bytes,"legacy_bytes":legacy_bytes,
+            "format":if legacy_bytes > PACKET_BYTES {"v0"} else {"legacy"},
+            "lookup_setup_fee_lamports":setup_fee,"lookup_setup_rent_lamports":setup_rent,
+            "lookup_setup_compute_units":setup_compute,"accounts":accounts,"writable":writable});
         // LiteSVM is not a network packet admission test. Enforce wire size here.
         if bytes > PACKET_BYTES {
             row["status"] = "packet_too_large".into();

@@ -1,7 +1,7 @@
 //! A second host with integer identities and transactional memory storage.
 //! No Solana SDK, account layout, signing key or token program is involved.
 use cavalre_ledger_core::{
-    ledger::{execute, Account, Child, Command, Event, Host, Role, Root, TokenBalances},
+    ledger::{execute, Account, Backing, Child, Command, Event, Host, Role, Root, TokenBalances},
     ledger_lib::{AccountKind, Balances, Error},
 };
 use std::{cell::Cell, collections::BTreeMap};
@@ -116,6 +116,13 @@ impl Host<u64> for MemoryHost {
     type Error = Failure;
     fn root(&self) -> Root<u64> {
         self.root
+    }
+    fn backing(&self) -> Result<Backing<u64>, Failure> {
+        assert!(self.active);
+        Ok(Backing {
+            asset: self.tokens.asset,
+            amount: self.tokens.vault,
+        })
     }
     fn authenticate(&self, role: Role, command: &Command<u64>) -> Result<u64, Failure> {
         assert!(self.active, "authentication must be inside the transaction");
@@ -561,6 +568,165 @@ fn host_transaction_rolls_back_native_movement_and_all_ledger_writes() {
     assert_eq!(host.accounts, funded);
     assert_eq!(host.events, events);
     assert_eq!((host.tokens.wallet, host.tokens.vault), (960, 40));
+}
+
+#[test]
+fn underbacking_freezes_every_command_including_noops_until_repaired() {
+    let mut host = MemoryHost::new(false);
+    let parent = host.initialize(true);
+    host.move_funds(parent, 40, true).unwrap();
+    for (relative, kind) in [
+        (30, AccountKind::DebitLedger),
+        (31, AccountKind::DebitGroup),
+    ] {
+        execute(
+            &mut host,
+            Command::Add {
+                child: child(parent, relative),
+                name: "Empty".into(),
+                kind,
+                implicit_allowed: true,
+            },
+        )
+        .unwrap();
+    }
+    let commands = || {
+        vec![
+            Command::Initialize {
+                name: "Ledger".into(),
+                symbol: "UNIT".into(),
+                decimals: 6,
+            },
+            Command::Add {
+                child: child(ROOT, APP),
+                name: "App".into(),
+                kind: AccountKind::DebitGroup,
+                implicit_allowed: true,
+            },
+            Command::Add {
+                child: child(parent, 32),
+                name: "New".into(),
+                kind: AccountKind::DebitLedger,
+                implicit_allowed: false,
+            },
+            Command::Add {
+                child: child(parent, 33),
+                name: "New".into(),
+                kind: AccountKind::DebitGroup,
+                implicit_allowed: true,
+            },
+            Command::Remove {
+                child: child(parent, 30),
+                group: false,
+            },
+            Command::Remove {
+                child: child(parent, 31),
+                group: true,
+            },
+            Command::Remove {
+                child: child(parent, 32),
+                group: false,
+            },
+            Command::Transfer {
+                from: child(parent, USER),
+                to: child(parent, 32),
+                amount: 1,
+            },
+            Command::Transfer {
+                from: child(parent, USER),
+                to: child(parent, USER),
+                amount: 1,
+            },
+            Command::Transfer {
+                from: child(parent, USER),
+                to: child(parent, 32),
+                amount: 0,
+            },
+            Command::MoveTokens {
+                child: child(parent, USER),
+                amount: 1,
+                deposit: true,
+            },
+            Command::MoveTokens {
+                child: child(parent, USER),
+                amount: 0,
+                deposit: true,
+            },
+            Command::MoveTokens {
+                child: child(parent, USER),
+                amount: 1,
+                deposit: false,
+            },
+            Command::MoveTokens {
+                child: child(parent, USER),
+                amount: 0,
+                deposit: false,
+            },
+        ]
+    };
+    let accounts = host.accounts.clone();
+    let children = host.children.clone();
+    let events = host.events.clone();
+    let writes = host.record_writes;
+    // A partial uncredited repair is still frozen, even a one-unit shortfall.
+    for backing in [20, 39] {
+        host.tokens.vault = backing;
+        for command in commands() {
+            assert_eq!(
+                execute(&mut host, command),
+                Err(Failure::Rule(Error::Undercollateralized))
+            );
+            assert_eq!(host.accounts, accounts);
+            assert_eq!(host.children, children);
+            assert_eq!(host.events, events);
+            assert_eq!(host.record_writes, writes);
+            assert_eq!((host.tokens.vault, host.tokens.wallet), (backing, 960));
+        }
+        assert_eq!(
+            cavalre_ledger_core::ledger_view::account(&host, &ROOT, &parent, &USER)
+                .unwrap()
+                .balances
+                .debit,
+            40
+        );
+    }
+    host.tokens.vault = 40; // Direct repair creates no new internal liability.
+    for command in commands() {
+        execute(&mut host, command).unwrap();
+    }
+    assert_eq!(host.tokens.vault, host.balance(ROOT).credit);
+}
+
+#[test]
+fn backing_is_asset_bound_and_accounting_only_ledgers_need_no_custody() {
+    let mut host = MemoryHost::new(false);
+    host.tokens.asset = 98;
+    assert_eq!(
+        execute(
+            &mut host,
+            Command::Initialize {
+                name: "Ledger".into(),
+                symbol: "UNIT".into(),
+                decimals: 6,
+            }
+        ),
+        Err(Failure::Rule(Error::UnsupportedToken))
+    );
+    assert!(host.accounts.is_empty());
+    let mut host = MemoryHost::new(true);
+    host.tokens.asset = 98;
+    let parent = host.initialize(true);
+    execute(
+        &mut host,
+        Command::Transfer {
+            from: child(ROOT, SOURCE),
+            to: child(parent, USER),
+            amount: 40,
+        },
+    )
+    .unwrap();
+    assert_eq!(host.tokens.vault, 0);
+    assert_eq!(host.balance(ROOT).credit, 40);
 }
 
 #[test]

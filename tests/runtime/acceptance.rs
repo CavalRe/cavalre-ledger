@@ -5,6 +5,8 @@ use ledger::ledger::LedgerError;
 use litesvm::types::{FailedTransactionMetadata, TransactionMetadata};
 use solana_instruction_error::InstructionError;
 use solana_transaction_error::TransactionError;
+#[path = "backing.rs"]
+mod backing;
 #[path = "children.rs"]
 mod children;
 #[path = "custody.rs"]

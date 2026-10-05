@@ -180,6 +180,14 @@ and must be rebuilt. Readers need only their requested slots, not all siblings.
 - `wrap_sol`, `unwrap_sol`: apply the same funding and withdrawal rules to native
   lamports using `MoveSol` accounts.
 
+Every external/native mutation first requires custody to cover the root's full
+credit total. A deficit rejects transfers, deposits, withdrawals, tree changes
+and repeated or zero/self operations with `Undercollateralized`. Reads continue.
+Repair uses a direct SPL/Token-2022/System transfer to the canonical vault,
+without crediting any Ledger account. Partial repairs remain frozen; full
+backing restores operation automatically. Accounting-only ledgers and other
+token ledgers remain independent. There is no stored freeze flag or admin bypass.
+
 `MoveTokens.funding_authority` signs for the depositing wallet. On withdrawal,
 it may be the already-required branch authority; no recipient signature is needed.
 The amount is `u64` native base units. Internal transfer amounts are `u128`.
@@ -230,6 +238,15 @@ remaining accounts, once each, excluding the fixed root. Include new destination
 and Source PDAs for allocation. Records whose data changes must be writable.
 The program verifies owners, canonical PDAs and root membership. See executable
 instruction-building examples in `tests/runtime/ledger.rs`.
+
+For external/native `LedgerAccounts` calls, also supply the canonical vault
+`["vault", root_storage]` as a **read-only remaining account**. The adapter
+authenticates its address, owner and layout; token vaults must match the ledger
+mint and root storage authority. The core compares its actual balance with all
+claims before executing the command. Missing or substituted vaults reject.
+Registration and wrap/unwrap already carry this vault and reuse their validated
+observation. Accounting-only calls need no vault. The extra account adds a read
+dependency on custody but no write permission or storage allocation.
 
 `LedgerAccounts.root` accepts read-only access. For transfers, use
 `Reader::transfer_writable_accounts` to determine exactly which Ledger records
@@ -292,8 +309,8 @@ Supply `payer`, `authority`, `funding_authority`, `root`, `vault`, `wallet` and
   settlement is measured around the SOL transfer; later account allocation and
   transaction fees do not become customer claims.
 
-Available backing is `vault.lamports - Rent::minimum_balance(0)`. Withdrawals
-check that amount against all outstanding SOL claims and preserve the rent
+Available backing is `vault.lamports - Rent::minimum_balance(0)`. Every mutation
+checks that amount against all outstanding SOL claims. Withdrawals preserve the rent
 reserve, including when the last customer withdraws. Deposits must observe a
 fresh wallet debit and matching vault increase; donations cannot fund them.
 Ledger uses raw lamports (1 SOL = 1e9 lamports), with `u128` internal balances.

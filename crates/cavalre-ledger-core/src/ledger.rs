@@ -12,6 +12,15 @@ pub enum Role {
     TokenPayer,
 }
 
+/// Authenticated custody available to this ledger, in native base units.
+/// Native currency excludes any storage/rent reserve. Direct, uncredited
+/// top-ups count as backing; internal accounting entries do not.
+#[derive(Clone, Copy, Debug)]
+pub struct Backing<A> {
+    pub asset: A,
+    pub amount: u128,
+}
+
 /// Both balances are independently observed custody state in native base units.
 /// The host binds the vault to this root and the wallet to this operation.
 #[derive(Clone, Copy, Debug)]
@@ -90,6 +99,10 @@ pub trait Host<A: Copy + Eq>: crate::ledger_view::ChildIndex<A> + Sized {
     type Error: From<Error>;
     fn root(&self) -> Root<A>;
     fn authenticate(&self, role: Role, command: &Command<A>) -> Result<A, Self::Error>;
+    /// Observe this root's canonical custody on every external-ledger mutation.
+    /// Ownership, asset and custody identity must be independently authenticated.
+    /// Never substitute a caller-supplied balance or an earlier transaction's cache.
+    fn backing(&self) -> Result<Backing<A>, Self::Error>;
     fn put(&mut self, address: A, account: Account<A>) -> Result<(), Self::Error>;
     /// Update existing fields without reading/copying unrelated metadata.
     fn set_balances(&mut self, address: A, balances: Balances) -> Result<(), Self::Error>;
@@ -168,6 +181,21 @@ pub fn execute<A: Copy + Eq, H: Host<A>>(
 ) -> Result<(), H::Error> {
     host.atomic(|host| {
         let authority = host.authenticate(Role::Authority, &command)?;
+        let root = host.root();
+        if root.authority.is_none() {
+            let backing = host.backing()?;
+            if backing.asset != root.identifier {
+                return Err(Error::UnsupportedToken.into());
+            }
+            let liabilities = match host.account(&root.address)? {
+                Some(account) => account.balances.credit,
+                None if matches!(command, Command::Initialize { .. }) => 0,
+                None => return Err(Error::MissingAccount.into()),
+            };
+            if backing.amount < liabilities {
+                return Err(Error::Undercollateralized.into());
+            }
+        }
         match command {
             Command::Initialize {
                 name,
@@ -660,9 +688,6 @@ fn move_tokens<A: Copy + Eq, H: Host<A>>(
             relative: root.source,
         },
     )?;
-    if !deposit && before.vault < get(host, &root.address)?.balances.credit {
-        return Err(Error::Undercollateralized.into());
-    }
     let (from, to) = if deposit {
         (source, leaf)
     } else {

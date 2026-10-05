@@ -15,6 +15,12 @@ extends `ReadStore` and `ChildIndex`; queries never require `Host`, a signature,
 token movement or commit. The host may remove mutation dispatch while its query
 service continues reading committed snapshots. No pause mechanism is added.
 
+An underbacked external/native ledger also remains readable. Backing is checked
+only at the shared mutation boundary, against actual custody and the root's full
+credit total. Queries require no vault observation and still expose all claims
+while activity is frozen. Direct, uncredited vault top-ups restore mutations
+when full backing is restored; partial repairs do not.
+
 `ReadStore::account` borrows names from host storage through `Account<A, &str>`.
 Flags, custody, gross/net balance and supply queries allocate no account metadata.
 Names are copied only when a query explicitly returns an owned name or a full
@@ -144,6 +150,12 @@ plans Ledger record writes only: it does not authorize a transfer, select
 settlement accounts, or make a stale transaction valid. Runtime execution
 recomputes the walk from authenticated state. A missing required writable
 account fails atomically; refresh and rebuild if the tree changed.
+
+External/native transfers and tree changes additionally require their canonical
+vault `["vault", root_storage]` as a read-only remaining account. Append it to
+the instruction after planning Ledger record writes; it is custody input, not a
+Ledger record for the Reader snapshot. Its current backing is checked at execution
+even for zero/self/repeated operations. Accounting-only calls need no vault.
 
 Account privileges are chosen before signing. Across multiple instructions,
 use the union of required writes. A CPI caller must supply those same privileges

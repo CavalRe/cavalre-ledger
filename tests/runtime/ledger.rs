@@ -115,6 +115,32 @@ impl Harness {
                 .get_account(&self.storage(key))
                 .and_then(|a| decode_data(&ap(self.storage(key)), &ap(a.owner), &a.data).ok())
         };
+        if [
+            instruction::AddSubAccount::DISCRIMINATOR,
+            instruction::AddSubAccountGroup::DISCRIMINATOR,
+            instruction::AddSubAccountByName::DISCRIMINATOR,
+            instruction::AddSubAccountGroupByName::DISCRIMINATOR,
+            instruction::RemoveSubAccount::DISCRIMINATOR,
+            instruction::RemoveSubAccountGroup::DISCRIMINATOR,
+            instruction::Transfer::DISCRIMINATOR,
+        ]
+        .iter()
+        .any(|discriminator| data.starts_with(discriminator))
+        {
+            let root = instruction.accounts[offset + 2].pubkey;
+            if get(root).is_some_and(|record| record.depth == 2 && record.scope == ap(SYSTEM)) {
+                let vault = sa(anchor_lang::prelude::Pubkey::find_program_address(
+                    &[b"vault", root.as_ref()],
+                    &ledger::ID,
+                )
+                .0);
+                if !instruction.accounts.iter().any(|meta| meta.pubkey == vault) {
+                    instruction
+                        .accounts
+                        .push(AccountMeta::new_readonly(vault, false));
+                }
+            }
+        }
         let mut extra = Vec::new();
         if data.starts_with(instruction::AddLedger::DISCRIMINATOR)
             || data.starts_with(instruction::AddExternalToken::DISCRIMINATOR)

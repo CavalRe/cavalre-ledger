@@ -37,9 +37,11 @@ The allocation regression checks zero allocations for repeated field and numeric
 queries, and exactly one change-buffer allocation for a posting.
 
 The sampling range belongs only to the profiler; it is not enforced by Ledger.
-At its largest, a measured transaction uses 1231 of 1232 bytes. Additional
-instructions or accounts may require shallower paths or a separately tested
-transaction format. A separate regression succeeds at depth 14 with a shorter
+The backing guard adds a read-only custody account to ordinary external-ledger
+mutations. Eighteen depth-13 distant-branch samples now exceed the legacy packet
+limit and use tested v0 transactions with address lookup tables. Additional
+instructions or accounts still require measuring the complete transaction.
+A separate regression succeeds at depth 14 with a shorter
 posting path, demonstrating why depth alone does not determine whether a
 transaction fits.
 
@@ -63,16 +65,16 @@ external paths diverge immediately below the shared application group.
 
 | Leaf depth | Maximum compute units | Maximum transaction bytes | Maximum account keys | Maximum writable keys |
 | --- | ---: | ---: | ---: | ---: |
-| 4 | 57404 | 793 | 15 | 7 |
-| 5 | 62401 | 826 | 16 | 8 |
-| 6 | 70095 | 859 | 17 | 10 |
-| 7 | 81499 | 892 | 18 | 12 |
-| 8 | 84161 | 925 | 19 | 14 |
-| 9 | 92976 | 967 | 20 | 16 |
-| 10 | 103479 | 1033 | 22 | 18 |
-| 11 | 117169 | 1099 | 24 | 20 |
-| 12 | 125049 | 1165 | 26 | 22 |
-| 13 | 136116 | 1231 | 28 | 24 |
+| 4 | 57570 | 793 | 15 | 7 |
+| 5 | 62560 | 826 | 16 | 8 |
+| 6 | 72940 | 859 | 17 | 10 |
+| 7 | 81644 | 892 | 18 | 12 |
+| 8 | 88527 | 934 | 19 | 14 |
+| 9 | 97351 | 1000 | 21 | 16 |
+| 10 | 107864 | 1066 | 23 | 18 |
+| 11 | 121565 | 1132 | 25 | 20 |
+| 12 | 129454 | 1198 | 27 | 22 |
+| 13 | 140531 | 1168 | 29 | 24 |
 
 Each column is its own maximum across that depth's measured operations. Compute
 need not increase monotonically because PDA bump searches vary with addresses.
@@ -103,45 +105,71 @@ The adapter reduces work without changing the core accounting walk:
 - Successful lookups construct no errors, and token registration uses shared
   metadata decoders without constructing the full Reader's map indexes.
 
-Against the saved `181e18c` profile, all 2205 transactions use fewer CUs, saving
-3072–73389 CU per transaction (6.3–49.5%, median 30.2%). The largest sampled
-transaction falls from 208438 to 136116 CU (34.7%). Packet lengths, account/write
-counts, fees, rent and operation results are identical; final accounting checks
-pass. These are sampled gains, not universal bounds. Derivations for new
-addresses remain address-dependent.
+Before the backing guard, the optimization in `b146860` reduced the largest
+sample from 208438 to 136116 CU. The current profile includes the backing guard
+on every external/native mutation and reaches 140531 CU. The complete profile
+and depth-14 workflow still use the default 32 KiB heap. Record layouts,
+instruction arguments, account sizes and Ledger allocation rent are unchanged.
 
-The compute improvements add code: the Ledger executable grows from 364952 to
-369232 bytes (+4280, 1.17%), and the test consumer grows from 133648 to 135384
-bytes (+1736, 1.30%). The temporary derivation cache also allocates working memory
-when new endpoints are encountered. It introduces no account or depth limit;
-the complete profile and depth-14 workflow still run with the default 32 KiB
-heap. Record layouts, instruction arguments, account sizes and rent are
-unchanged. These measurements exclude the experimental all-mutation backing
-check.
+All samples include compute-limit and compute-price instructions. The profiler
+enforces the 1232-byte packet limit before calling LiteSVM; successful simulator
+execution alone would not establish wire admissibility. It requests 300000 CUs
+and requires at least 10% headroom in every sample. Of 2205 signed transactions,
+2187 use legacy encoding and 18 use v0 with a lookup table. Signature checks
+remain enabled. Lookup tables are created and extended through the actual
+lookup-table program, then warmed by advancing the simulator clock; their setup
+fees, compute and storage funding are recorded separately. Mint/wallet fixtures
+are installed as test setup; Ledger state is created through actual instructions.
 
-The tests submit signed **legacy transactions**, including both compute-limit
-and compute-price instructions. They enforce the 1232-byte packet limit before
-calling LiteSVM; a successful simulator execution alone would not establish wire
-admissibility. They request 300000 CUs and require at least 10% headroom in every
-sample. No lookup tables, custom heap, disabled signature checks, or native
-substitute for the Ledger program are used. Mint/wallet fixtures are installed
-as test setup; all Ledger tree state is created through actual instructions.
+### Backing check cost and client impact
+
+Comparison with the saved `b146860` profile, matching all 2205 samples in order:
+
+| Sampled operation | Added CU |
+| --- | ---: |
+| Direct classic SPL transfer | 2434–3956 |
+| Application-CPI classic SPL transfer | 2825–4418 |
+| Direct classic SPL tree mutation | 2497–4072 |
+| Application-CPI classic SPL tree mutation | 2870–4498 |
+| Classic SPL deposit | 102–166 |
+| Classic SPL withdrawal | -105 to -42 |
+
+Deposits and withdrawals reuse the already-validated custody observation;
+withdrawals no longer run a separate withdrawal-only backing check. Accounting-only
+samples change by -96 to +110 CU and require no custody account. These are sampled
+costs for the stated paths, not bounds for Token-2022, native SOL or arbitrary trees.
+
+Ordinary external-ledger mutations add one read-only vault account: **33 legacy
+packet bytes**, no new writable account and no Ledger storage allocation. Existing
+clients must include it, including CPI callers and zero/self/repeated calls.
+The profile's depth-13 external transfers grow from 1231 to 1264 legacy bytes
+directly, and from 1201 to 1234 through CPI. Their v0 encodings are 556 and 464
+bytes respectively. Each tested lookup table costs 15000 lamports in setup fees
+and 0.00707136 SOL (direct) or 0.0075168 SOL (CPI) in storage funding, then is reused
+for three transfers without further setup. Clients may provision reusable tables;
+these particular costs describe the test setup, not a per-transfer charge.
+
+The largest sampled transaction rises by 4415 CU (3.24%). Ledger grows from
+369232 to 377216 executable bytes (+7984, 2.16%); the test consumer grows from
+135384 to 135392 bytes (+8). Ledger transaction fees, allocation rent and writable
+key counts match the baseline in every sample; lookup-table setup is additional.
+Compute charges with a nonzero priority price depend on the requested budget.
 
 | Operation at depth 13 | Maximum compute units | Maximum bytes | New storage funding (SOL) |
 | --- | ---: | ---: | ---: |
-| Create group | 81676 | 891 | 0.00590208 |
-| Create registered leaf | 80035 | 923 | 0.00590208 |
-| Register funded leaf | 70423 | 923 | 0.00144768 |
-| Remove registered leaf | 71203 | 853 | 0 |
-| First deposit / Source issuance | 109920 | 1090 | 0.0044544 |
-| Repeated deposit / Source issuance | 100558 | 1090 | 0 |
-| First transfer to implicit leaf | 136116 | 1231 | 0.0044544 |
-| Repeated transfer | 132410 | 1231 | 0 |
-| Transfer between registered leaves | 132484 | 1231 | 0 |
-| Withdraw / retire to Source | 100587 | 994 | 0 |
-| First issuance from deep credit leaf | 135917 | 1168 | 0.0044544 |
-| Issuance from registered deep credit leaf | 121745 | 1168 | 0 |
-| Retirement to deep credit leaf | 121830 | 1168 | 0 |
+| Create group | 86164 | 924 | 0.00590208 |
+| Create registered leaf | 83033 | 956 | 0.00590208 |
+| Register funded leaf | 74270 | 956 | 0 or 0.00144768 |
+| Remove registered leaf | 74180 | 886 | 0 |
+| First deposit / Source issuance | 110023 | 1090 | 0.0044544 |
+| Repeated deposit / Source issuance | 100660 | 1090 | 0 |
+| First transfer to implicit leaf | 140531 | 1168 | 0.0044544 |
+| Repeated transfer | 136824 | 1168 | 0 |
+| Transfer between registered leaves | 136902 | 1168 | 0 |
+| Withdraw / retire to Source | 100482 | 994 | 0 |
+| First issuance from deep credit leaf | 135821 | 1168 | 0.0044544 |
+| Issuance from registered deep credit leaf | 121650 | 1168 | 0 |
+| Retirement to deep credit leaf | 121735 | 1168 | 0 |
 
 The complete generated report includes registration and removal measurements.
 The suite verifies final leaf, Source, root and custody balances. A separate
@@ -173,8 +201,8 @@ Clients should simulate the complete transaction, add compute headroom, verify
 its serialized size including signatures, and supply the measured account paths.
 An application can add enough instructions, accounts or CPI overhead to exceed
 limits even when its Ledger tree fits. The sample 300000-CU budget is a test
-setting, not a fixed fee recommendation. Versioned transactions, additional CPI
-layers and batched operations need their own measurements.
+setting, not a fixed fee recommendation. Additional versioned transaction shapes,
+CPI layers and batched operations need their own measurements.
 
 ## Concurrency
 
@@ -190,6 +218,10 @@ counts change. Permissions must be selected before signing the transaction.
 
 Independent branches can avoid a shared root write lock, but shared writable
 payers, token wallets or other application state can still serialize transactions.
+The backing guard reads the shared vault. Read-only custody observations coexist
+across transfers and tree changes, but conflict with deposits, withdrawals and
+direct top-ups that write that vault. A freeze check therefore adds a custody
+read dependency even when no ancestor balance changes.
 Existing profiling fixtures retain conservative writable declarations; the account
 counts above are measured, but no TPS, scheduling latency or cluster contention
 claim is made. Minimal write declarations and atomic rejection are exercised
@@ -213,5 +245,5 @@ allocation and opposite-polarity postings where applicable.
 Protocol references: [legacy transaction structure](https://solana.com/docs/core/transactions/transaction-structure),
 [compute and heap budgets](https://solana.com/docs/core/fees/compute-budget), and
 [rent minimum RPC](https://solana.com/docs/rpc/http/getminimumbalanceforrentexemption).
-The measured format is legacy; this report does not rely on activation of newer
-transaction formats or cluster feature gates.
+The measured formats are legacy and v0 with address lookup tables. The profile
+does not establish compatibility with other transaction formats or feature gates.
