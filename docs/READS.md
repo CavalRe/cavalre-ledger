@@ -180,6 +180,17 @@ derivation. The runtime does not accept a caller-provided bump in its place.
 again and comparing it with the stored value. Both paths reject a stored bump
 that does not match its account address.
 
+External/native roots pin their authenticated custody account address in bytes
+480–511 of the existing 512-byte allocation. Registration derives and validates
+the canonical vault before writing this immutable binding in the same transaction.
+The Borsh `Record` payload and existing field offsets are unchanged; its maximum
+encoded length, including the header and both 64-byte labels, is 383 bytes.
+Balance/child updates and metadata saves preserve the binding. Repeated
+registration verifies it without writing; missing bindings fail ordinary mutation
+checks, and caller input cannot replace them. Ordinary backing checks use a key
+comparison against this program-owned state instead of another PDA search.
+Views do not depend on custody, and the live token balance is never cached.
+
 For a confirmed RPC `null`, call `insert_missing`. A runtime reader can provide
 an empty System-owned account for an absent PDA. Omitting an account does not
 prove absence: querying unknown input returns `MissingAccount`, never a guessed

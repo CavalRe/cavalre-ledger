@@ -292,3 +292,61 @@ fn ordinary_mutations_require_an_authentic_canonical_vault_readonly() {
     h.svm.set_account(e.vault, original).unwrap();
     run_raw(&mut h, &[0], complete).unwrap();
 }
+
+#[test]
+fn custody_binding_is_immutable_and_missing_bindings_fail_closed() {
+    for token2022 in [false, true] {
+        let mut h = Harness::new();
+        let e = if token2022 {
+            let e = super::token2022::initialized(&mut h, true);
+            let registration = e.registration(&h);
+            succeeds(&mut h, &[0], registration);
+            e
+        } else {
+            External::new(&mut h, 60, 0)
+        };
+        let parent = branch(&mut h, e.root, 0, true);
+        let root = h.svm.get_account(&e.root_storage).unwrap();
+        assert_eq!(root.data.len(), 512);
+        assert_eq!(&root.data[480..], e.vault.as_ref());
+        let mutation = transfer(
+            &h,
+            e.root,
+            h.key(0),
+            (parent, h.key(1)),
+            (parent, h.key(2)),
+            0,
+            &[],
+        );
+        for replacement in [SYSTEM, Address::new_from_array([76; 32])] {
+            // Corruption fixture, not a user-writable setting. Registration may
+            // not repair/replace this trusted identity from instruction input.
+            let mut corrupted = root.clone();
+            corrupted.data[480..].copy_from_slice(replacement.as_ref());
+            h.svm.set_account(e.root_storage, corrupted).unwrap();
+            rejects(
+                &mut h,
+                &[0],
+                mutation.clone(),
+                if replacement == SYSTEM {
+                    LedgerError::InvalidAccount.into()
+                } else {
+                    LedgerError::MissingAccount.into()
+                },
+            );
+            let registration = e.registration(&h);
+            rejects(
+                &mut h,
+                &[0],
+                registration,
+                LedgerError::InvalidAccount.into(),
+            );
+        }
+        h.svm.set_account(e.root_storage, root).unwrap();
+        let registration = e.registration(&h);
+        let before = h.svm.get_account(&e.root_storage);
+        succeeds(&mut h, &[0], registration);
+        succeeds(&mut h, &[0], mutation);
+        assert_eq!(h.svm.get_account(&e.root_storage), before);
+    }
+}

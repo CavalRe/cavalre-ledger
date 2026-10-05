@@ -270,6 +270,9 @@ fn load(root: &AccountInfo, rest: &[AccountInfo]) -> Result<State> {
 const CHILDREN_OFFSET: usize = 8 + 4 * 32 + 5;
 const BALANCES_OFFSET: usize = CHILDREN_OFFSET + 4;
 const SUB_INDEX_OFFSET: usize = BALANCES_OFFSET + 2 * 16 + 4 + 2 * 32 + 1;
+// Root-only immutable custody identity, outside Record's Borsh payload (at
+// most 383 bytes including MAGIC). Uses existing allocation, never leaf state.
+const VAULT_OFFSET: usize = SPACE - 32;
 
 fn save_fields(data: &mut [u8], r: &Record) {
     data[CHILDREN_OFFSET..CHILDREN_OFFSET + 4].copy_from_slice(&r.children.to_le_bytes());
@@ -286,9 +289,10 @@ fn save(info: &AccountInfo, r: &Record, metadata_changed: bool) -> Result<()> {
         save_fields(&mut data, r);
         return Ok(());
     }
-    data.fill(0);
+    // Preserve the root's immutable custody identity when metadata is saved.
+    data[..VAULT_OFFSET].fill(0);
     data[..8].copy_from_slice(MAGIC);
-    r.serialize(&mut &mut data[8..])
+    r.serialize(&mut &mut data[8..VAULT_OFFSET])
         .map_err(|_| error!(LedgerError::InvalidAccount))
 }
 fn allocate<'info>(
@@ -370,6 +374,7 @@ struct SolanaHost<'a, 'info> {
     global_root_info: Option<AccountInfo<'info>>,
     settlement: Option<Settlement<'a, 'info>>,
     backing: Option<service::Backing<Pubkey>>,
+    initialize_vault: Option<Pubkey>,
     root: service::Root<Pubkey>,
     state: State,
     derived: RefCell<Vec<DerivedAddress>>,
@@ -463,6 +468,7 @@ impl<'a, 'info> SolanaHost<'a, 'info> {
             global_root_info: None,
             settlement: None,
             backing: None,
+            initialize_vault: None,
             root,
             state,
             derived: RefCell::new(Vec::new()),
@@ -507,9 +513,7 @@ impl<'a, 'info> SolanaHost<'a, 'info> {
             None,
         )?;
         if host.root.authority.is_none() {
-            let vault_key =
-                Pubkey::find_program_address(&[b"vault", host.root_info.key.as_ref()], &crate::ID)
-                    .0;
+            let vault_key = host.stored_vault()?;
             let vault = info(&host.root_info, host.rest, &vault_key)?;
             let amount = if host.root.identifier == NATIVE_SOL {
                 require_keys_eq!(
@@ -551,6 +555,28 @@ impl<'a, 'info> SolanaHost<'a, 'info> {
             });
         }
         Ok(host)
+    }
+    fn stored_vault(&self) -> Result<Pubkey> {
+        // new() authenticated the root's owner, PDA and full record before this
+        // read. Only verified registration writes this immutable address.
+        let data = self.root_info.try_borrow_data()?;
+        let vault = Pubkey::new_from_array(
+            data[VAULT_OFFSET..SPACE]
+                .try_into()
+                .map_err(|_| error!(LedgerError::InvalidAccount))?,
+        );
+        require!(vault != Pubkey::default(), LedgerError::InvalidAccount);
+        Ok(vault)
+    }
+    fn bind_vault(&mut self, vault: Pubkey) -> Result<()> {
+        // Called only with Anchor's canonical, owner/mint/authority-validated
+        // vault during registration. Repetition must never replace the binding.
+        if self.state.optional(&self.root.address).is_some() {
+            require_keys_eq!(self.stored_vault()?, vault, LedgerError::InvalidAccount);
+        } else {
+            self.initialize_vault = Some(vault);
+        }
+        Ok(())
     }
     fn with_backing(mut self, asset: Pubkey, amount: u128) -> Self {
         self.backing = Some(service::Backing { asset, amount });
@@ -945,6 +971,15 @@ impl service::Host<Pubkey> for SolanaHost<'_, '_> {
                 save(self.account_info(&entry.key)?, r, entry.metadata_changed)?;
             }
         }
+        if let Some(vault) = self.initialize_vault {
+            if !self.root_info.is_writable {
+                return Err(core::Error::InvalidAccount.into());
+            }
+            self.root_info
+                .try_borrow_mut_data()
+                .map_err(anchor_lang::error::Error::from)?[VAULT_OFFSET..SPACE]
+                .copy_from_slice(vault.as_ref());
+        }
         Ok(())
     }
     fn emit(&mut self, event: service::Event<Pubkey>) -> std::result::Result<(), HostError> {
@@ -1071,7 +1106,7 @@ pub fn add_external_token<'info>(ctx: Context<'info, RegisterToken<'info>>) -> R
         &ctx.accounts.mint.to_account_info(),
         ctx.remaining_accounts,
     )?;
-    SolanaHost::new(
+    let mut host = SolanaHost::new(
         ctx.accounts.root.to_account_info(),
         ctx.remaining_accounts,
         ctx.accounts.payer.to_account_info(),
@@ -1083,8 +1118,9 @@ pub fn add_external_token<'info>(ctx: Context<'info, RegisterToken<'info>>) -> R
         ctx.accounts.mint.key(),
         u128::from(ctx.accounts.vault.amount),
     )
-    .with_global_root(ctx.accounts.global_root.to_account_info())?
-    .run(service::Command::Initialize {
+    .with_global_root(ctx.accounts.global_root.to_account_info())?;
+    host.bind_vault(ctx.accounts.vault.key())?;
+    host.run(service::Command::Initialize {
         name,
         symbol,
         decimals,
@@ -1117,7 +1153,7 @@ pub fn add_native_sol<'info>(ctx: Context<'info, RegisterSol<'info>>) -> Result<
             required,
         )?;
     }
-    SolanaHost::new(
+    let mut host = SolanaHost::new(
         ctx.accounts.root.to_account_info(),
         ctx.remaining_accounts,
         ctx.accounts.payer.to_account_info(),
@@ -1129,8 +1165,9 @@ pub fn add_native_sol<'info>(ctx: Context<'info, RegisterSol<'info>>) -> Result<
         NATIVE_SOL,
         native_backing(ctx.accounts.vault.lamports(), reserve)?,
     )
-    .with_global_root(ctx.accounts.global_root.to_account_info())?
-    .run(service::Command::Initialize {
+    .with_global_root(ctx.accounts.global_root.to_account_info())?;
+    host.bind_vault(ctx.accounts.vault.key())?;
+    host.run(service::Command::Initialize {
         name: "SOL".into(),
         symbol: "SOL".into(),
         decimals: 9,

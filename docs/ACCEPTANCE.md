@@ -5,8 +5,8 @@ artifacts before running tests. Runtime tests load those artifacts into LiteSVM;
 they do not substitute native Rust handlers. This is local runtime validation,
 not a deployed-cluster test or a security audit.
 
-There are 130 test functions: 39 core tests, 26 Solana library tests and
-65 runtime tests. View suites also run with mutations excluded;
+There are 131 test functions: 39 core tests, 26 Solana library tests and
+66 runtime tests. View suites also run with mutations excluded;
 those repeat executions are not additional test functions.
 One core test replays all 162 saved Solidity posting
 cases, including expected rejections and every node's resulting gross balances.
@@ -73,6 +73,12 @@ nonsigner accounts and verifies that neither bytes nor lamports change. A runtim
 test also reads actual persisted records while all mutations are rejected for
 insufficient total backing. Recovery uses actual token/System transfers to the
 vault and proves those repairs create no internal claims.
+
+The custody identity is pinned at registration in existing root storage.
+Runtime cases verify that ordinary calls reject missing or substituted vaults,
+corrupted/missing bindings cannot be replaced by repeated registration, and
+valid repetition remains byte-for-byte idempotent. Live custody observations
+still run on every external/native mutation; no balance is cached.
 
 Root view tests use the shared record decoder and verify that discovery returns
 exactly the same results as Root child queries. They reject forged Root state,

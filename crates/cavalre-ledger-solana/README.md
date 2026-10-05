@@ -244,6 +244,9 @@ For external/native `LedgerAccounts` calls, also supply the canonical vault
 authenticates its address, owner and layout; token vaults must match the ledger
 mint and root storage authority. The core compares its actual balance with all
 claims before executing the command. Missing or substituted vaults reject.
+Registration pins the verified canonical vault address in the root's existing
+allocation. Ordinary backing checks compare against that immutable address;
+they do not repeat a PDA search. Token balances are still read fresh on every call.
 Registration and wrap/unwrap already carry this vault and reuse their validated
 observation. Accounting-only calls need no vault. The extra account adds a read
 dependency on custody but no write permission or storage allocation.

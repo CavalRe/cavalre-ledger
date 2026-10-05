@@ -65,16 +65,16 @@ external paths diverge immediately below the shared application group.
 
 | Leaf depth | Maximum compute units | Maximum transaction bytes | Maximum account keys | Maximum writable keys |
 | --- | ---: | ---: | ---: | ---: |
-| 4 | 57570 | 793 | 15 | 7 |
-| 5 | 62560 | 826 | 16 | 8 |
-| 6 | 72940 | 859 | 17 | 10 |
-| 7 | 81644 | 892 | 18 | 12 |
-| 8 | 88527 | 934 | 19 | 14 |
-| 9 | 97351 | 1000 | 21 | 16 |
-| 10 | 107864 | 1066 | 23 | 18 |
-| 11 | 121565 | 1132 | 25 | 20 |
-| 12 | 129454 | 1198 | 27 | 22 |
-| 13 | 140531 | 1168 | 29 | 24 |
+| 4 | 57191 | 793 | 15 | 7 |
+| 5 | 62182 | 826 | 16 | 8 |
+| 6 | 71080 | 859 | 17 | 10 |
+| 7 | 81268 | 892 | 18 | 12 |
+| 8 | 85171 | 934 | 19 | 14 |
+| 9 | 93997 | 1000 | 21 | 16 |
+| 10 | 104512 | 1066 | 23 | 18 |
+| 11 | 118215 | 1132 | 25 | 20 |
+| 12 | 126106 | 1198 | 27 | 22 |
+| 13 | 137185 | 1168 | 29 | 24 |
 
 Each column is its own maximum across that depth's measured operations. Compute
 need not increase monotonically because PDA bump searches vary with addresses.
@@ -107,9 +107,11 @@ The adapter reduces work without changing the core accounting walk:
 
 Before the backing guard, the optimization in `b146860` reduced the largest
 sample from 208438 to 136116 CU. The current profile includes the backing guard
-on every external/native mutation and reaches 140531 CU. The complete profile
-and depth-14 workflow still use the default 32 KiB heap. Record layouts,
+on every external/native mutation and reaches 137185 CU. The complete profile
+and depth-14 workflow still use the default 32 KiB heap. The Borsh record payload,
 instruction arguments, account sizes and Ledger allocation rent are unchanged.
+The authenticated custody address occupies 32 previously unused bytes in each
+external/native root; ordinary calls no longer search for its PDA.
 
 All samples include compute-limit and compute-price instructions. The profiler
 enforces the 1232-byte packet limit before calling LiteSVM; successful simulator
@@ -125,18 +127,34 @@ are installed as test setup; Ledger state is created through actual instructions
 
 Comparison with the saved `b146860` profile, matching all 2205 samples in order:
 
+Pinning the authenticated vault address at creation removes the repeated PDA
+search from ordinary backing checks. Against `a7f4106`, these calls save
+1479–3364 CU. The short direct transfer drops from 37026 to 33662 CU; its backing
+check overhead falls from 3953 CU (12.0%) to 589 CU (1.8%). The largest CPI transfer
+drops from 140531 to 137185 CU; its overhead falls from 4415 to 1069 CU.
+Across sampled ordinary SPL transfers/tree changes, the remaining increase is
+0.49–3.73%, with all vault owner, mint, authority, layout and extension checks
+retained. The observed balance is always fresh.
+
+This change adds 1568 executable bytes over `a7f4106` (0.42%); the consumer is
+unchanged. The new immutable binding is written during initialization, whose
+compute is outside this profile. It uses existing storage, with no added rent.
+All sampled packet sizes, account/write counts, fees and allocation rent match
+`a7f4106`, including its 18 v0/lookup-table cases. The one read-only vault account
+is still required. Current total overhead relative to the pre-freeze build:
+
 | Sampled operation | Added CU |
 | --- | ---: |
-| Direct classic SPL transfer | 2434–3956 |
-| Application-CPI classic SPL transfer | 2825–4418 |
-| Direct classic SPL tree mutation | 2497–4072 |
-| Application-CPI classic SPL tree mutation | 2870–4498 |
-| Classic SPL deposit | 102–166 |
-| Classic SPL withdrawal | -105 to -42 |
+| Direct classic SPL transfer | 589–959 |
+| Application-CPI classic SPL transfer | 962–1439 |
+| Direct classic SPL tree mutation | 633–709 |
+| Application-CPI classic SPL tree mutation | 1006–1135 |
+| Classic SPL deposit | -267 to +155 |
+| Classic SPL withdrawal | -108 to -54 |
 
 Deposits and withdrawals reuse the already-validated custody observation;
 withdrawals no longer run a separate withdrawal-only backing check. Accounting-only
-samples change by -96 to +110 CU and require no custody account. These are sampled
+samples change by -456 to +38 CU and require no custody account. These are sampled
 costs for the stated paths, not bounds for Token-2022, native SOL or arbitrary trees.
 
 Ordinary external-ledger mutations add one read-only vault account: **33 legacy
@@ -149,27 +167,27 @@ and 0.00707136 SOL (direct) or 0.0075168 SOL (CPI) in storage funding, then is r
 for three transfers without further setup. Clients may provision reusable tables;
 these particular costs describe the test setup, not a per-transfer charge.
 
-The largest sampled transaction rises by 4415 CU (3.24%). Ledger grows from
-369232 to 377216 executable bytes (+7984, 2.16%); the test consumer grows from
+The largest sampled transaction rises by 1069 CU (0.79%). Ledger grows from
+369232 to 378784 executable bytes (+9552, 2.59%); the test consumer grows from
 135384 to 135392 bytes (+8). Ledger transaction fees, allocation rent and writable
 key counts match the baseline in every sample; lookup-table setup is additional.
 Compute charges with a nonzero priority price depend on the requested budget.
 
 | Operation at depth 13 | Maximum compute units | Maximum bytes | New storage funding (SOL) |
 | --- | ---: | ---: | ---: |
-| Create group | 86164 | 924 | 0.00590208 |
-| Create registered leaf | 83033 | 956 | 0.00590208 |
-| Register funded leaf | 74270 | 956 | 0 or 0.00144768 |
-| Remove registered leaf | 74180 | 886 | 0 |
-| First deposit / Source issuance | 110023 | 1090 | 0.0044544 |
-| Repeated deposit / Source issuance | 100660 | 1090 | 0 |
-| First transfer to implicit leaf | 140531 | 1168 | 0.0044544 |
-| Repeated transfer | 136824 | 1168 | 0 |
-| Transfer between registered leaves | 136902 | 1168 | 0 |
-| Withdraw / retire to Source | 100482 | 994 | 0 |
-| First issuance from deep credit leaf | 135821 | 1168 | 0.0044544 |
-| Issuance from registered deep credit leaf | 121650 | 1168 | 0 |
-| Retirement to deep credit leaf | 121735 | 1168 | 0 |
+| Create group | 82801 | 924 | 0.00590208 |
+| Create registered leaf | 81170 | 956 | 0.00590208 |
+| Register funded leaf | 71547 | 956 | 0 or 0.00144768 |
+| Remove registered leaf | 72316 | 886 | 0 |
+| First deposit / Source issuance | 109653 | 1090 | 0.0044544 |
+| Repeated deposit / Source issuance | 100657 | 1090 | 0 |
+| First transfer to implicit leaf | 137185 | 1168 | 0.0044544 |
+| Repeated transfer | 133845 | 1168 | 0 |
+| Transfer between registered leaves | 133923 | 1168 | 0 |
+| Withdraw / retire to Source | 100479 | 994 | 0 |
+| First issuance from deep credit leaf | 135461 | 1168 | 0.0044544 |
+| Issuance from registered deep credit leaf | 121657 | 1168 | 0 |
+| Retirement to deep credit leaf | 121742 | 1168 | 0 |
 
 The complete generated report includes registration and removal measurements.
 The suite verifies final leaf, Source, root and custody balances. A separate
