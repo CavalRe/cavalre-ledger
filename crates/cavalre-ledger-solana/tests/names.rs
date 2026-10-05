@@ -27,9 +27,19 @@ fn name_identity_matches_keccak_and_explicit_pda_derivation() {
         named.0,
         to_address_by_name(&parent, &parent, "abc").unwrap().0
     );
-    // Existing reserved identities are not migrated to new name hashes.
-    assert_eq!(SOURCE, Pubkey::new_from_array([83; 32]));
-    assert_ne!(name_to_address("Source").unwrap(), SOURCE);
+    assert_eq!(name_to_address("Source").unwrap(), SOURCE);
+    assert_eq!(
+        to_address_by_name(&ID, &parent, "Source").unwrap(),
+        to_address(&ID, &parent, &SOURCE)
+    );
+    // Original Solidity SOURCE_ADDRESS is the low 20 bytes of this same hash.
+    assert_eq!(
+        &SOURCE.to_bytes()[12..],
+        &[
+            0x24, 0x5f, 0x14, 0xe6, 0x1e, 0xcd, 0xe5, 0x91, 0xfd, 0x8b, 0x44, 0x5d, 0xc8, 0xe2,
+            0xbf, 0x76, 0xda, 0x45, 0x05, 0xe6
+        ]
+    );
 }
 
 #[test]

@@ -13,8 +13,8 @@ pub fn to_address(program: &Pubkey, parent: &Pubkey, relative: &Pubkey) -> (Pubk
 
 /// Full Keccak-256 of the exact name bytes, represented as a 32-byte relative
 /// public key. Names require 1–64 UTF-8 bytes, including for named leaves.
-/// This is an identifier, not a signer or an allocation. Reserved SOURCE remains
-/// its existing explicit identity; this helper does not special-case labels.
+/// This is an identifier, not a signer or an allocation. SOURCE uses the same
+/// derivation; this helper does not special-case labels.
 pub fn name_to_address(name: &str) -> std::result::Result<Pubkey, Error> {
     core::name_to_address(&PdaAddresses(&crate::ID), name)
 }
@@ -67,7 +67,9 @@ pub fn global_root_address() -> (Pubkey, u8) {
     Pubkey::find_program_address(&[ROOT_NAME.as_bytes()], &crate::ID)
 }
 
-pub const SOURCE: Pubkey = Pubkey::new_from_array([83; 32]);
+/// Reserved Source identity, derived at compile time with no runtime hash cost.
+pub const SOURCE: Pubkey =
+    Pubkey::new_from_array(keccak_const::Keccak256::new().update(b"Source").finalize());
 /// Native SOL asset identity; this System Program address cannot be a token mint.
 pub const NATIVE_SOL: Pubkey = Pubkey::new_from_array([0; 32]);
 pub(crate) const MAGIC: &[u8; 8] = b"CVLEDG01";

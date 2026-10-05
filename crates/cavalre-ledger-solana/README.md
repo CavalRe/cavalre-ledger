@@ -58,8 +58,8 @@ Keccak-256 hash of the name's exact UTF-8 bytes. `to_address_by_name(program,
 parent, name)` returns its child PDA and bump using the existing seeds. Names
 require 1–64 bytes and are case-sensitive, with no trimming or normalization.
 These helpers work without the `mutations` feature and do not allocate storage.
-The existing reserved `SOURCE` identifier is unchanged; hashing `"Source"` does
-not address it.
+The reserved `SOURCE` identifier is the compile-time hash of `"Source"`, so named
+lookup resolves the same protected credit account without a special case.
 
 Named creation delegates to the explicit creation path. It needs the same
 accounts, child-index slots and authenticated custodian; a name hash grants no

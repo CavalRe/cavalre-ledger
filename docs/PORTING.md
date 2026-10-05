@@ -73,9 +73,12 @@ identity; names require 1–64 bytes even for the named leaf overload. Explicit
 leaf labels may still be empty. No normalization or display-name index is added.
 The core's optional `NameDerivation` interface and `Command::add_by_name` keep
 hashing host-specific and resolve into the existing authenticated `Add` command.
-Existing hosts, instructions, addresses, events and record layouts remain valid.
-Reserved `SOURCE` keeps its existing explicit identifier; hashing `"Source"`
-does not resolve it. Use `SOURCE` to address the protected credit account.
+Existing hosts, instructions, events and record layouts remain valid.
+Reserved `SOURCE` is derived at compile time as `keccak256("Source")`, matching
+named lookup. Its low 20 bytes equal the original Solidity Source identifier.
+This replaces the draft's arbitrary `[83; 32]` key and changes Source child PDAs;
+other account derivations are unchanged. There is no existing deployment to
+migrate. Source permissions and accounting rules are unchanged.
 
 Rust and Agave pins, the sBPF build/stack checks, and the original Solidity
 reference tooling remain in the working tree. Old deployment scripts and

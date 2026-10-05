@@ -37,6 +37,69 @@ fn named(
 }
 
 #[test]
+fn named_source_resolves_the_initialized_protected_credit_account() {
+    let mut h = Harness::new();
+    let (internal, internal_source) = h.internal();
+    let external = External::new(&mut h, 240, 0);
+    let relative = sa(name_to_address("Source").unwrap());
+    for (root, source) in [
+        (internal, internal_source),
+        (external.root, external.source),
+    ] {
+        assert_eq!(
+            sa(to_address_by_name(&ledger::ID, &ap(root), "Source")
+                .unwrap()
+                .0),
+            source
+        );
+        assert_eq!(child(root, relative), source);
+        let record = h.record(source);
+        assert!(record.registered);
+        assert_eq!(
+            (record.relative, record.kind, record.name.as_str()),
+            (ap(relative), 3, "Source")
+        );
+        assert!(h
+            .svm
+            .get_account(&child(root, Address::new_from_array([83; 32])))
+            .is_none());
+        // A named creation request cannot bypass the reserved Source check,
+        // even when its metadata matches or the root owner is the signer.
+        let add = named(
+            &h,
+            root,
+            h.key(0),
+            root,
+            "Source",
+            AccountKind::CreditLedger,
+        );
+        rejects(&mut h, &[0], add, LedgerError::Unauthorized.into());
+    }
+    let issue = transfer(
+        &h,
+        internal,
+        h.key(0),
+        (internal, relative),
+        (internal, h.key(1)),
+        17,
+        &[],
+    );
+    succeeds(&mut h, &[0], issue);
+    assert_eq!(h.record(internal_source).credit, 17);
+    let redeem = transfer(
+        &h,
+        internal,
+        h.key(0),
+        (internal, h.key(1)),
+        (internal, relative),
+        17,
+        &[],
+    );
+    succeeds(&mut h, &[0], redeem);
+    assert_eq!(h.record(internal_source).credit, 0);
+}
+
+#[test]
 fn named_and_explicit_creation_share_records_events_and_idempotence() {
     for kind in [
         AccountKind::DebitGroup,

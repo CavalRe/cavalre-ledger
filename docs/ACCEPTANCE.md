@@ -5,8 +5,8 @@ artifacts before running tests. Runtime tests load those artifacts into LiteSVM;
 they do not substitute native Rust handlers. This is local runtime validation,
 not a deployed-cluster test or a security audit.
 
-There are 113 test functions: 35 core tests, 21 Solana library tests and
-57 runtime tests. View suites also run with mutations excluded;
+There are 114 test functions: 35 core tests, 21 Solana library tests and
+58 runtime tests. View suites also run with mutations excluded;
 those repeat executions are not additional test functions.
 One core test replays all 162 saved Solidity posting
 cases, including expected rejections and every node's resulting gross balances.
@@ -24,7 +24,7 @@ original runtime scenarios are in [ledger.rs](../tests/runtime/ledger.rs).
 | Tree authority | Another branch cannot be created, captured, mutated or removed by an unrelated authority. Applications cannot create external-token credits or mutate reserved Source metadata. |
 | Transfer boundaries | Cross-custodian destinations, credit/group endpoints, wrong-ledger accounts, unauthorized callers and underfunded self-transfers reject. An authorized funded self-transfer preserves balances. |
 | Account lifecycle | Registering a funded implicit debit leaf preserves its balance; repeated matching registration is idempotent; conflicting metadata, unauthorized repetition, funded group conversion and nonempty removal reject. Empty removal updates child counts. |
-| Named identities | Keccak golden vector and exact UTF-8 validation; named and explicit creation produce identical records, child slots and events for every account kind. Repeated creation uses readonly Ledger accounts and charges no rent. Funded implicit registration, parent scoping, duplicate display labels, invalid names, conflicts and unauthorized direct/CPI operations preserve existing rules. |
+| Named identities | Keccak golden vector and exact UTF-8 validation; named and explicit creation produce identical records, child slots and events for every account kind. Repeated creation uses readonly Ledger accounts and charges no rent. Funded implicit registration, parent scoping, duplicate display labels, invalid names, conflicts and unauthorized direct/CPI operations preserve existing rules. Named Source lookup resolves the initialized protected credit account and supports issuance/retirement; named creation cannot bypass Source protection. |
 | Implicit leaves | Receipt allocates storage without registering the receiver or requiring its signature. Removing a funded implicit leaf is a no-op. Prefunding a PDA does not capture it or block allocation. |
 | Child indexes | Maintained insertion order, indexed pages without sibling records, one-based reverse indexes, swap-and-pop removal, slot reuse and atomic rejection of missing/readonly/forged inputs. Root uses the same slots. |
 | Parent admission | Registered-only parents reject implicit endpoints in deposits, withdrawals and both transfer directions, including zero amounts. A registered subgroup can allow its own implicit children. |
@@ -98,7 +98,8 @@ a posting allocates only its single bounded change buffer. Solana uses borrowed
 record metadata, direct balance/child-count updates and one working record set.
 The original posting fixtures and token/ledger rollback tests run unchanged.
 
-Named-creation regression comparison against `28b190f`: all 2,205 existing
+At `187e252`, the named-creation regression comparison against `28b190f` found
+all 2,205 existing
 profiled transactions retain their status, packet size, account/write counts,
 fees and rent. Explicit leaf registration costs 2 additional CUs; explicit group
 registration costs 2 fewer. Measured posting, deposit, withdrawal and removal
@@ -106,6 +107,15 @@ compute costs are unchanged. The program artifact grows from 395,384 to 401,312
 bytes (+5,928). In the direct internal-root, 64-byte-name creation cases, choosing
 the named instruction costs 159–164 CUs more than its explicit equivalent.
 Those new-path measurements are examples, not a bound for every transaction.
+
+The subsequent compile-time `Source` identity change, compared with `187e252`,
+preserves all 2,205 profiled transaction outcomes, packet sizes, account/write
+counts, fees and rent. Ordinary operations cost 3 additional CUs. Source-related
+issuance/retirement and settlement deltas range from -17,997 to +3 CUs across the
+sampled roots; a different Source PDA can require fewer bump-search attempts.
+These address-dependent savings are not a general performance guarantee. The
+program artifact grows by 48 bytes to 401,360 bytes. The Source name hash itself
+is evaluated at compile time, with no runtime hashing charge.
 
 The [Token-2022 suite](../tests/runtime/token2022.rs) executes against LiteSVM's
 bundled Token-2022 11.0.0 sBPF. Its plain/metadata mints, metadata initialization,

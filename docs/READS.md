@@ -42,8 +42,9 @@ remain available for reads.
 `to_address_by_name(program, parent, name)` derives its absolute child PDA and
 bump. Both are available without mutations and require no account reads. These
 helpers derive identities, not search by display label. An explicitly identified
-account may have the same label at another address. Use the exported `SOURCE`
-identifier for the reserved Source account, not a hash of its display name.
+account may have the same label at another address. The exported `SOURCE`
+identifier equals `name_to_address("Source")`; both resolve the reserved credit
+account when combined with the ledger root.
 
 | Query | Behavior |
 | --- | --- |
