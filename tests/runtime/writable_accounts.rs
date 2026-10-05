@@ -214,8 +214,8 @@ fn zero_token_settlement_keeps_absent_receiver_unallocated_and_checks_funder() {
         let before = [e.root, e.source, app, e.wallet, e.vault].map(|key| h.svm.get_account(&key));
         for deposit in [true, false] {
             let mut ix = e.movement(&h, (h.key(0), 0), (app, relative), 0, deposit, &[]);
-            // Custody's fixed root/vault/wallet declarations remain unchanged.
-            for key in [e.source, app, receiver] {
+            // Only the native custody wallet/vault and payer remain writable.
+            for key in [e.root, e.source, app, receiver] {
                 readonly(&mut ix, key);
             }
             let payer_before = h.svm.get_account(&h.key(0)).unwrap().lamports;
@@ -231,13 +231,97 @@ fn zero_token_settlement_keeps_absent_receiver_unallocated_and_checks_funder() {
             );
             assert_eq!(events::event_bytes(&result.logs).len(), 5);
         }
-        let wrong_funder = e.movement(&h, (h.key(0), 1), (app, relative), 0, true, &[]);
+        let mut wrong_funder = e.movement(&h, (h.key(0), 1), (app, relative), 0, true, &[]);
+        readonly(&mut wrong_funder, e.root);
         rejects(
             &mut h,
             &[0, 1],
             wrong_funder,
             LedgerError::Unauthorized.into(),
         );
+    }
+}
+
+#[test]
+fn token_custody_requires_root_writes_only_for_nonzero_amounts_direct_and_cpi() {
+    for token_program in [TOKEN, TOKEN_2022] {
+        for cpi in [false, true] {
+            let mut h = Harness::new();
+            let e = External::setup(&mut h, 225, 0, token_program);
+            let mut wallet = h.svm.get_account(&e.wallet).unwrap();
+            wallet.rent_epoch = u64::MAX;
+            h.svm.set_account(e.wallet, wallet).unwrap();
+            h.metadata(e.mint, "Token", "TOK");
+            let registration = e.registration(&h);
+            succeeds(&mut h, &[0], registration);
+            let app = Address::new_from_array([227; 32]);
+            let authority = if cpi {
+                h.svm
+                    .add_program(
+                        app,
+                        &std::fs::read(
+                            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                                .join("../../target/deploy/cavalre_ledger_test_consumer.so"),
+                        )
+                        .unwrap(),
+                    )
+                    .unwrap();
+                sa(anchor_lang::prelude::Pubkey::find_program_address(
+                    &[b"app", h.key(0).as_ref()],
+                    &ap(app),
+                )
+                .0)
+            } else {
+                h.key(0)
+            };
+            let call = |h: &Harness, ix| {
+                if cpi {
+                    proxy(h, app, authority, ix)
+                } else {
+                    ix
+                }
+            };
+            let parent = child(e.root, authority);
+            let create = call(
+                &h,
+                group(&h, e.root, authority, e.root, authority, true, &[]),
+            );
+            succeeds(&mut h, &[0], create);
+            let relative = h.key(2);
+            let receiver = child(parent, relative);
+            for deposit in [true, false] {
+                let movement = e.movement(&h, (authority, 0), (parent, relative), 17, deposit, &[]);
+                let mut missing_write = movement.clone();
+                readonly(&mut missing_write, e.root);
+                let missing_write = call(&h, missing_write);
+                // Real token movement and any leaf allocation must roll back
+                // when the eventual Ledger root write cannot be committed.
+                rejects(
+                    &mut h,
+                    &[0],
+                    missing_write,
+                    LedgerError::InvalidAccount.into(),
+                );
+                let keys = [e.root, e.source, parent, receiver, e.vault, e.wallet];
+                let before = keys.map(|key| h.svm.get_account(&key));
+                let mut zero = e.movement(&h, (authority, 0), (parent, relative), 0, deposit, &[]);
+                for key in [e.root, e.source, parent, receiver] {
+                    readonly(&mut zero, key);
+                }
+                let zero = call(&h, zero);
+                let payer_before = h.svm.get_account(&h.key(0)).unwrap().lamports;
+                let result = run(&mut h, &[0], zero).unwrap();
+                assert_eq!(
+                    h.svm.get_account(&h.key(0)).unwrap().lamports + result.fee,
+                    payer_before
+                );
+                assert_eq!(keys.map(|key| h.svm.get_account(&key)), before);
+                assert_eq!(events::event_bytes(&result.logs).len(), 5);
+                let movement = call(&h, movement);
+                succeeds(&mut h, &[0], movement);
+                assert_eq!(h.record(e.root).credit, if deposit { 17 } else { 0 });
+            }
+        }
     }
 }
 

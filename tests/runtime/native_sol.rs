@@ -102,7 +102,7 @@ fn zero_sol_settlement_never_allocates_receiver_storage() {
     for deposit in [true, false] {
         let mut ix = sol.movement(&h, (h.key(0), 1), h.key(1), (app, receiver), 0, deposit);
         for meta in &mut ix.accounts {
-            if [sol.source, app, leaf].contains(&meta.pubkey) {
+            if [sol.root, sol.source, app, leaf].contains(&meta.pubkey) {
                 meta.is_writable = false;
             }
         }
@@ -115,6 +115,90 @@ fn zero_sol_settlement_never_allocates_receiver_storage() {
             before
         );
         assert_eq!(super::events::event_bytes(&result.logs).len(), 5);
+    }
+}
+
+#[test]
+fn sol_custody_requires_root_writes_only_for_nonzero_amounts_direct_and_cpi() {
+    for cpi in [false, true] {
+        let mut h = Harness::new();
+        let sol = Sol::new(&mut h);
+        let app = Address::new_from_array([82; 32]);
+        let authority = if cpi {
+            h.svm
+                .add_program(
+                    app,
+                    &std::fs::read(
+                        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                            .join("../../target/deploy/cavalre_ledger_test_consumer.so"),
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+            sa(anchor_lang::prelude::Pubkey::find_program_address(
+                &[b"app", h.key(0).as_ref()],
+                &ap(app),
+            )
+            .0)
+        } else {
+            h.key(0)
+        };
+        let call = |h: &Harness, ix| {
+            if cpi {
+                proxy(h, app, authority, ix)
+            } else {
+                ix
+            }
+        };
+        let parent = child(sol.root, authority);
+        let create = call(
+            &h,
+            group(&h, sol.root, authority, sol.root, authority, true, &[]),
+        );
+        succeeds(&mut h, &[0], create);
+        let receiver = h.key(2);
+        let leaf = child(parent, receiver);
+        for deposit in [true, false] {
+            let movement = sol.movement(
+                &h,
+                (authority, 1),
+                h.key(1),
+                (parent, receiver),
+                AMOUNT,
+                deposit,
+            );
+            let mut missing_write = movement.clone();
+            for meta in &mut missing_write.accounts {
+                if meta.pubkey == sol.root {
+                    meta.is_writable = false;
+                }
+            }
+            let missing_write = call(&h, missing_write);
+            rejects(
+                &mut h,
+                &[0, 1],
+                missing_write,
+                LedgerError::InvalidAccount.into(),
+            );
+            let keys = [sol.root, sol.source, parent, leaf, sol.vault, h.key(1)];
+            let before = keys.map(|key| h.svm.get_account(&key));
+            let mut zero =
+                sol.movement(&h, (authority, 1), h.key(1), (parent, receiver), 0, deposit);
+            for meta in &mut zero.accounts {
+                if [sol.root, sol.source, parent, leaf].contains(&meta.pubkey) {
+                    meta.is_writable = false;
+                }
+            }
+            let zero = call(&h, zero);
+            let payer_before = lamports(&h, h.key(0));
+            let result = run(&mut h, &[0, 1], zero).unwrap();
+            assert_eq!(lamports(&h, h.key(0)) + result.fee, payer_before);
+            assert_eq!(keys.map(|key| h.svm.get_account(&key)), before);
+            assert_eq!(super::events::event_bytes(&result.logs).len(), 5);
+            let movement = call(&h, movement);
+            succeeds(&mut h, &[0, 1], movement);
+            assert_eq!(sol.custody(&h), if deposit { AMOUNT } else { 0 });
+        }
     }
 }
 

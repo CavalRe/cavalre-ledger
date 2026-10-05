@@ -65,8 +65,8 @@ pub struct MoveTokens<'info> {
     pub authority: Signer<'info>,
     // Deposit payer authority. On withdrawal this signature confers no additional rights.
     pub funding_authority: Signer<'info>,
-    /// CHECK: authenticated root record and signer seeds in handler.
-    #[account(mut)]
+    /// CHECK: authenticated root record and signer seeds in handler. Commit
+    /// requires write access when balances change; zero amounts need none.
     pub root: UncheckedAccount<'info>,
     #[account(mint::token_program=token_program)]
     pub mint: InterfaceAccount<'info, Mint>,
@@ -104,7 +104,8 @@ pub struct MoveSol<'info> {
     // Deposit wallet signer; withdrawal may reuse the branch authority.
     pub funding_authority: Signer<'info>,
     /// CHECK: canonical native root; owner and record checked by the host.
-    #[account(mut, seeds=[b"ledger", Pubkey::default().as_ref(), NATIVE_SOL.as_ref()], bump)]
+    /// Commit requires write access when balances change.
+    #[account(seeds=[b"ledger", Pubkey::default().as_ref(), NATIVE_SOL.as_ref()], bump)]
     pub root: UncheckedAccount<'info>,
     #[account(mut, seeds=[b"vault", root.key().as_ref()], bump,
         constraint=vault.data_is_empty() @ LedgerError::InvalidAccount)]

@@ -25,6 +25,8 @@ fn child(parent: Address, relative: Address) -> Address {
     sa(ledger::ledger_lib::to_address(&ledger::ID, &ap(parent), &ap(relative)).0)
 }
 fn ix(a: impl ToAccountMetas, d: impl InstructionData, rest: &[Address]) -> Instruction {
+    use anchor_lang::Discriminator;
+    let data = d.data();
     let mut accounts: Vec<_> = a
         .to_account_metas(None)
         .into_iter()
@@ -39,11 +41,24 @@ fn ix(a: impl ToAccountMetas, d: impl InstructionData, rest: &[Address]) -> Inst
     if accounts.len() == 4 {
         accounts[2].is_writable = true;
     }
+    // Existing custody fixtures also retain their root write declaration.
+    // Zero-amount tests explicitly downgrade every Ledger record to read-only.
+    if [
+        instruction::Wrap::DISCRIMINATOR,
+        instruction::Unwrap::DISCRIMINATOR,
+        instruction::WrapSol::DISCRIMINATOR,
+        instruction::UnwrapSol::DISCRIMINATOR,
+    ]
+    .iter()
+    .any(|discriminator| data.starts_with(discriminator))
+    {
+        accounts[3].is_writable = true;
+    }
     accounts.extend(rest.iter().map(|k| AccountMeta::new(*k, false)));
     Instruction {
         program_id: sa(ledger::ID),
         accounts,
-        data: d.data(),
+        data,
     }
 }
 struct Harness {

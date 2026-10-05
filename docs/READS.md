@@ -66,6 +66,13 @@ status is not proof of monetary eligibility or spending permission.
 
 ## Transfer write planning
 
+Custody operations (`wrap`, `unwrap`, `wrap_sol`, `unwrap_sol`) also accept a
+read-only token ledger root for zero amounts. Every Ledger record can be
+read-only in that case; vault/wallet and payer remain writable for the unchanged
+native transfer path. For nonzero amounts, explicitly set the root writable in
+the client account metas, along with the Source, endpoint and changed ancestors.
+The generated `MoveTokens`/`MoveSol` account metas do not set this automatically.
+
 `ledger_view::transfer_writable_accounts` in the core and the matching Solana
 `Reader` method reuse the original posting walk to return the Ledger records a
 transfer changes. Both work with mutations disabled. The inputs are the ledger,

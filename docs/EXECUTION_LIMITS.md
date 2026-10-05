@@ -145,8 +145,10 @@ Transfer clients can supply unchanged ancestors, including the app group and
 token ledger root, read-only. `Reader::transfer_writable_accounts` uses the core
 posting walk to select changed records and absent endpoints requiring allocation.
 Same-polarity paths stop below their lowest common ancestor. Opposite-polarity
-postings change balances through the token root; deposits and withdrawals also
-write the shared Source and vault. Tree mutations write parents whose child
+postings change balances through the token root; nonzero deposits and withdrawals
+also write the shared Source and vault. Zero-amount custody calls accept all
+Ledger records read-only, but still require writable native vault/wallet accounts
+and the fee payer for their unchanged transfer path. Tree mutations write parents whose child
 counts change. Permissions must be selected before signing the transaction.
 
 Independent branches can avoid a shared root write lock, but shared writable

@@ -171,6 +171,26 @@ it may be the already-required branch authority; no recipient signature is neede
 The amount is `u64` native base units. Internal transfer amounts are `u128`.
 No rescaling occurs.
 
+`MoveTokens.root` and `MoveSol.root` accept read-only access. For nonzero
+wrap/unwrap, the client must explicitly mark the root writable: these postings
+cross Source credit and receiver debit and change both root balances. Generated
+Anchor account metas default the root to read-only; adjust the instruction's
+metas before signing or invoking through CPI. Existing transactions with writable
+roots remain valid. A missing required root write rejects atomically at commit,
+including rollback of native token movement and new leaf allocation.
+Anchor's generated `cpi::wrap`/`unwrap`/`wrap_sol`/`unwrap_sol` wrappers also fix
+the root meta as read-only. Nonzero CPI callers must construct the instruction,
+mark the root writable, then use `invoke`/`invoke_signed`; making only the outer
+transaction root writable is insufficient. The test consumer demonstrates
+forwarding the explicitly selected inner-instruction permissions.
+
+For zero amounts, all Ledger records can be read-only, including root, Source,
+receiver and ancestors. The full authorization, admission, backing and native
+transfer validation still runs, with the same posting events and no allocation.
+Vault, wallet and payer retain their writable requirements; zero amounts still
+invoke the native token/System transfer. These shared writable accounts can
+still serialize custody calls.
+
 Supply all endpoint records, parents, custody ancestors and changed ancestors as
 remaining accounts, once each, excluding the fixed root. Include new destination
 and Source PDAs for allocation. Records whose data changes must be writable.

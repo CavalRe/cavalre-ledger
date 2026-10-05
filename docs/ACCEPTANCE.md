@@ -5,8 +5,8 @@ artifacts before running tests. Runtime tests load those artifacts into LiteSVM;
 they do not substitute native Rust handlers. This is local runtime validation,
 not a deployed-cluster test or a security audit.
 
-There are 114 test functions: 35 core tests, 21 Solana library tests and
-58 runtime tests. View suites also run with mutations excluded;
+There are 116 test functions: 35 core tests, 21 Solana library tests and
+60 runtime tests. View suites also run with mutations excluded;
 those repeat executions are not additional test functions.
 One core test replays all 162 saved Solidity posting
 cases, including expected rejections and every node's resulting gross balances.
@@ -34,6 +34,7 @@ original runtime scenarios are in [ledger.rs](../tests/runtime/ledger.rs).
 | Token-2022 | Plain and metadata mints settle through direct calls and application CPI. Immutable-owner wallets work; UI-scaled tokens settle in raw units. Unsupported mint/account extensions reject, including on subsequent settlement. Mixed token programs and frozen accounts reject; late commit failure rolls back settlement and allocation. |
 | Native token identity | Wrong mints, wallets, vault PDAs, vault authorities, substituted token programs and wallet/vault aliasing reject. |
 | Settlement atomicity | Frozen token accounts reject. A late commit failure after token movement and new-leaf allocation rolls back token balances, ledger writes and rent allocation. |
+| Custody root access | Zero-amount classic SPL, Token-2022 and native SOL wrap/unwrap run with all Ledger records read-only, directly and through application CPI, for absent and funded endpoints. Nonzero calls with a read-only root reject at commit and roll back settlement/allocation; the same calls succeed when root writes are supplied. |
 | Shared custody | Two application branches share one Source and root totals. Direct donations increase backing without claims; an empty payer cannot use existing custody surplus to fund a deposit. |
 | Withdrawal backing | A vault that covers an individual withdrawal but not all recorded claims rejects that withdrawal. |
 | Internal accounting | Authorized issuance and retirement support the full `u128` range; overflow rejects atomically and internal issuance changes no external-token claims. |
@@ -116,6 +117,17 @@ sampled roots; a different Source PDA can require fewer bump-search attempts.
 These address-dependent savings are not a general performance guarantee. The
 program artifact grows by 48 bytes to 401,360 bytes. The Source name hash itself
 is evaluated at compile time, with no runtime hashing charge.
+
+Removing unconditional custody-root write constraints, compared with `e13037b`,
+preserves all 2,205 profiled transaction outcomes, packet sizes, account/write
+counts, fees and rent with the existing conservative client permissions.
+Measured classic SPL deposit/withdrawal calls cost 2 fewer CUs; other sampled
+operations are unchanged. The program artifact shrinks by 200 bytes to 401,160.
+There is a client compatibility change: generated account metas (including
+Anchor CPI wrappers) now mark the root read-only. Nonzero custody instructions
+must explicitly supply writable root metas; CPI callers must set this on the
+inner instruction too. Zero-amount tests separately exercise the newly allowed
+read-only Ledger records with native vault/wallet writes retained.
 
 The [Token-2022 suite](../tests/runtime/token2022.rs) executes against LiteSVM's
 bundled Token-2022 11.0.0 sBPF. Its plain/metadata mints, metadata initialization,
