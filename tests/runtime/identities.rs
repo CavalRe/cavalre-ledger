@@ -22,6 +22,19 @@ fn mint_is_the_ledger_identity_in_storage_discovery_parents_reads_and_posting() 
             (root.root, root.relative, root.identifier),
             (ap(e.mint), ap(e.mint), ap(e.mint))
         );
+        // A root's canonical bump is stored at initialization, then used for
+        // runtime verification. Corrupting it must fail before settlement.
+        let saved_root = h.svm.get_account(&e.root_storage).unwrap();
+        let mut invalid_root = saved_root.clone();
+        let mut bad_bump = root.clone();
+        bad_bump.bump ^= 1;
+        anchor_lang::AnchorSerialize::serialize(&bad_bump, &mut &mut invalid_root.data[8..])
+            .unwrap();
+        assert!(decode_data(&ap(e.root_storage), &ledger::ID, &invalid_root.data).is_err());
+        h.svm.set_account(e.root_storage, invalid_root).unwrap();
+        let deposit = e.movement(&h, (h.key(0), 1), (e.root, h.key(0)), 1, true, &[]);
+        rejects(&mut h, &[0, 1], deposit, LedgerError::InvalidAccount.into());
+        h.svm.set_account(e.root_storage, saved_root).unwrap();
         let global = global_root_address().0;
         let slot_key = child_index_address(&global, 0).0;
         let slot = h.svm.get_account(&sa(slot_key)).unwrap();

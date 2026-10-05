@@ -156,9 +156,17 @@ for direct and CPI examples with unchanged ancestors supplied read-only.
 `ledger_view::Reader::from_account_infos` accepts readonly, nonsigner accounts.
 It does not invoke the owning program. Off-chain clients can use `Reader::insert`
 with account address, owner and bytes returned by RPC. The shared decoder checks
-program ownership, header, length and canonical PDA derivation for Ledger records.
+program ownership, header, length, canonical PDA derivation and the stored bump
+for Ledger records.
 It also accepts initialized SPL/Token-2022 mints and canonical Metaplex metadata
 accounts. Query resolution requires valid root and custody context where relevant.
+
+`ledger_lib::decode(AccountInfo)` uses the runtime-authenticated owner and the
+canonical bump stored by Ledger at initialization to verify an address in one
+derivation. The runtime does not accept a caller-provided bump in its place.
+`decode_data` and Reader validate raw snapshots by deriving the canonical bump
+again and comparing it with the stored value. Both paths reject a stored bump
+that does not match its account address.
 
 For a confirmed RPC `null`, call `insert_missing`. A runtime reader can provide
 an empty System-owned account for an absent PDA. Omitting an account does not

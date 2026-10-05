@@ -2,8 +2,7 @@
 //! directly by RPC clients; on-program readers validate ownership and identity.
 use crate::ledger_lib::{child_index_address, decode_child_data, ChildSlot, CHILD_MAGIC};
 use crate::ledger_lib::{
-    decode, decode_data, global_root_address, ledger_address, root_storage_address, to_address,
-    LedgerError, Record,
+    decode, decode_data, global_root_address, root_storage_address, to_address, LedgerError, Record,
 };
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::program_pack::Pack;
@@ -276,8 +275,12 @@ impl Reader {
     /// Mark a ledger absent only after its physical root storage was confirmed
     /// absent. The mint itself may exist and may be present in this reader.
     pub fn insert_missing_ledger(&mut self, scope: &Pubkey, identifier: &Pubkey) -> Result<()> {
-        let address = ledger_address(scope, identifier);
         let storage = root_storage_address(scope, identifier).0;
+        let address = if *scope == Pubkey::default() {
+            *identifier
+        } else {
+            storage
+        };
         require!(!self.contains(&storage), LedgerError::InvalidAccount);
         require!(
             !self.records.contains_key(&address),
@@ -299,15 +302,13 @@ impl Reader {
         let labels = match metadata.labels.as_ref().map_err(|e| *e)? {
             MetadataSource::Undefined => return Err(core::Error::InvalidMetadata),
             MetadataSource::Inline(labels) => labels,
-            MetadataSource::Metaplex(address) => {
-                self.metadata
-                    .get(address)
-                    .ok_or(if self.contains(address) {
-                        core::Error::InvalidMetadata
-                    } else {
-                        core::Error::MissingAccount
-                    })?
-            }
+            MetadataSource::Metaplex(address) => self.metadata.get(address).ok_or_else(|| {
+                if self.contains(address) {
+                    core::Error::InvalidMetadata
+                } else {
+                    core::Error::MissingAccount
+                }
+            })?,
         };
         Ok((
             labels.name.clone(),
@@ -359,10 +360,12 @@ impl Reader {
     }
 
     fn mint(&self, address: &Pubkey) -> std::result::Result<&MintMetadata, core::Error> {
-        self.mints.get(address).ok_or(if self.contains(address) {
-            core::Error::InvalidMetadata
-        } else {
-            core::Error::MissingAccount
+        self.mints.get(address).ok_or_else(|| {
+            if self.contains(address) {
+                core::Error::InvalidMetadata
+            } else {
+                core::Error::MissingAccount
+            }
         })
     }
     pub fn ledger(&self, absolute: &Pubkey) -> std::result::Result<Option<Pubkey>, core::Error> {

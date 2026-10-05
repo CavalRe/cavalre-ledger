@@ -63,16 +63,16 @@ external paths diverge immediately below the shared application group.
 
 | Leaf depth | Maximum compute units | Maximum transaction bytes | Maximum account keys | Maximum writable keys |
 | --- | ---: | ---: | ---: | ---: |
-| 4 | 84681 | 793 | 15 | 7 |
-| 5 | 91058 | 826 | 16 | 8 |
-| 6 | 116997 | 859 | 17 | 10 |
-| 7 | 129838 | 892 | 18 | 12 |
-| 8 | 139169 | 925 | 19 | 14 |
-| 9 | 133413 | 967 | 20 | 16 |
-| 10 | 145577 | 1033 | 22 | 18 |
-| 11 | 183518 | 1099 | 24 | 20 |
-| 12 | 182745 | 1165 | 26 | 22 |
-| 13 | 208438 | 1231 | 28 | 24 |
+| 4 | 57404 | 793 | 15 | 7 |
+| 5 | 62401 | 826 | 16 | 8 |
+| 6 | 70095 | 859 | 17 | 10 |
+| 7 | 81499 | 892 | 18 | 12 |
+| 8 | 84161 | 925 | 19 | 14 |
+| 9 | 92976 | 967 | 20 | 16 |
+| 10 | 103479 | 1033 | 22 | 18 |
+| 11 | 117169 | 1099 | 24 | 20 |
+| 12 | 125049 | 1165 | 26 | 22 |
+| 13 | 136116 | 1231 | 28 | 24 |
 
 Each column is its own maximum across that depth's measured operations. Compute
 need not increase monotonically because PDA bump searches vary with addresses.
@@ -82,36 +82,42 @@ through Anchor logs and validation of the global Root parent; see [event deliver
 Ledger creation is setup outside this profile. Only creation writes the global
 Root child index and count; measured postings do not need Root as an account input.
 
-The adapter avoids three sources of unnecessary work:
+The adapter reduces work without changing the core accounting walk:
 
-- Successful account lookups construct no Anchor error objects; errors are
-  allocated only when a lookup fails.
-- Endpoint derivation reuses a loaded record's authenticated parent, relative
-  identity and address. Loading still validates each stored PDA, and new records
-  still use canonical derivation. Unknown children require a fresh derivation.
-- External-token registration calls the shared mint and metadata decoders
-  directly, without constructing the general-purpose Reader's four map indexes.
-  Metadata ownership, canonical source and issuer-pointer selection still apply.
+- Runtime records authenticate their stored canonical bump with one PDA
+  derivation. Initialization still searches for the canonical bump, and the raw
+  byte decoder used by Reader still checks canonical derivation. Root and child
+  records with corrupted bumps reject before settlement.
+- Loaded child identities, newly derived endpoints and new child-slot bumps are
+  reused within the instruction. Only results of authenticated loading or
+  canonical derivation enter the temporary cache; caller-supplied keys do not.
+- New accounts with zero lamports use one System Program create-account CPI.
+  Prefunded PDAs retain the top-up/allocate/assign path, so prefunding cannot
+  prevent legitimate allocation.
+- Balance, child-count and reverse-index updates write their encoded fields
+  directly. Metadata changes and new records use full serialization. Encoding
+  tests compare the field writes against complete Borsh records byte for byte,
+  including variable-length names, symbols and maximum integer values.
+- Token balances use Anchor's initial decode and reload after the transfer CPI.
+  The core still verifies actual before/after wallet and vault settlement.
+- Successful lookups construct no errors, and token registration uses shared
+  metadata decoders without constructing the full Reader's map indexes.
 
-Against the saved `f6cb304` profile, all 2205 transactions use fewer CUs, saving
-1822–69275 CU per transaction. The largest sampled transaction falls from 241286
-to 208438 CU (13.6%). The direct depth-7 repeat transfer that previously used
-155647 CU now uses 86372 CU. Packet lengths, account/write counts, fees, rent,
-operation results and final accounting checks are unchanged. Initial PDA bump
-searches remain address-dependent, so these samples are not universal bounds.
+Against the saved `181e18c` profile, all 2205 transactions use fewer CUs, saving
+3072–73389 CU per transaction (6.3–49.5%, median 30.2%). The largest sampled
+transaction falls from 208438 to 136116 CU (34.7%). Packet lengths, account/write
+counts, fees, rent and operation results are identical; final accounting checks
+pass. These are sampled gains, not universal bounds. Derivations for new
+addresses remain address-dependent.
 
-The Ledger executable falls from 404048 to 364952 bytes, saving 39096 bytes
-(9.7%). Isolating the metadata change removes 37440 bytes. The freshly rebuilt
-test consumer grows from 132528 to 133648 bytes (+1120, 0.85%); it is a test
-fixture, not the Ledger deployment. Record sizes and rent are unchanged.
-
-Isolated experiments distinguish the effects: lazy error construction saves
-1236–15141 CU per sample; reusing authenticated addresses then saves another
-8755–64331 CU on repeated transfers. The address lookup alone adds up to 112 CU
-on some creation paths because it scans the supplied working records before
-falling back to derivation. The combined changes more than offset that cost in
-every sampled transaction. These measurements exclude the experimental
-all-mutation backing check.
+The compute improvements add code: the Ledger executable grows from 364952 to
+369232 bytes (+4280, 1.17%), and the test consumer grows from 133648 to 135384
+bytes (+1736, 1.30%). The temporary derivation cache also allocates working memory
+when new endpoints are encountered. It introduces no account or depth limit;
+the complete profile and depth-14 workflow still run with the default 32 KiB
+heap. Record layouts, instruction arguments, account sizes and rent are
+unchanged. These measurements exclude the experimental all-mutation backing
+check.
 
 The tests submit signed **legacy transactions**, including both compute-limit
 and compute-price instructions. They enforce the 1232-byte packet limit before
@@ -123,19 +129,19 @@ as test setup; all Ledger tree state is created through actual instructions.
 
 | Operation at depth 13 | Maximum compute units | Maximum bytes | New storage funding (SOL) |
 | --- | ---: | ---: | ---: |
-| Create group | 131732 | 891 | 0.00590208 |
-| Create registered leaf | 110299 | 923 | 0.00590208 |
-| Register funded leaf | 103658 | 923 | 0.00144768 |
-| Remove registered leaf | 94519 | 853 | 0 |
-| First deposit / Source issuance | 161325 | 1090 | 0.0044544 |
-| Repeated deposit / Source issuance | 133556 | 1090 | 0 |
-| First transfer to implicit leaf | 204404 | 1231 | 0.0044544 |
-| Repeated transfer | 187820 | 1231 | 0 |
-| Transfer between registered leaves | 187894 | 1231 | 0 |
-| Withdraw / retire to Source | 136575 | 994 | 0 |
-| First issuance from deep credit leaf | 208438 | 1168 | 0.0044544 |
-| Issuance from registered deep credit leaf | 166938 | 1168 | 0 |
-| Retirement to deep credit leaf | 167023 | 1168 | 0 |
+| Create group | 81676 | 891 | 0.00590208 |
+| Create registered leaf | 80035 | 923 | 0.00590208 |
+| Register funded leaf | 70423 | 923 | 0.00144768 |
+| Remove registered leaf | 71203 | 853 | 0 |
+| First deposit / Source issuance | 109920 | 1090 | 0.0044544 |
+| Repeated deposit / Source issuance | 100558 | 1090 | 0 |
+| First transfer to implicit leaf | 136116 | 1231 | 0.0044544 |
+| Repeated transfer | 132410 | 1231 | 0 |
+| Transfer between registered leaves | 132484 | 1231 | 0 |
+| Withdraw / retire to Source | 100587 | 994 | 0 |
+| First issuance from deep credit leaf | 135917 | 1168 | 0.0044544 |
+| Issuance from registered deep credit leaf | 121745 | 1168 | 0 |
+| Retirement to deep credit leaf | 121830 | 1168 | 0 |
 
 The complete generated report includes registration and removal measurements.
 The suite verifies final leaf, Source, root and custody balances. A separate

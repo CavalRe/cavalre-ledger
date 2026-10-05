@@ -159,11 +159,21 @@ pub fn root_storage_address(scope: &Pubkey, id: &Pubkey) -> (Pubkey, u8) {
     Pubkey::find_program_address(&[b"ledger", scope.as_ref(), id.as_ref()], &crate::ID)
 }
 pub fn decode(info: &AccountInfo) -> Result<Record> {
-    decode_data(info.key, info.owner, &info.try_borrow_data()?)
+    // Program-owned records were created with canonical bumps. Authenticate the
+    // stored bump in one derivation instead of searching for it again.
+    decode_record::<false>(info.key, info.owner, &info.try_borrow_data()?)
 }
 
 /// Decode RPC or runtime account bytes without invoking the mutation program.
 pub fn decode_data(address: &Pubkey, owner: &Pubkey, data: &[u8]) -> Result<Record> {
+    decode_record::<true>(address, owner, data)
+}
+
+fn decode_record<const CANONICAL: bool>(
+    address: &Pubkey,
+    owner: &Pubkey,
+    data: &[u8],
+) -> Result<Record> {
     require_keys_eq!(*owner, crate::ID, LedgerError::InvalidAccount);
     require!(
         data.len() == SPACE && &data[..8] == MAGIC,
@@ -184,10 +194,22 @@ pub fn decode_data(address: &Pubkey, owner: &Pubkey, data: &[u8]) -> Result<Reco
             },
         LedgerError::InvalidAccount
     );
+    let derive = |seeds: &[&[u8]], bumped: &[&[u8]]| -> Result<Pubkey> {
+        if CANONICAL {
+            let (key, bump) = Pubkey::find_program_address(seeds, &crate::ID);
+            require!(bump == r.bump, LedgerError::InvalidAccount);
+            Ok(key)
+        } else {
+            Pubkey::create_program_address(bumped, &crate::ID)
+                .map_err(|_| error!(LedgerError::InvalidAccount))
+        }
+    };
+    let bump = [r.bump];
     let key = if r.depth == 1 {
-        let key = global_root_address().0;
+        let (key, canonical_bump) = global_root_address();
         require!(
-            r.root == key
+            r.bump == canonical_bump
+                && r.root == key
                 && r.parent == key
                 && r.relative == key
                 && r.custodian == key
@@ -209,7 +231,10 @@ pub fn decode_data(address: &Pubkey, owner: &Pubkey, data: &[u8]) -> Result<Reco
             global_root_address().0,
             LedgerError::InvalidAccount
         );
-        let storage = root_storage_address(&r.scope, &r.identifier).0;
+        let storage = derive(
+            &[b"ledger", r.scope.as_ref(), r.identifier.as_ref()],
+            &[b"ledger", r.scope.as_ref(), r.identifier.as_ref(), &bump],
+        )?;
         let logical = if r.scope == Pubkey::default() {
             r.identifier
         } else {
@@ -219,7 +244,10 @@ pub fn decode_data(address: &Pubkey, owner: &Pubkey, data: &[u8]) -> Result<Reco
         require_keys_eq!(r.relative, r.identifier, LedgerError::InvalidAccount);
         storage
     } else {
-        to_address(&crate::ID, &r.parent, &r.relative).0
+        derive(
+            &[b"account", r.parent.as_ref(), r.relative.as_ref()],
+            &[b"account", r.parent.as_ref(), r.relative.as_ref(), &bump],
+        )?
     };
     require_keys_eq!(key, *address, LedgerError::InvalidAccount);
     Ok(r)

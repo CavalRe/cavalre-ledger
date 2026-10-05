@@ -5,7 +5,7 @@ artifacts before running tests. Runtime tests load those artifacts into LiteSVM;
 they do not substitute native Rust handlers. This is local runtime validation,
 not a deployed-cluster test or a security audit.
 
-There are 125 test functions: 37 core tests, 25 Solana library tests and
+There are 126 test functions: 37 core tests, 26 Solana library tests and
 63 runtime tests. View suites also run with mutations excluded;
 those repeat executions are not additional test functions.
 One core test replays all 162 saved Solidity posting
@@ -39,7 +39,7 @@ independent-host replay in [host.rs](../crates/cavalre-ledger-core/tests/host.rs
 | Child indexes | Maintained insertion order, indexed pages without sibling records, one-based reverse indexes, swap-and-pop removal, slot reuse and atomic rejection of missing/readonly/forged inputs. Root uses the same slots. |
 | Parent admission | Registered-only parents reject implicit endpoints in deposits, withdrawals and both transfer directions, including zero amounts. A registered subgroup can allow its own implicit children. |
 | Parent validation | No-op removal still requires a registered group parent in the selected ledger. A valid no-op removal remains allowed beneath a registered-only parent. |
-| Account authentication | Wrong addresses, owners, headers, lengths, duplicate records and omitted parents reject without partial state changes. |
+| Account authentication | Wrong addresses, owners, headers, lengths, stored bumps, duplicate records and omitted parents reject without partial state changes. |
 | Native SOL | Direct and application-CPI round trips enforce separate custodian/payer authority and allow unsigned recipients. Fee payer/wallet aliasing works. Prefunding and donations create no claims; rent is excluded from backing and retained after full withdrawal. Invalid authority, admission, vault identity/owner/data and insufficient total backing reject. Late initialization, deposit and withdrawal failures roll back lamports, records and rent allocation. |
 | Token-2022 | Plain and metadata mints settle through direct calls and application CPI. Immutable-owner wallets work; UI-scaled tokens settle in raw units. Unsupported mint/account extensions reject, including on subsequent settlement. Mixed token programs and frozen accounts reject; late commit failure rolls back settlement and allocation. |
 | Native token identity | Wrong mints, wallets, vault PDAs, vault authorities, substituted token programs and wallet/vault aliasing reject. |

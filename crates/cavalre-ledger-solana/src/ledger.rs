@@ -10,6 +10,7 @@ use anchor_spl::token_interface::{
     self as token, Mint, TokenAccount, TokenInterface, TransferChecked,
 };
 use cavalre_ledger_core::{ledger as service, ledger_lib as core};
+use std::cell::RefCell;
 use token::spl_token_2022::extension::{
     BaseStateWithExtensions, ExtensionType, StateWithExtensions,
 };
@@ -162,6 +163,7 @@ struct StoredAccount {
     key: Pubkey,
     record: Record,
     changed: bool,
+    metadata_changed: bool,
     new: bool,
 }
 struct StoredChild {
@@ -169,6 +171,13 @@ struct StoredChild {
     slot: ChildSlot,
     changed: bool,
     new: bool,
+    bump: u8,
+}
+struct DerivedAddress {
+    parent: Pubkey,
+    relative: Pubkey,
+    key: Pubkey,
+    bump: u8,
 }
 struct State {
     records: Vec<StoredAccount>,
@@ -220,6 +229,7 @@ fn load(root: &AccountInfo, rest: &[AccountInfo]) -> Result<State> {
         key: ledger,
         record: r,
         changed: false,
+        metadata_changed: false,
         new: false,
     });
     for a in rest {
@@ -236,6 +246,7 @@ fn load(root: &AccountInfo, rest: &[AccountInfo]) -> Result<State> {
                     slot: decode_child_data(a.key, a.owner, &a.try_borrow_data()?)?,
                     changed: false,
                     new: false,
+                    bump: 0, // Existing slots need no allocation signer.
                 });
                 continue;
             }
@@ -246,15 +257,34 @@ fn load(root: &AccountInfo, rest: &[AccountInfo]) -> Result<State> {
                 key: *a.key,
                 record: r,
                 changed: false,
+                metadata_changed: false,
                 new: false,
             });
         }
     }
     Ok(State { records, children })
 }
-fn save(info: &AccountInfo, r: &Record) -> Result<()> {
+// Borsh offsets within the unchanged 512-byte record. The variable-length name
+// precedes sub_index; balance and child-count fields are in the fixed prefix.
+const CHILDREN_OFFSET: usize = 8 + 4 * 32 + 5;
+const BALANCES_OFFSET: usize = CHILDREN_OFFSET + 4;
+const SUB_INDEX_OFFSET: usize = BALANCES_OFFSET + 2 * 16 + 4 + 2 * 32 + 1;
+
+fn save_fields(data: &mut [u8], r: &Record) {
+    data[CHILDREN_OFFSET..CHILDREN_OFFSET + 4].copy_from_slice(&r.children.to_le_bytes());
+    data[BALANCES_OFFSET..BALANCES_OFFSET + 16].copy_from_slice(&r.debit.to_le_bytes());
+    data[BALANCES_OFFSET + 16..BALANCES_OFFSET + 32].copy_from_slice(&r.credit.to_le_bytes());
+    let index = SUB_INDEX_OFFSET + r.name.len();
+    data[index..index + 4].copy_from_slice(&r.sub_index.to_le_bytes());
+}
+
+fn save(info: &AccountInfo, r: &Record, metadata_changed: bool) -> Result<()> {
     require!(info.is_writable, LedgerError::InvalidAccount);
     let mut data = info.try_borrow_mut_data()?;
+    if !metadata_changed {
+        save_fields(&mut data, r);
+        return Ok(());
+    }
     data.fill(0);
     data[..8].copy_from_slice(MAGIC);
     r.serialize(&mut &mut data[8..])
@@ -276,9 +306,25 @@ fn allocate<'info>(
         system_program::ID,
         LedgerError::InvalidAccount
     );
-    let required = Rent::get()?
-        .minimum_balance(space)
-        .saturating_sub(account.lamports());
+    let minimum = Rent::get()?.minimum_balance(space);
+    let signer = &[seeds];
+    if account.lamports() == 0 {
+        return system_program::create_account(
+            CpiContext::new_with_signer(
+                *system.key,
+                system_program::CreateAccount {
+                    from: payer.clone(),
+                    to: account.clone(),
+                },
+                signer,
+            ),
+            minimum,
+            space as u64,
+            &crate::ID,
+        );
+    }
+    // Anyone may prefund a PDA. Keep the top-up/allocate/assign path for it.
+    let required = minimum.saturating_sub(account.lamports());
     if required > 0 {
         system_program::transfer(
             CpiContext::new(
@@ -291,7 +337,6 @@ fn allocate<'info>(
             required,
         )?;
     }
-    let signer = &[seeds];
     system_program::allocate(
         CpiContext::new_with_signer(
             *system.key,
@@ -325,6 +370,7 @@ struct SolanaHost<'a, 'info> {
     settlement: Option<Settlement<'a, 'info>>,
     root: service::Root<Pubkey>,
     state: State,
+    derived: RefCell<Vec<DerivedAddress>>,
 }
 enum Settlement<'a, 'info> {
     Tokens(&'a mut MoveTokens<'info>),
@@ -416,7 +462,34 @@ impl<'a, 'info> SolanaHost<'a, 'info> {
             settlement: None,
             root,
             state,
+            derived: RefCell::new(Vec::new()),
         })
+    }
+    fn child_address(&self, parent: &Pubkey, relative: &Pubkey) -> (Pubkey, u8) {
+        // Loaded records and this instruction's newly derived addresses are
+        // authenticated. Never cache an address merely supplied by the caller.
+        if let Some(entry) = self.state.records.iter().find(|entry| {
+            entry.record.depth > 2
+                && entry.record.parent == *parent
+                && entry.record.relative == *relative
+        }) {
+            return (entry.key, entry.record.bump);
+        }
+        let mut derived = self.derived.borrow_mut();
+        if let Some(entry) = derived
+            .iter()
+            .find(|entry| entry.parent == *parent && entry.relative == *relative)
+        {
+            return (entry.key, entry.bump);
+        }
+        let (key, bump) = to_address(&crate::ID, parent, relative);
+        derived.push(DerivedAddress {
+            parent: *parent,
+            relative: *relative,
+            key,
+            bump,
+        });
+        (key, bump)
     }
     fn accounts(ctx: &Context<'info, LedgerAccounts<'info>>) -> Result<Self>
     where
@@ -441,6 +514,7 @@ impl<'a, 'info> SolanaHost<'a, 'info> {
                 key: *global.key,
                 record,
                 changed: false,
+                metadata_changed: false,
                 new: false,
             });
         } else {
@@ -525,7 +599,7 @@ impl service::Host<Pubkey> for SolanaHost<'_, '_> {
         } else if is_root {
             root_storage_address(&scope, &identifier)
         } else {
-            to_address(&crate::ID, &account.flags.parent, &account.relative)
+            self.child_address(&account.flags.parent, &account.relative)
         };
         let logical = if is_root && scope == Pubkey::default() {
             identifier
@@ -572,13 +646,16 @@ impl service::Host<Pubkey> for SolanaHost<'_, '_> {
             decimals: account.decimals,
         };
         if let Some(existing) = self.state.records.iter_mut().find(|a| a.key == key) {
-            existing.changed |= existing.record != r;
+            let changed = existing.record != r;
+            existing.changed |= changed;
+            existing.metadata_changed |= changed;
             existing.record = r;
         } else {
             self.state.records.push(StoredAccount {
                 key,
                 record: r,
                 changed: true,
+                metadata_changed: true,
                 new: true,
             });
         }
@@ -614,11 +691,16 @@ impl service::Host<Pubkey> for SolanaHost<'_, '_> {
         index: u32,
         relative: Option<Pubkey>,
     ) -> std::result::Result<(), HostError> {
-        let key = child_index_address(&parent, index).0;
-        if let Some(entry) = self.state.children.iter_mut().find(|a| a.key == key) {
+        if let Some(entry) = self
+            .state
+            .children
+            .iter_mut()
+            .find(|a| a.slot.parent == parent && a.slot.index == index)
+        {
             entry.changed |= entry.slot.relative != relative;
             entry.slot.relative = relative;
         } else {
+            let (key, bump) = child_index_address(&parent, index);
             let target = self.account_info(&key)?;
             let new = target.data_is_empty();
             if !new {
@@ -639,6 +721,7 @@ impl service::Host<Pubkey> for SolanaHost<'_, '_> {
                 },
                 changed: true,
                 new,
+                bump,
             });
         }
         Ok(())
@@ -649,16 +732,12 @@ impl service::Host<Pubkey> for SolanaHost<'_, '_> {
             .as_mut()
             .ok_or(core::Error::UnsupportedToken)?
         {
-            Settlement::Tokens(native) => {
-                native.vault.reload()?;
-                native.wallet.reload()?;
-                Ok(service::TokenBalances {
-                    asset: native.mint.key(),
-                    owner: native.wallet.owner,
-                    vault: u128::from(native.vault.amount),
-                    wallet: u128::from(native.wallet.amount),
-                })
-            }
+            Settlement::Tokens(native) => Ok(service::TokenBalances {
+                asset: native.mint.key(),
+                owner: native.wallet.owner,
+                vault: u128::from(native.vault.amount),
+                wallet: u128::from(native.wallet.amount),
+            }),
             Settlement::Sol {
                 accounts,
                 rent_reserve,
@@ -748,6 +827,10 @@ impl service::Host<Pubkey> for SolanaHost<'_, '_> {
             u64::try_from(amount).map_err(|_| core::Error::Overflow)?,
             native.mint.decimals,
         )?;
+        // Anchor decoded the initial balances. Refresh only after the CPI so
+        // the core still observes actual token-program settlement on both sides.
+        native.vault.reload()?;
+        native.wallet.reload()?;
         Ok(())
     }
     fn commit(&mut self) -> std::result::Result<(), HostError> {
@@ -782,7 +865,7 @@ impl service::Host<Pubkey> for SolanaHost<'_, '_> {
             }
             let target = self.account_info(&entry.key)?;
             if entry.new {
-                let bump = [child_index_address(&entry.slot.parent, entry.slot.index).1];
+                let bump = [entry.bump];
                 let index = entry.slot.index.to_le_bytes();
                 let seeds: &[&[u8]] = &[b"subs", entry.slot.parent.as_ref(), &index, &bump];
                 allocate(&self.payer, target, &self.system, seeds, CHILD_SPACE)?;
@@ -803,7 +886,7 @@ impl service::Host<Pubkey> for SolanaHost<'_, '_> {
         for entry in &self.state.records {
             if entry.changed {
                 let r = &entry.record;
-                save(self.account_info(&entry.key)?, r)?;
+                save(self.account_info(&entry.key)?, r, entry.metadata_changed)?;
             }
         }
         Ok(())
@@ -1137,17 +1220,7 @@ pub struct Debit {
 
 impl core::AddressDerivation<Pubkey> for SolanaHost<'_, '_> {
     fn to_address(&self, parent: &Pubkey, relative: &Pubkey) -> Pubkey {
-        // load() authenticates stored PDAs; put() derives every new record.
-        // Reuse those identities without another bump search. Absent children
-        // still require canonical derivation, and roots use separate seeds.
-        if let Some(entry) = self.state.records.iter().find(|entry| {
-            entry.record.depth > 2
-                && entry.record.parent == *parent
-                && entry.record.relative == *relative
-        }) {
-            return entry.key;
-        }
-        to_address(&crate::ID, parent, relative).0
+        self.child_address(parent, relative).0
     }
 }
 
@@ -1166,6 +1239,59 @@ impl core::ReadStore<Pubkey> for SolanaHost<'_, '_> {
             Ok(None)
         } else {
             Err(core::Error::InvalidAccount)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn field_writes_match_full_borsh_encoding_for_variable_metadata() {
+        fn encoded(record: &Record) -> Vec<u8> {
+            let mut data = vec![0; SPACE];
+            data[..8].copy_from_slice(MAGIC);
+            record.serialize(&mut &mut data[8..]).unwrap();
+            data
+        }
+        for name in [String::new(), "é".repeat(17), "N".repeat(64)] {
+            for symbol in ["", "TOK", &"S".repeat(64)] {
+                let mut record = Record {
+                    root: Pubkey::new_unique(),
+                    parent: Pubkey::new_unique(),
+                    relative: Pubkey::new_unique(),
+                    custodian: Pubkey::new_unique(),
+                    kind: 2,
+                    token_kind: 0,
+                    depth: 4,
+                    registered: true,
+                    implicit_allowed: true,
+                    children: 3,
+                    debit: 17,
+                    credit: 29,
+                    name: name.clone(),
+                    scope: Pubkey::new_unique(),
+                    identifier: Pubkey::new_unique(),
+                    bump: 251,
+                    sub_index: 1,
+                    symbol: symbol.into(),
+                    decimals: 9,
+                };
+                let mut data = encoded(&record);
+                for (children, debit, credit, index) in [
+                    (u32::MAX, u128::MAX, u128::MAX, u32::MAX),
+                    (0, 0, 0, 0),
+                    (7, 1 << 100, 1 << 90, 2),
+                ] {
+                    record.children = children;
+                    record.debit = debit;
+                    record.credit = credit;
+                    record.sub_index = index;
+                    save_fields(&mut data, &record);
+                    assert_eq!(data, encoded(&record));
+                }
+            }
         }
     }
 }

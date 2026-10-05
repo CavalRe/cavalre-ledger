@@ -749,12 +749,18 @@ fn malformed_records_omitted_ancestors_duplicates_and_wrong_addresses_reject() {
         substituted,
         LedgerError::InvalidAccount.into(),
     );
-    for malformed in 0..3 {
+    for malformed in 0..4 {
         let mut account = saved.clone();
         match malformed {
             0 => account.owner = TOKEN,
             1 => account.data[0] ^= 1,
-            _ => account.data.truncate(20),
+            2 => account.data.truncate(20),
+            _ => {
+                let mut record = h.record(a);
+                record.bump ^= 1;
+                anchor_lang::AnchorSerialize::serialize(&record, &mut &mut account.data[8..])
+                    .unwrap();
+            }
         }
         h.svm.set_account(a, account).unwrap();
         rejects(
