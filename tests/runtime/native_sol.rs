@@ -25,6 +25,8 @@ impl Sol {
     fn registration(&self, h: &Harness) -> Instruction {
         ix(
             accounts::RegisterSol {
+                global_root: ledger::ledger_lib::global_root_address().0,
+                ledger_index: h.next_index(),
                 payer: ap(h.key(0)),
                 root: ap(self.root),
                 vault: ap(self.vault),

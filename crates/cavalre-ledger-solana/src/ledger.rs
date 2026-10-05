@@ -1,7 +1,10 @@
 //! Solana host for the shared Ledger service. Owns runtime authentication,
 //! account encoding/allocation, token calls and transaction rollback integration.
 pub use crate::ledger_lib::{decode, root_address, LedgerError, Record, SOURCE};
-use crate::ledger_lib::{to_address, MAGIC, NATIVE_SOL, SPACE};
+use crate::ledger_lib::{
+    global_root_address, ledger_index_address, to_address, GlobalRoot, LedgerEntry, INDEX_MAGIC,
+    INDEX_SPACE, MAGIC, NATIVE_SOL, ROOT_MAGIC, ROOT_NAME, ROOT_SPACE, SPACE,
+};
 use anchor_lang::{prelude::*, system_program};
 use anchor_spl::token_interface::{
     self as token, Mint, TokenAccount, TokenInterface, TransferChecked,
@@ -24,6 +27,23 @@ pub struct LedgerAccounts<'info> {
     // New endpoint/Source PDAs must be supplied writable for allocation.
 }
 #[derive(Accounts)]
+pub struct RegisterLedger<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    pub authority: Signer<'info>,
+    /// CHECK: root identity, ownership and data authenticated by load/initialize.
+    #[account(mut)]
+    pub root: UncheckedAccount<'info>,
+    pub system_program: Program<'info, System>,
+    /// CHECK: canonical global Root, decoded or initialized by the host.
+    #[account(mut)]
+    pub global_root: UncheckedAccount<'info>,
+    /// CHECK: next insertion index PDA, authenticated against global Root count.
+    #[account(mut)]
+    pub ledger_index: UncheckedAccount<'info>,
+    // Remaining: writable Source PDA.
+}
+#[derive(Accounts)]
 pub struct RegisterToken<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
@@ -37,6 +57,12 @@ pub struct RegisterToken<'info> {
     pub vault: InterfaceAccount<'info, TokenAccount>,
     pub token_program: Interface<'info, TokenInterface>,
     pub system_program: Program<'info, System>,
+    /// CHECK: canonical global Root, decoded or initialized by the host.
+    #[account(mut)]
+    pub global_root: UncheckedAccount<'info>,
+    /// CHECK: next insertion index PDA, authenticated against global Root count.
+    #[account(mut)]
+    pub ledger_index: UncheckedAccount<'info>,
 }
 #[derive(Accounts)]
 pub struct MoveTokens<'info> {
@@ -71,6 +97,12 @@ pub struct RegisterSol<'info> {
         constraint=vault.data_is_empty() @ LedgerError::InvalidAccount)]
     pub vault: SystemAccount<'info>,
     pub system_program: Program<'info, System>,
+    /// CHECK: canonical global Root, decoded or initialized by the host.
+    #[account(mut)]
+    pub global_root: UncheckedAccount<'info>,
+    /// CHECK: next insertion index PDA, authenticated against global Root count.
+    #[account(mut)]
+    pub ledger_index: UncheckedAccount<'info>,
 }
 
 #[derive(Accounts)]
@@ -221,6 +253,7 @@ fn allocate<'info>(
     account: &AccountInfo<'info>,
     system: &AccountInfo<'info>,
     seeds: &[&[u8]],
+    space: usize,
 ) -> Result<()> {
     require!(
         account.is_writable && account.data_is_empty(),
@@ -232,7 +265,7 @@ fn allocate<'info>(
         LedgerError::InvalidAccount
     );
     let required = Rent::get()?
-        .minimum_balance(SPACE)
+        .minimum_balance(space)
         .saturating_sub(account.lamports());
     if required > 0 {
         system_program::transfer(
@@ -255,7 +288,7 @@ fn allocate<'info>(
             },
             signer,
         ),
-        SPACE as u64,
+        space as u64,
     )?;
     system_program::assign(
         CpiContext::new_with_signer(
@@ -276,6 +309,7 @@ struct SolanaHost<'a, 'info> {
     payer: AccountInfo<'info>,
     authority: AccountInfo<'info>,
     system: AccountInfo<'info>,
+    registration: Option<(AccountInfo<'info>, AccountInfo<'info>)>,
     settlement: Option<Settlement<'a, 'info>>,
     root: service::Root<Pubkey>,
     state: State,
@@ -342,7 +376,10 @@ impl<'a, 'info> SolanaHost<'a, 'info> {
         };
         let root = service::Root {
             address: *root_info.key,
-            parent: Pubkey::default(),
+            // load() already authenticated this parent for existing ledgers.
+            parent: state
+                .optional(root_info.key)
+                .map_or_else(|| global_root_address().0, |record| record.parent),
             identifier,
             source: SOURCE,
             authority: (scope != Pubkey::default()).then_some(scope),
@@ -353,15 +390,13 @@ impl<'a, 'info> SolanaHost<'a, 'info> {
             payer,
             authority,
             system,
+            registration: None,
             settlement: None,
             root,
             state,
         })
     }
-    fn accounts(
-        ctx: &Context<'info, LedgerAccounts<'info>>,
-        initialize: Option<Pubkey>,
-    ) -> Result<Self>
+    fn accounts(ctx: &Context<'info, LedgerAccounts<'info>>) -> Result<Self>
     where
         'info: 'a,
     {
@@ -371,8 +406,64 @@ impl<'a, 'info> SolanaHost<'a, 'info> {
             ctx.accounts.payer.to_account_info(),
             ctx.accounts.authority.to_account_info(),
             ctx.accounts.system_program.to_account_info(),
-            initialize.map(|id| (ctx.accounts.authority.key(), id)),
+            None,
         )
+    }
+    fn append_registry(&mut self) -> Result<()> {
+        let (global, entry) = self
+            .registration
+            .as_ref()
+            .ok_or(error!(LedgerError::MissingAccount))?;
+        let (address, bump) = global_root_address();
+        require_keys_eq!(*global.key, address, LedgerError::InvalidAccount);
+        require_keys_eq!(self.root.parent, address, LedgerError::InvalidAccount);
+        require!(
+            global.is_writable && entry.is_writable,
+            LedgerError::InvalidAccount
+        );
+        let mut registry = if global.data_is_empty() {
+            allocate(
+                &self.payer,
+                global,
+                &self.system,
+                &[ROOT_NAME.as_bytes(), &[bump]],
+                ROOT_SPACE,
+            )?;
+            GlobalRoot { ledger_count: 0 }
+        } else {
+            GlobalRoot::decode(global.key, global.owner, &global.try_borrow_data()?)?
+        };
+        let index = registry.ledger_count;
+        registry.ledger_count = index
+            .checked_add(1)
+            .ok_or(error!(LedgerError::Accounting))?;
+        let (address, bump) = ledger_index_address(index);
+        require_keys_eq!(*entry.key, address, LedgerError::InvalidAccount);
+        allocate(
+            &self.payer,
+            entry,
+            &self.system,
+            &[b"ledger-index", &index.to_le_bytes(), &[bump]],
+            INDEX_SPACE,
+        )?;
+        let mut data = entry.try_borrow_mut_data()?;
+        data[..8].copy_from_slice(INDEX_MAGIC);
+        LedgerEntry {
+            index,
+            ledger: self.root.address,
+        }
+        .serialize(&mut &mut data[8..])
+        .map_err(|_| error!(LedgerError::InvalidAccount))?;
+        let mut data = global.try_borrow_mut_data()?;
+        data[..8].copy_from_slice(ROOT_MAGIC);
+        registry
+            .serialize(&mut &mut data[8..])
+            .map_err(|_| error!(LedgerError::InvalidAccount))?;
+        Ok(())
+    }
+    fn with_registry(mut self, root: AccountInfo<'info>, entry: AccountInfo<'info>) -> Self {
+        self.registration = Some((root, entry));
+        self
     }
     fn run(mut self, command: service::Command<Pubkey>) -> Result<()> {
         service::execute(&mut self, command).map_err(|error| error.0)
@@ -402,6 +493,9 @@ impl service::Host<Pubkey> for SolanaHost<'_, '_> {
             return Err(core::Error::Unauthorized.into());
         }
         Ok(*account.key)
+    }
+    fn register_ledger(&mut self) -> std::result::Result<(), HostError> {
+        self.append_registry().map_err(Into::into)
     }
     fn put(
         &mut self,
@@ -619,7 +713,7 @@ impl service::Host<Pubkey> for SolanaHost<'_, '_> {
                         &bump,
                     ]
                 };
-                allocate(&self.payer, target, &self.system, seeds)?;
+                allocate(&self.payer, target, &self.system, seeds, SPACE)?;
             }
         }
         for entry in &self.state.records {
@@ -722,11 +816,23 @@ impl service::Host<Pubkey> for SolanaHost<'_, '_> {
 }
 
 pub fn add_ledger<'info>(
-    ctx: &Context<'info, LedgerAccounts<'info>>,
+    ctx: &Context<'info, RegisterLedger<'info>>,
     id: Pubkey,
     name: String,
 ) -> Result<()> {
-    SolanaHost::accounts(ctx, Some(id))?.run(service::Command::Initialize { name })
+    SolanaHost::new(
+        ctx.accounts.root.to_account_info(),
+        ctx.remaining_accounts,
+        ctx.accounts.payer.to_account_info(),
+        ctx.accounts.authority.to_account_info(),
+        ctx.accounts.system_program.to_account_info(),
+        Some((ctx.accounts.authority.key(), id)),
+    )?
+    .with_registry(
+        ctx.accounts.global_root.to_account_info(),
+        ctx.accounts.ledger_index.to_account_info(),
+    )
+    .run(service::Command::Initialize { name })
 }
 pub fn add_external_token<'info>(
     ctx: Context<'info, RegisterToken<'info>>,
@@ -742,6 +848,10 @@ pub fn add_external_token<'info>(
         ctx.accounts.system_program.to_account_info(),
         Some((Pubkey::default(), ctx.accounts.mint.key())),
     )?
+    .with_registry(
+        ctx.accounts.global_root.to_account_info(),
+        ctx.accounts.ledger_index.to_account_info(),
+    )
     .run(service::Command::Initialize { name })
 }
 pub fn add_native_sol<'info>(ctx: Context<'info, RegisterSol<'info>>) -> Result<()> {
@@ -767,6 +877,10 @@ pub fn add_native_sol<'info>(ctx: Context<'info, RegisterSol<'info>>) -> Result<
         ctx.accounts.system_program.to_account_info(),
         Some((Pubkey::default(), NATIVE_SOL)),
     )?
+    .with_registry(
+        ctx.accounts.global_root.to_account_info(),
+        ctx.accounts.ledger_index.to_account_info(),
+    )
     .run(service::Command::Initialize { name: "SOL".into() })
 }
 pub fn add_account<'info>(
@@ -784,7 +898,7 @@ pub fn add_account<'info>(
         (false, false) => core::AccountKind::DebitLedger,
         (true, false) => core::AccountKind::CreditLedger,
     };
-    SolanaHost::accounts(ctx, None)?.run(service::Command::Add {
+    SolanaHost::accounts(ctx)?.run(service::Command::Add {
         child: service::Child { parent, relative },
         name,
         kind,
@@ -797,7 +911,7 @@ pub fn remove_account<'info>(
     relative: Pubkey,
     group: bool,
 ) -> Result<()> {
-    SolanaHost::accounts(ctx, None)?.run(service::Command::Remove {
+    SolanaHost::accounts(ctx)?.run(service::Command::Remove {
         child: service::Child { parent, relative },
         group,
     })
@@ -810,7 +924,7 @@ pub fn transfer<'info>(
     to: Pubkey,
     amount: u128,
 ) -> Result<()> {
-    SolanaHost::accounts(ctx, None)?.run(service::Command::Transfer {
+    SolanaHost::accounts(ctx)?.run(service::Command::Transfer {
         from: service::Child {
             parent: from_parent,
             relative: from,

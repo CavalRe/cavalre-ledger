@@ -6,8 +6,7 @@ and transaction-size limits, including all instructions and CPI calls. A depth
 cap cannot guarantee that a composed transaction will fit its shared budget.
 
 Depth remains a checked `u8`, with root depth 2. Overflow, malformed trees,
-unauthorized operations and invalid accounting still reject. The stored format
-and instruction arguments are unchanged. Resource exhaustion fails execution;
+unauthorized operations and invalid accounting still reject. The 512-byte ledger record format and posting instruction arguments are unchanged. Resource exhaustion fails execution;
 Solana rolls back the failed transaction's state changes apart from fees.
 Successful account creation does not guarantee that every later operation on
 that account will fit: applications must validate their intended workflows.
@@ -63,22 +62,24 @@ external paths diverge immediately below the shared application group.
 
 | Leaf depth | Maximum compute units | Maximum transaction bytes | Maximum account keys | Maximum writable keys |
 | --- | ---: | ---: | ---: | ---: |
-| 4 | 110945 | 793 | 15 | 7 |
-| 5 | 92734 | 826 | 16 | 8 |
-| 6 | 110114 | 859 | 17 | 10 |
-| 7 | 139765 | 892 | 18 | 12 |
-| 8 | 152323 | 925 | 19 | 14 |
-| 9 | 160373 | 967 | 20 | 16 |
-| 10 | 187459 | 1033 | 22 | 18 |
-| 11 | 192232 | 1099 | 24 | 20 |
-| 12 | 201695 | 1165 | 26 | 22 |
-| 13 | 215313 | 1231 | 28 | 24 |
+| 4 | 120020 | 793 | 15 | 7 |
+| 5 | 101806 | 826 | 16 | 8 |
+| 6 | 119175 | 859 | 17 | 10 |
+| 7 | 148815 | 892 | 18 | 12 |
+| 8 | 161356 | 925 | 19 | 14 |
+| 9 | 169411 | 967 | 20 | 16 |
+| 10 | 196491 | 1033 | 22 | 18 |
+| 11 | 201258 | 1099 | 24 | 20 |
+| 12 | 210715 | 1165 | 26 | 22 |
+| 13 | 224312 | 1231 | 28 | 24 |
 
 Each column is its own maximum across that depth's measured operations. Compute
 need not increase monotonically because PDA bump searches vary with addresses.
 These are sampled measurements, not universal worst-case CU promises. The
 measurements include the current structural and debit/credit events emitted
-through Anchor logs; see [event delivery](EVENTS.md).
+through Anchor logs and validation of the global Root parent; see [event delivery](EVENTS.md).
+Ledger registration is setup outside this profile. Only registration writes the
+global Root and a new registry entry; measured postings need neither account.
 
 The tests submit signed **legacy transactions**, including both compute-limit
 and compute-price instructions. They enforce the 1232-byte packet limit before
@@ -90,17 +91,17 @@ as test setup; all Ledger tree state is created through actual instructions.
 
 | Operation at depth 13 | Maximum compute units | Maximum bytes | New storage funding (SOL) |
 | --- | ---: | ---: | ---: |
-| Create group | 94721 | 858 | 0.0044544 |
-| Create registered leaf | 89738 | 890 | 0.0044544 |
-| First deposit / Source issuance | 155589 | 1090 | 0.0044544 |
-| Repeated deposit / Source issuance | 149148 | 1090 | 0 |
-| First transfer to implicit leaf | 206728 | 1231 | 0.0044544 |
-| Repeated transfer | 200190 | 1231 | 0 |
-| Transfer between registered leaves | 200284 | 1231 | 0 |
-| Withdraw / retire to Source | 147019 | 994 | 0 |
-| First issuance from deep credit leaf | 215313 | 1168 | 0.0044544 |
-| Issuance from registered deep credit leaf | 208906 | 1168 | 0 |
-| Retirement to deep credit leaf | 208991 | 1168 | 0 |
+| Create group | 103796 | 858 | 0.0044544 |
+| Create registered leaf | 98814 | 890 | 0.0044544 |
+| First deposit / Source issuance | 164637 | 1090 | 0.0044544 |
+| Repeated deposit / Source issuance | 158188 | 1090 | 0 |
+| First transfer to implicit leaf | 215731 | 1231 | 0.0044544 |
+| Repeated transfer | 209185 | 1231 | 0 |
+| Transfer between registered leaves | 209279 | 1231 | 0 |
+| Withdraw / retire to Source | 156059 | 994 | 0 |
+| First issuance from deep credit leaf | 224312 | 1168 | 0.0044544 |
+| Issuance from registered deep credit leaf | 217897 | 1168 | 0 |
+| Retirement to deep credit leaf | 217982 | 1168 | 0 |
 
 The complete generated report includes registration and removal measurements.
 The suite verifies final leaf, Source, root and custody balances. A separate

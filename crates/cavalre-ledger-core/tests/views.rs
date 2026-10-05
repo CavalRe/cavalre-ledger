@@ -86,8 +86,23 @@ impl ChildIndex<u64> for Snapshot {
     }
 }
 impl LedgerIndex<u64> for Snapshot {
-    fn ledger_addresses(&self) -> Result<Vec<u64>, Error> {
-        Ok(self.roots.clone())
+    fn registered_ledger_count(&self) -> Result<u64, Error> {
+        for (index, address) in self.roots.iter().enumerate() {
+            if self.roots[..index].contains(address) {
+                return Err(Error::InvalidIndex);
+            }
+            let account = self.account(address)?.ok_or(Error::InvalidIndex)?;
+            if !account.registered || account.flags.depth != 2 {
+                return Err(Error::InvalidIndex);
+            }
+        }
+        Ok(self.roots.len() as u64)
+    }
+    fn registered_ledger(&self, index: u64) -> Result<u64, Error> {
+        self.roots
+            .get(index as usize)
+            .copied()
+            .ok_or(Error::InvalidIndex)
     }
 }
 fn record(
@@ -338,8 +353,8 @@ fn ledger_enumeration_validates_roots_duplicates_and_page_bounds() {
     assert_eq!(view::ledger_count(&state).unwrap(), 1);
     assert_eq!(view::ledger_at(&state, 0).unwrap(), ROOT);
     assert_eq!(view::ledger_at(&state, 1), Err(Error::InvalidIndex));
-    assert_eq!(view::ledgers(&state, 0, usize::MAX).unwrap(), vec![ROOT]);
-    assert!(view::ledgers(&state, usize::MAX, 1).unwrap().is_empty());
+    assert_eq!(view::ledgers(&state, 0, u64::MAX).unwrap(), vec![ROOT]);
+    assert!(view::ledgers(&state, u64::MAX, 1).unwrap().is_empty());
     state.roots.push(ROOT);
     assert_eq!(view::ledger_count(&state), Err(Error::InvalidIndex));
 }
@@ -406,4 +421,27 @@ fn metadata_queries_validate_roots_and_preserve_undefined_zero_and_errors() {
     assert_eq!(view::symbol(&store, &ROOT), Err(Error::MissingAccount));
     store.symbol = Err(Error::InvalidMetadata);
     assert_eq!(view::symbol(&store, &ROOT), Err(Error::InvalidMetadata));
+}
+
+#[test]
+fn global_registry_pages_require_only_the_requested_entries() {
+    struct Page;
+    impl LedgerIndex<u64> for Page {
+        fn registered_ledger_count(&self) -> Result<u64, Error> {
+            Ok(1000)
+        }
+        fn registered_ledger(&self, index: u64) -> Result<u64, Error> {
+            match index {
+                998 => Ok(42),
+                999 => Ok(43),
+                _ => Err(Error::IncompleteIndex),
+            }
+        }
+    }
+    assert_eq!(view::ledger_count(&Page), Ok(1000));
+    assert_eq!(view::ledgers(&Page, 998, u64::MAX), Ok(vec![42, 43]));
+    assert_eq!(view::ledger_at(&Page, 0), Err(Error::IncompleteIndex));
+    assert_eq!(view::ledger_at(&Page, 1000), Err(Error::InvalidIndex));
+    assert_eq!(view::ledgers(&Page, u64::MAX, u64::MAX), Ok(vec![]));
+    assert_eq!(view::ledgers(&Page, 0, 0), Ok(vec![]));
 }

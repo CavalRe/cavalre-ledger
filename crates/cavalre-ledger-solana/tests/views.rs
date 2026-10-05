@@ -40,7 +40,7 @@ impl Fixture {
         let (root, bump) = root_address(&Pubkey::default(), &mint);
         let base = Record {
             root,
-            parent: Pubkey::default(),
+            parent: cavalre_ledger_solana::ledger_lib::global_root_address().0,
             relative: mint,
             custodian: Pubkey::default(),
             kind: 0,

@@ -37,6 +37,62 @@ pub fn effective_flags(
     )
 }
 
+/// Shared parent of every token and accounting ledger. It indexes ledgers;
+/// balances and Source accounts remain within their respective asset ledgers.
+pub const ROOT_NAME: &str = "Root";
+pub(crate) const ROOT_MAGIC: &[u8; 8] = b"CVROOT01";
+pub(crate) const INDEX_MAGIC: &[u8; 8] = b"CVIDX001";
+pub(crate) const ROOT_SPACE: usize = 16;
+pub(crate) const INDEX_SPACE: usize = 48;
+
+pub fn global_root_address() -> (Pubkey, u8) {
+    Pubkey::find_program_address(&[ROOT_NAME.as_bytes()], &crate::ID)
+}
+pub fn ledger_index_address(index: u64) -> (Pubkey, u8) {
+    Pubkey::find_program_address(&[b"ledger-index", &index.to_le_bytes()], &crate::ID)
+}
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug, PartialEq, Eq)]
+pub struct GlobalRoot {
+    pub ledger_count: u64,
+}
+impl GlobalRoot {
+    pub fn decode(address: &Pubkey, owner: &Pubkey, data: &[u8]) -> Result<Self> {
+        require_keys_eq!(*owner, crate::ID, LedgerError::InvalidAccount);
+        require_keys_eq!(
+            *address,
+            global_root_address().0,
+            LedgerError::InvalidAccount
+        );
+        require!(
+            data.len() == ROOT_SPACE && &data[..8] == ROOT_MAGIC,
+            LedgerError::InvalidAccount
+        );
+        Self::deserialize(&mut &data[8..]).map_err(|_| error!(LedgerError::InvalidAccount))
+    }
+}
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug, PartialEq, Eq)]
+pub struct LedgerEntry {
+    pub index: u64,
+    pub ledger: Pubkey,
+}
+impl LedgerEntry {
+    pub fn decode(address: &Pubkey, owner: &Pubkey, data: &[u8]) -> Result<Self> {
+        require_keys_eq!(*owner, crate::ID, LedgerError::InvalidAccount);
+        require!(
+            data.len() == INDEX_SPACE && &data[..8] == INDEX_MAGIC,
+            LedgerError::InvalidAccount
+        );
+        let entry =
+            Self::deserialize(&mut &data[8..]).map_err(|_| error!(LedgerError::InvalidAccount))?;
+        require_keys_eq!(
+            *address,
+            ledger_index_address(entry.index).0,
+            LedgerError::InvalidAccount
+        );
+        Ok(entry)
+    }
+}
+
 pub const SOURCE: Pubkey = Pubkey::new_from_array([83; 32]);
 /// Native SOL asset identity; this System Program address cannot be a token mint.
 pub const NATIVE_SOL: Pubkey = Pubkey::new_from_array([0; 32]);
@@ -127,6 +183,11 @@ pub fn decode_data(address: &Pubkey, owner: &Pubkey, data: &[u8]) -> Result<Reco
         LedgerError::InvalidAccount
     );
     let key = if r.depth == 2 {
+        require_keys_eq!(
+            r.parent,
+            global_root_address().0,
+            LedgerError::InvalidAccount
+        );
         root_address(&r.scope, &r.identifier).0
     } else {
         to_address(&crate::ID, &r.parent, &r.relative).0

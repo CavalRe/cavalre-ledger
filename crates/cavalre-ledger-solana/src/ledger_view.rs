@@ -1,6 +1,9 @@
 //! Read helpers corresponding to LedgerView.sol. Public record data can be read
 //! directly by RPC clients; on-program readers validate ownership and identity.
-use crate::ledger_lib::{decode, decode_data, to_address, LedgerError, Record};
+use crate::ledger_lib::{
+    decode, decode_data, global_root_address, ledger_index_address, to_address, GlobalRoot,
+    LedgerEntry, LedgerError, Record, INDEX_MAGIC, ROOT_MAGIC, ROOT_NAME,
+};
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::program_pack::Pack;
 use cavalre_ledger_core::{ledger_lib as core, ledger_view as view};
@@ -156,6 +159,8 @@ pub fn credit_balance_of(info: &AccountInfo) -> Result<u128> {
 /// runtime readers can supply an empty System-owned account for an absent PDA.
 #[derive(Default)]
 pub struct Reader {
+    global_root: Option<GlobalRoot>,
+    ledger_entries: BTreeMap<Pubkey, LedgerEntry>,
     records: BTreeMap<Pubkey, Option<Record>>,
     mints: BTreeMap<Pubkey, MintMetadata>,
     symbols: BTreeMap<Pubkey, String>,
@@ -184,8 +189,15 @@ impl Reader {
     pub fn insert(&mut self, address: Pubkey, owner: &Pubkey, data: &[u8]) -> Result<()> {
         require!(!self.contains(&address), LedgerError::InvalidAccount);
         if *owner == crate::ID {
-            let record = decode_data(&address, owner, data)?;
-            self.records.insert(address, Some(record));
+            if data.starts_with(ROOT_MAGIC) {
+                self.global_root = Some(GlobalRoot::decode(&address, owner, data)?);
+            } else if data.starts_with(INDEX_MAGIC) {
+                let entry = LedgerEntry::decode(&address, owner, data)?;
+                self.ledger_entries.insert(address, entry);
+            } else {
+                let record = decode_data(&address, owner, data)?;
+                self.records.insert(address, Some(record));
+            }
         } else if *owner == METAPLEX_METADATA_PROGRAM {
             let symbol = metaplex_symbol(&address, data)?;
             self.symbols.insert(address, symbol);
@@ -212,6 +224,12 @@ impl Reader {
         view::account(self, ledger, parent, relative)
     }
     pub fn name(&self, absolute: &Pubkey) -> std::result::Result<String, core::Error> {
+        if *absolute == global_root_address().0 {
+            self.global_root
+                .as_ref()
+                .ok_or(core::Error::MissingAccount)?;
+            return Ok(ROOT_NAME.into());
+        }
         view::name(self, absolute)
     }
     pub fn symbol(&self, ledger: &Pubkey) -> std::result::Result<Option<String>, core::Error> {
@@ -222,7 +240,9 @@ impl Reader {
     }
 
     fn contains(&self, address: &Pubkey) -> bool {
-        self.records.contains_key(address)
+        (self.global_root.is_some() && *address == global_root_address().0)
+            || self.ledger_entries.contains_key(address)
+            || self.records.contains_key(address)
             || self.mints.contains_key(address)
             || self.symbols.contains_key(address)
     }
@@ -281,6 +301,16 @@ impl Reader {
     ) -> std::result::Result<Vec<Pubkey>, core::Error> {
         view::sub_accounts(self, ledger, parent, start, limit)
     }
+    /// Global registry queries need Root plus only the requested index entries.
+    pub fn ledger_count(&self) -> std::result::Result<u64, core::Error> {
+        view::ledger_count(self)
+    }
+    pub fn ledger_at(&self, index: u64) -> std::result::Result<Pubkey, core::Error> {
+        view::ledger_at(self, index)
+    }
+    pub fn ledgers(&self, start: u64, limit: u64) -> std::result::Result<Vec<Pubkey>, core::Error> {
+        view::ledgers(self, start, limit)
+    }
     /// Roots present in this reader, sorted by address. This is deliberately not
     /// ledgerCount: a partial account set cannot establish a global ledger count.
     pub fn known_ledgers(&self) -> std::result::Result<Vec<Pubkey>, core::Error> {
@@ -292,6 +322,23 @@ impl Reader {
             }
         }
         Ok(roots)
+    }
+}
+impl view::LedgerIndex<Pubkey> for Reader {
+    fn registered_ledger_count(&self) -> std::result::Result<u64, core::Error> {
+        self.global_root
+            .as_ref()
+            .map(|r| r.ledger_count)
+            .ok_or(core::Error::MissingAccount)
+    }
+    fn registered_ledger(&self, index: u64) -> std::result::Result<Pubkey, core::Error> {
+        if index >= self.registered_ledger_count()? {
+            return Err(core::Error::InvalidIndex);
+        }
+        self.ledger_entries
+            .get(&ledger_index_address(index).0)
+            .map(|entry| entry.ledger)
+            .ok_or(core::Error::IncompleteIndex)
     }
 }
 impl view::TokenMetadata<Pubkey> for Reader {

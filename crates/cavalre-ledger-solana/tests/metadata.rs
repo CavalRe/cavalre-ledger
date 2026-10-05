@@ -24,7 +24,7 @@ fn root(scope: Pubkey, mint: Pubkey) -> (Pubkey, Vec<u8>) {
     let (address, bump) = root_address(&scope, &mint);
     let record = Record {
         root: address,
-        parent: scope,
+        parent: cavalre_ledger_solana::ledger_lib::global_root_address().0,
         relative: mint,
         custodian: Pubkey::default(),
         kind: 0,

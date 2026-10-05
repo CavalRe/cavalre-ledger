@@ -121,6 +121,29 @@ impl Harness {
             .unwrap()
             .amount
     }
+    fn next_index(&self) -> anchor_lang::prelude::Pubkey {
+        use ledger::ledger_lib::{global_root_address, ledger_index_address, GlobalRoot};
+        let count = self
+            .svm
+            .get_account(&sa(global_root_address().0))
+            .map(|a| {
+                GlobalRoot::decode(&global_root_address().0, &ap(a.owner), &a.data)
+                    .unwrap()
+                    .ledger_count
+            })
+            .unwrap_or(0);
+        ledger_index_address(count).0
+    }
+    fn registration(&self, n: usize, root: Address) -> accounts::RegisterLedger {
+        accounts::RegisterLedger {
+            payer: ap(self.key(n)),
+            authority: ap(self.key(n)),
+            root: ap(root),
+            system_program: ap(SYSTEM),
+            global_root: ledger::ledger_lib::global_root_address().0,
+            ledger_index: self.next_index(),
+        }
+    }
     fn internal(&mut self) -> (Address, Address) {
         self.internal_named("Scale")
     }
@@ -128,7 +151,7 @@ impl Harness {
         let root = sa(ledger::ledger::root_address(&ap(self.key(0)), &ap(self.key(2))).0);
         let source = child(root, sa(SOURCE));
         let mut i = ix(
-            self.base(0, root),
+            self.registration(0, root),
             instruction::AddLedger {
                 id: ap(self.key(2)),
                 name: name.into(),
@@ -299,6 +322,8 @@ fn external_token_deposit_transfer_withdraw_and_isolation() {
         0,
         ix(
             accounts::RegisterToken {
+                global_root: ledger::ledger_lib::global_root_address().0,
+                ledger_index: h.next_index(),
                 payer: ap(h.key(0)),
                 root: ap(root),
                 mint: ap(mint),
@@ -507,6 +532,8 @@ fn application_pda_can_create_its_branch_but_another_application_cannot() {
         0,
         ix(
             accounts::RegisterToken {
+                global_root: ledger::ledger_lib::global_root_address().0,
+                ledger_index: h.next_index(),
                 payer: ap(h.key(0)),
                 root: ap(root),
                 mint: ap(mint),

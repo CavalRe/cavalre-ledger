@@ -172,10 +172,13 @@ pub fn ledger<A: Copy + Eq>(store: &impl ReadStore<A>, absolute: &A) -> Result<O
 pub trait ChildIndex<A: Copy + Eq>: ReadStore<A> {
     fn child_addresses(&self, parent: &A) -> Result<Vec<A>, Error>;
 }
-/// A complete ledger-root index. Partial input must not implement this as though
-/// it were the full service registry; hosts can use an authenticated query index.
-pub trait LedgerIndex<A: Copy + Eq>: ReadStore<A> {
-    fn ledger_addresses(&self) -> Result<Vec<A>, Error>;
+/// Authenticated global Root registry from one snapshot. Count is authoritative;
+/// entries are unique, append-only and ordered by registration. A host may load
+/// only the requested entries; missing in-range input is an error, not absence.
+/// No ledger balance records are needed to enumerate this index.
+pub trait LedgerIndex<A: Copy + Eq> {
+    fn registered_ledger_count(&self) -> Result<u64, Error>;
+    fn registered_ledger(&self, index: u64) -> Result<A, Error>;
 }
 fn unique<A: Copy + Eq>(addresses: &[A]) -> Result<(), Error> {
     for (i, address) in addresses.iter().enumerate() {
@@ -235,24 +238,26 @@ pub fn sub_account<A: Copy + Eq>(
         .copied()
         .ok_or(Error::InvalidIndex)
 }
-fn roots<A: Copy + Eq>(store: &impl LedgerIndex<A>) -> Result<Vec<A>, Error> {
-    let addresses = store.ledger_addresses()?;
-    unique(&addresses)?;
-    for address in &addresses {
-        root(store, address)?;
+pub fn ledger_count<A: Copy + Eq>(store: &impl LedgerIndex<A>) -> Result<u64, Error> {
+    store.registered_ledger_count()
+}
+pub fn ledger_at<A: Copy + Eq>(store: &impl LedgerIndex<A>, index: u64) -> Result<A, Error> {
+    if index >= store.registered_ledger_count()? {
+        return Err(Error::InvalidIndex);
     }
-    Ok(addresses)
-}
-pub fn ledger_count<A: Copy + Eq>(store: &impl LedgerIndex<A>) -> Result<usize, Error> {
-    Ok(roots(store)?.len())
-}
-pub fn ledger_at<A: Copy + Eq>(store: &impl LedgerIndex<A>, index: usize) -> Result<A, Error> {
-    roots(store)?.get(index).copied().ok_or(Error::InvalidIndex)
+    store.registered_ledger(index)
 }
 pub fn ledgers<A: Copy + Eq>(
     store: &impl LedgerIndex<A>,
-    start: usize,
-    limit: usize,
+    start: u64,
+    limit: u64,
 ) -> Result<Vec<A>, Error> {
-    Ok(roots(store)?.into_iter().skip(start).take(limit).collect())
+    let count = store.registered_ledger_count()?;
+    let length = count.saturating_sub(start).min(limit);
+    // Grow with authenticated results, never preallocate from an untrusted limit.
+    let mut addresses = Vec::new();
+    for offset in 0..length {
+        addresses.push(store.registered_ledger(start + offset)?);
+    }
+    Ok(addresses)
 }

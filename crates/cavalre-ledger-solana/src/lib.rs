@@ -13,7 +13,7 @@ declare_id!("HZyRps1XCM8cFqT7wZ8guNzV22EkVU4pLUBi9LNzpo97");
 pub mod cavalre_ledger_solana {
     use super::*;
     pub fn add_ledger<'info>(
-        ctx: Context<'info, LedgerAccounts<'info>>,
+        ctx: Context<'info, RegisterLedger<'info>>,
         id: Pubkey,
         name: String,
     ) -> Result<()> {

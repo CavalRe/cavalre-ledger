@@ -56,6 +56,7 @@ The `Host<A>` interface is defined by the core. A host supplies an address type
 | Method | Host responsibility |
 | --- | --- |
 | `root` | Authenticate the selected root, asset/identifier, reserved Source identity and accounting-only owner. |
+| `register_ledger` | Verify the selected ledger's parent is global Root and atomically append its unique address to the insertion-ordered registry. |
 | `authenticate(role, command)` | Establish the acting authority or token payer from the current execution context. Verify signatures or consume the runtime's verified result. |
 | `to_address` | Derive a child identity from its absolute parent and relative identifier in this service's domain. |
 | `account`, `put` | Borrow authenticated logical state; create or replace metadata without imposing a serialization or database format. |
@@ -94,10 +95,13 @@ The same change buffer records credit/debit posting directions and gross columns
 for event emission, including zero amounts. No second event buffer or ancestor
 walk is needed. See [event semantics](../../docs/EVENTS.md).
 
-Host implementors must adapt the borrowed `account` return type and implement
-`set_balances`/`set_children` inside the same atomic boundary. This is a Rust
-interface change; it changes neither Solana instruction arguments nor stored
-account encoding.
+Host implementors must implement borrowed `account` reads, field updates and
+`register_ledger` inside the same atomic boundary. Registry failure must undo
+ledger and Source creation; later commit failure must also undo the append.
+The read-only `LedgerIndex` provides an authoritative `u64` count and indexed
+lookup without loading unrelated ledger records. This is separate from the
+selected depth-2 ledger returned by `Host::root`. Solana registration account
+changes are documented in the adapter README.
 
 The Solana implementation uses runtime signer checks, PDA derivation, program
 accounts and SPL calls. `tests/host.rs` implements the same interface using

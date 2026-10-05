@@ -48,7 +48,7 @@ remain available for reads.
 | `total_supply` | Root gross debits, as in the original Solidity view; not root net balance |
 | `ledger` | Address-only lookup for registered accounts/roots; implicit leaves require their parent context |
 | `sub_accounts`, `sub_account` | Registered relative child identifiers; implicit and removed leaves are excluded |
-| `ledger_count`, `ledger_at`, `ledgers` | Core queries requiring a complete host `LedgerIndex` |
+| `ledger_count`, `ledger_at`, `ledgers` | Authoritative global Root count and insertion-ordered entries through `LedgerIndex`; available in Solana `Reader` |
 
 Unsigned negative net balances return an error, preserving Solidity subtraction
 behavior. Gross balances remain inspectable. Queries report a parent's admission
@@ -77,11 +77,31 @@ enumeration, the supplied records must match the parent's stored child count;
 otherwise the query returns `IncompleteIndex`. Child order is absolute-PDA order
 within the snapshot, rather than Solidity's insertion/swap-removal order.
 
-`Reader::known_ledgers` lists only supplied roots. It does not claim to be a
-global ledger count. A complete Solana discovery client must obtain the full
-root set, for example from program-account queries, before exposing the core
-`LedgerIndex` contract. No global on-chain registry or second balance store is
-introduced by this change.
+The global `Root` is the parent and registry of all token and accounting ledgers,
+restoring the original `ROOT_ADDRESS` / `subs[ROOT_ADDRESS]` role. Each ledger
+remains a debit group at depth 2, with its own credit Source and accounting tree.
+The posting walk stops at that ledger; Root has no balance aggregating unlike
+assets. Its address is `global_root_address().0`, derived from `["Root"]`.
+
+`Reader::ledger_count()` requires only Root. `ledger_at(index)` additionally
+requires the entry at `ledger_index_address(index).0`; `ledgers(start, limit)`
+requires only the requested in-range entries. Indices and counts are `u64`.
+Results follow registration order, matching Solidity. An out-of-range single
+index returns `InvalidIndex`; a page past the end or with zero limit is empty.
+Missing in-range entries return `IncompleteIndex`, never a partial success.
+No ledger balance records or unrelated index entries are required. Readers
+validate owner, header, length and canonical PDA for Root and each entry.
+
+Before the first registration, Root is uninitialized. An omitted or confirmed
+absent Root yields `MissingAccount`; clients can separately confirm that this
+service has not yet been initialized. `Reader::name` returns `Root` for an
+initialized global Root. `Reader::known_ledgers` remains a separate utility
+listing only the supplied ledger records, sorted by address.
+
+`LedgerIndex` now provides an authoritative count and indexed lookup rather than
+requiring a full list of ledger records. A host must authenticate the unique,
+append-only registry at one snapshot. Views remain available with mutations
+excluded. See [registration and storage](../crates/cavalre-ledger-solana/README.md#global-root-and-registration).
 
 ## Asset metadata
 
@@ -126,8 +146,8 @@ invented. Queries accept ledger roots, not descendants; callers that have a leaf
 use their known root. This explicitly differs from Solidity's stored per-address
 metadata getters. Existing `name` continues to return Ledger's stored name.
 
-This change adds no record fields, token-admission rules, metadata write
-instructions or asset registry. Custom metadata formats and accounting-only
+Metadata reads add no record fields, token-admission rules or metadata write
+instructions. Custom metadata formats and accounting-only
 metadata configuration remain outside this implementation.
 
 Sources: [Solana metadata pointers](https://solana.com/docs/tokens/extensions/metadata),

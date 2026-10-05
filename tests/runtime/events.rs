@@ -78,7 +78,7 @@ fn initialization_and_account_lifecycle_emit_original_event_families() {
     let identifier = h.key(2);
     let root = sa(ledger::ledger_lib::root_address(&ap(scope), &ap(identifier)).0);
     let i = ix(
-        h.base(0, root),
+        h.registration(0, root),
         instruction::AddLedger {
             id: ap(identifier),
             name: "Scale".into(),
@@ -154,6 +154,8 @@ fn initialization_and_account_lifecycle_emit_original_event_families() {
     .0);
     let i = ix(
         accounts::RegisterSol {
+            global_root: ledger::ledger_lib::global_root_address().0,
+            ledger_index: h.next_index(),
             payer: ap(scope),
             root: ap(root),
             vault: ap(vault),

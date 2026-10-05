@@ -10,7 +10,7 @@ proof of complete parity with this baseline.
 | --- | --- | --- |
 | `LedgerLib.sol` | `cavalre-ledger-core/src/ledger_lib.rs` | Identity, effective flags, custody lookup and posting walk implemented |
 | `Ledger.sol` | Core `ledger.rs`, plus the Solana host adapter | Shared account management, permissions, transfers and settlement policy implemented |
-| `LedgerView.sol` | Core and Solana `ledger_view.rs` | Independent account, balance, custody and registered-child queries; full registry/metadata differences documented in READS.md |
+| `LedgerView.sol` | Core and Solana `ledger_view.rs` | Independent account, balance, custody, registered-child and global ledger registry queries; metadata differences documented in READS.md |
 | `ILedger` / `LedgerLib` events | Core `ledger::Event`, host `emit`, Solana Anchor events | Original structural and posting event families; payload adaptations and transaction-status requirements in EVENTS.md |
 
 The reusable core holds shared rules and the `Host` interface without platform dependencies.
@@ -19,8 +19,11 @@ the core. Address types are host-defined; the core does not impose Solana keys.
 The pure accounting portion remains in the core rather than a separate
 kernel crate for now. Core `ledger::execute` requires host authentication and
 transactional storage/settlement, and enforces lifecycle and custodian policy.
-The Solana `ledger.rs` implements those capabilities while retaining its existing
-instruction arguments and record layout.
+The Solana `ledger.rs` implements those capabilities. The original global Root
+and insertion-ordered ledger registry are represented by a canonical Root PDA
+and index-entry PDAs. Creation requires these extra accounts; ordinary posting
+still stops at the selected depth-2 ledger. The 512-byte record layout is
+retained, with Root replacing the earlier draft's zero parent.
 
 The `mutations` feature controls each crate's mutating `ledger` module. Queries
 and shared account types remain available with that feature disabled. Record

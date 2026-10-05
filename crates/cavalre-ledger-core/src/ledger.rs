@@ -89,6 +89,10 @@ pub trait Host<A: Copy + Eq>: ReadStore<A> + Sized {
     type Error: From<Error>;
     fn root(&self) -> Root<A>;
     fn authenticate(&self, role: Role, command: &Command<A>) -> Result<A, Self::Error>;
+    /// Append this new ledger to the authenticated global Root registry.
+    /// Verify `root().parent` is that Root. The append is insertion-ordered,
+    /// unique and atomic with the ledger, Source and all other initialization.
+    fn register_ledger(&mut self) -> Result<(), Self::Error>;
     fn put(&mut self, address: A, account: Account<A>) -> Result<(), Self::Error>;
     /// Update existing fields without reading/copying unrelated metadata.
     fn set_balances(&mut self, address: A, balances: Balances) -> Result<(), Self::Error>;
@@ -301,6 +305,7 @@ fn initialize<A: Copy + Eq, H: Host<A>>(
             name: "Source".into(),
         },
     )?;
+    host.register_ledger()?;
     host.emit(Event::SubAccountAdded {
         ledger: root.address,
         parent: root.address,
