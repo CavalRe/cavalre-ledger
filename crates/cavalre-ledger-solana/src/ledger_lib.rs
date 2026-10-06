@@ -6,65 +6,65 @@ pub use core::{AccountKind, Error, Store, TokenKind};
 pub type Flags = core::Flags<Pubkey>;
 pub type Child = core::Child<Pubkey>;
 
-/// Derivation neither allocates storage nor registers an account.
-pub fn to_address(program: &Pubkey, parent: &Pubkey, relative: &Pubkey) -> (Pubkey, u8) {
-    Pubkey::find_program_address(&[b"account", parent.as_ref(), relative.as_ref()], program)
+/// Logical identity: Keccak-256 of exactly the two packed 32-byte identifiers.
+/// No program ID, prefix, bump, curve check, allocation or registration.
+pub fn to_address(parent: &Pubkey, relative: &Pubkey) -> Pubkey {
+    Pubkey::new_from_array(
+        solana_keccak_hasher::hashv(&[parent.as_ref(), relative.as_ref()]).to_bytes(),
+    )
 }
 
-/// Full Keccak-256 of the exact name bytes, represented as a 32-byte relative
-/// public key. Names require 1–64 UTF-8 bytes, including for named leaves.
-/// This is an identifier, not a signer or an allocation. SOURCE uses the same
-/// derivation; this helper does not special-case labels.
+/// Physical record storage. This is not the logical Ledger address.
+pub fn account_storage_address(parent: &Pubkey, relative: &Pubkey) -> (Pubkey, u8) {
+    Pubkey::find_program_address(
+        &[b"account", parent.as_ref(), relative.as_ref()],
+        &crate::ID,
+    )
+}
+
+/// Full Keccak-256 of the exact name bytes, represented as a 32-byte identity.
 pub fn name_to_address(name: &str) -> std::result::Result<Pubkey, Error> {
-    core::name_to_address(&PdaAddresses(&crate::ID), name)
+    core::name_to_address(&Addresses, name)
 }
 
-/// Resolve a named child using the existing explicit-address PDA seeds.
-pub fn to_address_by_name(
-    program: &Pubkey,
-    parent: &Pubkey,
-    name: &str,
-) -> std::result::Result<(Pubkey, u8), Error> {
-    Ok(to_address(program, parent, &name_to_address(name)?))
+pub fn to_address_by_name(parent: &Pubkey, name: &str) -> std::result::Result<Pubkey, Error> {
+    Ok(to_address(parent, &name_to_address(name)?))
 }
 
-pub struct PdaAddresses<'a>(pub &'a Pubkey);
-
-impl core::NameDerivation<Pubkey> for PdaAddresses<'_> {
+pub struct Addresses;
+impl core::NameDerivation<Pubkey> for Addresses {
     fn hash_name(&self, name: &str) -> Pubkey {
         Pubkey::new_from_array(solana_keccak_hasher::hash(name.as_bytes()).to_bytes())
     }
 }
-
-impl core::AddressDerivation<Pubkey> for PdaAddresses<'_> {
+impl core::AddressDerivation<Pubkey> for Addresses {
     fn to_address(&self, parent: &Pubkey, relative: &Pubkey) -> Pubkey {
-        to_address(self.0, parent, relative).0
+        to_address(parent, relative)
     }
 }
 
 pub use core::{custody, ledger};
 
-/// Resolve through the shared core using this program's PDA derivation.
+/// Resolve through the shared core using logical Ledger identities.
 pub fn effective_flags(
     store: &impl Store<Pubkey>,
-    program: &Pubkey,
     ledger_address: &Pubkey,
     parent: &Pubkey,
     relative: &Pubkey,
 ) -> std::result::Result<(Flags, Option<Flags>, Pubkey), Error> {
-    core::effective_flags(
-        store,
-        &PdaAddresses(program),
-        ledger_address,
-        parent,
-        relative,
-    )
+    core::effective_flags(store, &Addresses, ledger_address, parent, relative)
 }
 
 pub use core::ROOT_NAME;
 
-pub fn global_root_address() -> (Pubkey, u8) {
-    Pubkey::find_program_address(&[ROOT_NAME.as_bytes()], &crate::ID)
+/// Canonical bump for this program ID; checked against the SDK derivation in tests.
+pub const GLOBAL_ROOT_BUMP: u8 = 250;
+/// Fixed Root identity, hashed at compile time rather than during each operation.
+pub const GLOBAL_ROOT: Pubkey =
+    Pubkey::derive_address_const(&[ROOT_NAME.as_bytes()], Some(GLOBAL_ROOT_BUMP), &crate::ID);
+
+pub const fn global_root_address() -> (Pubkey, u8) {
+    (GLOBAL_ROOT, GLOBAL_ROOT_BUMP)
 }
 
 /// Reserved Source identity, derived at compile time with no runtime hash cost.
@@ -100,6 +100,34 @@ pub struct Record {
     pub decimals: u8,
 }
 impl Record {
+    pub fn is_container(&self) -> bool {
+        self.registered && self.kind < 2
+    }
+    pub fn address(&self) -> Pubkey {
+        if self.depth <= 2 {
+            self.root
+        } else {
+            to_address(&self.parent, &self.relative)
+        }
+    }
+    /// Physical location of this record; stored bump avoids a curve search.
+    pub fn storage_address(&self) -> Pubkey {
+        if self.depth == 1 {
+            GLOBAL_ROOT
+        } else if self.depth == 2 {
+            Pubkey::derive_address(
+                &[b"ledger", self.scope.as_ref(), self.identifier.as_ref()],
+                Some(self.bump),
+                &crate::ID,
+            )
+        } else {
+            Pubkey::derive_address(
+                &[b"account", self.parent.as_ref(), self.relative.as_ref()],
+                Some(self.bump),
+                &crate::ID,
+            )
+        }
+    }
     pub fn flags(&self) -> core::Flags<Pubkey> {
         core::Flags {
             parent: self.parent,
@@ -159,8 +187,9 @@ pub fn root_storage_address(scope: &Pubkey, id: &Pubkey) -> (Pubkey, u8) {
     Pubkey::find_program_address(&[b"ledger", scope.as_ref(), id.as_ref()], &crate::ID)
 }
 pub fn decode(info: &AccountInfo) -> Result<Record> {
-    // Program-owned records were created with canonical bumps. Authenticate the
-    // stored bump in one derivation instead of searching for it again.
+    // Creation establishes a canonical off-curve PDA. Only this program can
+    // write its records, and mutations preserve their seeds. Recheck the exact
+    // address hash here without repeating the curve check on every read.
     decode_record::<false>(info.key, info.owner, &info.try_borrow_data()?)
 }
 
@@ -176,13 +205,14 @@ fn decode_record<const CANONICAL: bool>(
 ) -> Result<Record> {
     require_keys_eq!(*owner, crate::ID, LedgerError::InvalidAccount);
     require!(
-        data.len() == SPACE && &data[..8] == MAGIC,
+        data.len() >= SPACE && &data[..8] == MAGIC,
         LedgerError::InvalidAccount
     );
+    crate::ledger_storage::capacity(data)?;
     let r =
         Record::deserialize(&mut &data[8..]).map_err(|_| error!(LedgerError::InvalidAccount))?;
     require!(
-        r.kind <= 3
+        r.kind <= 1
             && r.depth >= 1
             && r.name.len() <= 64
             && r.symbol.len() <= 64
@@ -194,17 +224,15 @@ fn decode_record<const CANONICAL: bool>(
             },
         LedgerError::InvalidAccount
     );
-    let derive = |seeds: &[&[u8]], bumped: &[&[u8]]| -> Result<Pubkey> {
+    let derive = |seeds: &[&[u8]; 3]| -> Result<Pubkey> {
         if CANONICAL {
             let (key, bump) = Pubkey::find_program_address(seeds, &crate::ID);
             require!(bump == r.bump, LedgerError::InvalidAccount);
             Ok(key)
         } else {
-            Pubkey::create_program_address(bumped, &crate::ID)
-                .map_err(|_| error!(LedgerError::InvalidAccount))
+            Ok(Pubkey::derive_address(seeds, Some(r.bump), &crate::ID))
         }
     };
-    let bump = [r.bump];
     let key = if r.depth == 1 {
         let (key, canonical_bump) = global_root_address();
         require!(
@@ -231,10 +259,7 @@ fn decode_record<const CANONICAL: bool>(
             global_root_address().0,
             LedgerError::InvalidAccount
         );
-        let storage = derive(
-            &[b"ledger", r.scope.as_ref(), r.identifier.as_ref()],
-            &[b"ledger", r.scope.as_ref(), r.identifier.as_ref(), &bump],
-        )?;
+        let storage = derive(&[b"ledger", r.scope.as_ref(), r.identifier.as_ref()])?;
         let logical = if r.scope == Pubkey::default() {
             r.identifier
         } else {
@@ -244,10 +269,7 @@ fn decode_record<const CANONICAL: bool>(
         require_keys_eq!(r.relative, r.identifier, LedgerError::InvalidAccount);
         storage
     } else {
-        derive(
-            &[b"account", r.parent.as_ref(), r.relative.as_ref()],
-            &[b"account", r.parent.as_ref(), r.relative.as_ref(), &bump],
-        )?
+        derive(&[b"account", r.parent.as_ref(), r.relative.as_ref()])?
     };
     require_keys_eq!(key, *address, LedgerError::InvalidAccount);
     Ok(r)
@@ -278,34 +300,27 @@ impl Record {
     }
 }
 
-/// One ordinary child-array slot. All parents, including global Root, use this
-/// layout. A separate PDA per slot permits reads without loading other siblings.
-pub const CHILD_SPACE: usize = 80;
-pub const CHILD_MAGIC: &[u8; 8] = b"CVCHLD01";
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug, PartialEq, Eq)]
-pub struct ChildSlot {
-    pub parent: Pubkey,
-    pub index: u32,
-    pub relative: Option<Pubkey>,
-}
-pub fn child_index_address(parent: &Pubkey, index: u32) -> (Pubkey, u8) {
-    Pubkey::find_program_address(
-        &[b"subs", parent.as_ref(), &index.to_le_bytes()],
-        &crate::ID,
-    )
-}
-pub fn decode_child_data(address: &Pubkey, owner: &Pubkey, data: &[u8]) -> Result<ChildSlot> {
-    require_keys_eq!(*owner, crate::ID, LedgerError::InvalidAccount);
-    require!(
-        data.len() == CHILD_SPACE && data.get(..8) == Some(CHILD_MAGIC),
-        LedgerError::InvalidAccount
-    );
-    let slot =
-        ChildSlot::deserialize(&mut &data[8..]).map_err(|_| error!(LedgerError::InvalidAccount))?;
-    require_keys_eq!(
-        child_index_address(&slot.parent, slot.index).0,
-        *address,
-        LedgerError::InvalidAccount
-    );
-    Ok(slot)
+/// Read a logical record from its containing group. Group references require
+/// their own container; absent leaf entries return None.
+pub fn record_at(container: &AccountInfo, address: &Pubkey) -> Result<Option<Record>> {
+    let group = decode(container)?;
+    if group.address() == *address {
+        return Ok(Some(group));
+    }
+    match crate::ledger_storage::get_with_parent(
+        &container.try_borrow_data()?,
+        address,
+        &group,
+        &group.address(),
+    )? {
+        Some(crate::ledger_storage::Value::Leaf(record)) => {
+            require!(
+                record.parent == group.address() && record.root == group.root,
+                LedgerError::InvalidAccount
+            );
+            Ok(Some(record))
+        }
+        Some(crate::ledger_storage::Value::Group(_)) => err!(LedgerError::MissingAccount),
+        None => Ok(None),
+    }
 }

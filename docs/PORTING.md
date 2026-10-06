@@ -21,17 +21,18 @@ are unchanged; this is coverage of those fixtures, not the entire Solidity suite
 | `ILedger` / `LedgerLib` events | Core `ledger::Event`, host `emit`, Solana Anchor events | Original structural and posting event families; payload adaptations and transaction-status requirements in EVENTS.md |
 
 The reusable core holds shared rules and the `Host` interface without platform dependencies.
-`cavalre-ledger-solana/src/ledger_lib.rs` supplies PDA derivation and forwards to
+`cavalre-ledger-solana/src/ledger_lib.rs` supplies logical hashing and physical storage derivation and forwards to
 the core. Address types are host-defined; the core does not impose Solana keys.
 The pure accounting portion remains in the core rather than a separate
 kernel crate for now. Core `ledger::execute` requires host authentication and
 transactional storage/settlement, and enforces lifecycle and custodian policy.
 The Solana `ledger.rs` implements those capabilities. Global Root is a canonical
-PDA using the same 512-byte record format as other accounts. Its children are
-ledger groups; discovery uses the same maintained child slots as other groups.
-Insertion order, one-based reverse indexes and swap-and-pop removal follow the
-original Solidity `subs`/`subIndex` behavior. Solana slot storage is documented in
-READS.md. Creation updates Root's child index and count atomically; ordinary posting still stops at the selected depth-2 ledger.
+PDA with the ordinary group header and mapping layout. Its children are ledger
+groups; discovery uses its maintained child vector. Insertion order, one-based
+reverse indexes and swap-and-pop removal follow the original Solidity
+`subs`/`subIndex` behavior. Creation updates Root atomically; ordinary posting
+still stops at the selected depth-2 ledger. See READS.md for storage and locking
+tradeoffs.
 
 External-token ledger identity is the token mint itself, matching Solidity's
 `addLedger(token, ...)`. The root's Solana storage PDA is separate: the adapter
@@ -84,17 +85,19 @@ original explicit-address leaf overload did not impose that length limit.
 
 Name-derived overloads are available as `name_to_address`, `to_address_by_name`,
 and named creation functions. Solana retains the full 32-byte Keccak-256 name
-hash as the relative identity, then uses the existing parent/relative PDA seeds.
+hash as the relative identity, then hashes the packed 32-byte parent and relative
+identity. Logical children have no PDA bump or curve requirement.
 Solidity retained the low 20 bytes of that hash. Exact UTF-8 bytes determine the
 identity; names require 1–64 bytes even for the named leaf overload. Explicit
 leaf labels may still be empty. No normalization or display-name index is added.
 The core's optional `NameDerivation` interface and `Command::add_by_name` keep
 hashing host-specific and resolve into the existing authenticated `Add` command.
-Existing hosts, instructions, events and record layouts remain valid.
+Core hosts, instruction arguments and event families retain their meaning.
+The mapping container layout and client account lists replace the draft format.
 Reserved `SOURCE` is derived at compile time as `keccak256("Source")`, matching
 named lookup. Its low 20 bytes equal the original Solidity Source identifier.
-This replaces the draft's arbitrary `[83; 32]` key and changes Source child PDAs;
-other account derivations are unchanged. There is no existing deployment to
+This replaces the draft's arbitrary `[83; 32]` key. Source is a mapped credit
+leaf under each ledger. There is no existing deployment to
 migrate. Source permissions and accounting rules are unchanged.
 
 Rust and Agave pins, the sBPF build/stack checks, and the original Solidity

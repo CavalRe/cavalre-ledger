@@ -9,11 +9,13 @@ fn endpoint(parent: Address, relative: Address) -> Child {
     }
 }
 
-fn planned(h: &Harness, mut ix: Instruction) -> Instruction {
+fn planned(h: &Harness, ix: Instruction) -> Instruction {
+    let mut ix = h.indexed(ix);
     let mut reader = Reader::new();
     // LedgerAccounts has payer, authority, root, System, then remaining records.
     for meta in ix.accounts.iter().skip(2).filter(|m| m.pubkey != SYSTEM) {
-        match h.svm.get_account(&meta.pubkey) {
+        match h.account(&meta.pubkey) {
+            Some(account) if account.owner != sa(ledger::ID) => continue,
             Some(account) => reader
                 .insert(ap(meta.pubkey), &ap(account.owner), &account.data)
                 .unwrap(),
@@ -55,7 +57,7 @@ fn zero_and_self_transfers_leave_absent_accounts_unallocated_and_only_charge_fee
     let b = h.key(2);
     let from = child(app, a);
     let to = child(app, b);
-    let parent_before = [e.root_storage, app].map(|key| h.svm.get_account(&key));
+    let parent_before = [e.root_storage, app].map(|key| h.account(&key));
     for receiver in [b, a] {
         // Construct the intended read-only transaction independently of the
         // planner, so a regression in both cannot hide unnecessary allocation.
@@ -63,10 +65,10 @@ fn zero_and_self_transfers_leave_absent_accounts_unallocated_and_only_charge_fee
         for meta in ix.accounts.iter_mut().skip(2) {
             meta.is_writable = false;
         }
-        let payer_before = h.svm.get_account(&h.key(0)).unwrap().lamports;
+        let payer_before = h.account(&h.key(0)).unwrap().lamports;
         let result = run(&mut h, &[0], ix).unwrap();
         assert_eq!(
-            h.svm.get_account(&h.key(0)).unwrap().lamports + result.fee,
+            h.account(&h.key(0)).unwrap().lamports + result.fee,
             payer_before
         );
         assert_eq!(
@@ -92,10 +94,10 @@ fn zero_and_self_transfers_leave_absent_accounts_unallocated_and_only_charge_fee
                 ]
             }
         );
-        assert!(h.svm.get_account(&from).is_none());
-        assert!(h.svm.get_account(&to).is_none());
+        assert!(h.maybe_record(from).is_none());
+        assert!(h.maybe_record(to).is_none());
         assert_eq!(
-            [e.root_storage, app].map(|key| h.svm.get_account(&key)),
+            [e.root_storage, app].map(|key| h.account(&key)),
             parent_before
         );
     }
@@ -154,7 +156,7 @@ fn zero_mint_burn_preserve_events_without_allocating_or_writing_ledger_records()
         };
         let ix = planned(&h, transfer(&h, root, h.key(0), from, to, 0, &[]));
         assert!(ix.accounts.iter().skip(2).all(|meta| !meta.is_writable));
-        let before = [root, source].map(|key| h.svm.get_account(&key));
+        let before = [root, source].map(|key| h.account(&key));
         let result = run(&mut h, &[0], ix).unwrap();
         let (from, to) = if mint { (source, leaf) } else { (leaf, source) };
         assert_eq!(
@@ -190,8 +192,8 @@ fn zero_mint_burn_preserve_events_without_allocating_or_writing_ledger_records()
                 .data(),
             ]
         );
-        assert!(h.svm.get_account(&leaf).is_none());
-        assert_eq!([root, source].map(|key| h.svm.get_account(&key)), before);
+        assert!(h.maybe_record(leaf).is_none());
+        assert_eq!([root, source].map(|key| h.account(&key)), before);
     }
 }
 
@@ -202,7 +204,7 @@ fn zero_token_settlement_keeps_absent_receiver_unallocated_and_checks_funder() {
         let e = External::setup(&mut h, 220, 0, token_program);
         // Match the runtime's rent-exempt marker before comparing full account
         // snapshots; the generic token fixture starts with rent_epoch = 0.
-        let mut wallet = h.svm.get_account(&e.wallet).unwrap();
+        let mut wallet = h.account(&e.wallet).unwrap();
         wallet.rent_epoch = u64::MAX;
         h.svm.set_account(e.wallet, wallet).unwrap();
         h.metadata(e.mint, "Token", "TOK");
@@ -211,24 +213,22 @@ fn zero_token_settlement_keeps_absent_receiver_unallocated_and_checks_funder() {
         let app = branch(&mut h, e.root, 0, true);
         let relative = h.key(2);
         let receiver = child(app, relative);
-        let before =
-            [e.root_storage, e.source, app, e.wallet, e.vault].map(|key| h.svm.get_account(&key));
+        let before = [e.root_storage, e.source, app, e.wallet, e.vault].map(|key| h.account(&key));
         for deposit in [true, false] {
             let mut ix = e.movement(&h, (h.key(0), 0), (app, relative), 0, deposit, &[]);
             // Only the native custody wallet/vault and payer remain writable.
             for key in [e.root_storage, e.source, app, receiver] {
                 readonly(&mut ix, key);
             }
-            let payer_before = h.svm.get_account(&h.key(0)).unwrap().lamports;
+            let payer_before = h.account(&h.key(0)).unwrap().lamports;
             let result = run(&mut h, &[0], ix).unwrap();
             assert_eq!(
-                h.svm.get_account(&h.key(0)).unwrap().lamports + result.fee,
+                h.account(&h.key(0)).unwrap().lamports + result.fee,
                 payer_before
             );
-            assert!(h.svm.get_account(&receiver).is_none());
+            assert!(h.maybe_record(receiver).is_none());
             assert_eq!(
-                [e.root_storage, e.source, app, e.wallet, e.vault]
-                    .map(|key| h.svm.get_account(&key)),
+                [e.root_storage, e.source, app, e.wallet, e.vault].map(|key| h.account(&key)),
                 before
             );
             assert_eq!(events::event_bytes(&result.logs).len(), 5);
@@ -250,7 +250,7 @@ fn token_custody_requires_root_writes_only_for_nonzero_amounts_direct_and_cpi() 
         for mode in ["direct", "raw_cpi", "helper_cpi"] {
             let mut h = Harness::new();
             let e = External::setup(&mut h, 225, 0, token_program);
-            let mut wallet = h.svm.get_account(&e.wallet).unwrap();
+            let mut wallet = h.account(&e.wallet).unwrap();
             wallet.rent_epoch = u64::MAX;
             h.svm.set_account(e.wallet, wallet).unwrap();
             h.metadata(e.mint, "Token", "TOK");
@@ -321,19 +321,19 @@ fn token_custody_requires_root_writes_only_for_nonzero_amounts_direct_and_cpi() 
                     e.vault,
                     e.wallet,
                 ];
-                let before = keys.map(|key| h.svm.get_account(&key));
+                let before = keys.map(|key| h.account(&key));
                 let mut zero = e.movement(&h, (authority, 0), (parent, relative), 0, deposit, &[]);
                 for key in [e.root_storage, e.source, parent, receiver] {
                     readonly(&mut zero, key);
                 }
                 let zero = call(&h, zero);
-                let payer_before = h.svm.get_account(&h.key(0)).unwrap().lamports;
+                let payer_before = h.account(&h.key(0)).unwrap().lamports;
                 let result = run(&mut h, &[0], zero).unwrap();
                 assert_eq!(
-                    h.svm.get_account(&h.key(0)).unwrap().lamports + result.fee,
+                    h.account(&h.key(0)).unwrap().lamports + result.fee,
                     payer_before
                 );
-                assert_eq!(keys.map(|key| h.svm.get_account(&key)), before);
+                assert_eq!(keys.map(|key| h.account(&key)), before);
                 assert_eq!(events::event_bytes(&result.logs).len(), 5);
                 let movement = call(&h, movement);
                 let result = run(&mut h, &[0], movement).unwrap();
@@ -367,16 +367,17 @@ fn check_plan(h: &mut Harness, ix: Instruction, expected: &[Address]) {
         .filter(|m| m.is_writable)
         .map(|m| m.pubkey)
         .collect();
-    let mut expected = expected.to_vec();
+    let mut expected: Vec<_> = expected.iter().map(|key| h.storage(*key)).collect();
     actual.sort();
     expected.sort();
+    expected.dedup();
     assert_eq!(actual, expected, "wrong write set");
     let unchanged: Vec<_> = ix
         .accounts
         .iter()
         .skip(2)
         .filter(|m| !m.is_writable)
-        .map(|m| (m.pubkey, h.svm.get_account(&m.pubkey)))
+        .map(|m| (m.pubkey, h.account(&m.pubkey)))
         .collect();
     // Every declared Ledger write is necessary. A missing permission must undo
     // earlier allocations and writes, not merely fail for an unrelated reason.
@@ -387,7 +388,7 @@ fn check_plan(h: &mut Harness, ix: Instruction, expected: &[Address]) {
     }
     succeeds(h, &[0], ix);
     for (key, before) in unchanged {
-        assert_eq!(h.svm.get_account(&key), before, "read-only account changed");
+        assert_eq!(h.account(&key), before, "read-only account changed");
     }
 }
 
@@ -522,7 +523,7 @@ fn credit_paths_use_effective_leaf_polarity_and_leave_app_and_ledger_readonly() 
 }
 
 #[test]
-fn cpi_preserves_readonly_common_ancestors() {
+fn cpi_locks_leaf_containers_and_preserves_ancestor_balances() {
     let mut h = Harness::new();
     let e = External::new(&mut h, 190, 0);
     let program = Address::new_from_array([192; 32]);
@@ -554,12 +555,14 @@ fn cpi_preserves_readonly_common_ancestors() {
         e.movement(&h, (authority, 0), (app, a), 100, true, &[]),
     );
     succeeds(&mut h, &[0], deposit);
-    let before = [e.root_storage, app].map(|key| h.svm.get_account(&key));
+    let before = h.account(&e.root_storage).unwrap();
+    let app_before = h.record(app);
     let inner = planned(
         &h,
         transfer(&h, e.root, authority, (app, a), (app, b), 20, &[]),
     );
-    for key in [e.root_storage, app] {
+    {
+        let key = e.root_storage;
         assert!(
             !inner
                 .accounts
@@ -571,10 +574,8 @@ fn cpi_preserves_readonly_common_ancestors() {
     }
     let outer = proxy(&h, program, authority, inner);
     succeeds(&mut h, &[0], outer);
-    assert_eq!(
-        [e.root_storage, app].map(|key| h.svm.get_account(&key)),
-        before
-    );
+    assert_eq!(h.account(&e.root_storage).unwrap(), before);
+    assert_eq!(h.record(app), app_before);
     assert_eq!(h.record(child(app, b)).debit, 20);
 }
 
@@ -583,12 +584,12 @@ fn tree_mutations_require_only_changed_ancestors_and_repeats_need_no_root_write(
     let mut h = Harness::new();
     let (root, _) = h.internal();
     let app = add_group(&mut h, root, root, 200, &[]);
-    let root_before = h.svm.get_account(&root);
+    let root_before = h.account(&root);
     let relative = h.key(1);
     let mut create = leaf(&h, root, h.key(0), app, relative, "Leaf", false);
     readonly(&mut create, root);
     succeeds(&mut h, &[0], create.clone());
-    assert_eq!(h.svm.get_account(&root), root_before);
+    assert_eq!(h.account(&root), root_before);
     // A matching repeat has no record writes or index changes.
     readonly(&mut create, app);
     readonly(&mut create, child(app, relative));
@@ -596,7 +597,7 @@ fn tree_mutations_require_only_changed_ancestors_and_repeats_need_no_root_write(
     let mut remove = remove(&h, root, h.key(0), app, relative, false);
     readonly(&mut remove, root);
     succeeds(&mut h, &[0], remove);
-    assert_eq!(h.svm.get_account(&root), root_before);
+    assert_eq!(h.account(&root), root_before);
     let mut direct = leaf(&h, root, h.key(0), root, relative, "Direct", false);
     readonly(&mut direct, root);
     rejects(&mut h, &[0], direct, LedgerError::InvalidAccount.into());

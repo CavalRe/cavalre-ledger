@@ -1,8 +1,6 @@
 //! Ledger identity is independent of the Solana account holding its record.
 use super::*;
-use ledger::ledger_lib::{
-    child_index_address, decode_child_data, decode_data, global_root_address,
-};
+use ledger::ledger_lib::{decode_data, global_root_address};
 use ledger::ledger_view::Reader;
 
 #[test]
@@ -10,7 +8,7 @@ fn mint_is_the_ledger_identity_in_storage_discovery_parents_reads_and_posting() 
     for program in [TOKEN, TOKEN_2022] {
         let mut h = Harness::new();
         let e = External::setup(&mut h, 170, 1, program);
-        let mint_before = h.svm.get_account(&e.mint).unwrap();
+        let mint_before = h.account(&e.mint).unwrap();
         assert_eq!(e.root, e.mint);
         assert_ne!(e.root_storage, e.mint);
         let registration = e.registration(&h);
@@ -24,7 +22,7 @@ fn mint_is_the_ledger_identity_in_storage_discovery_parents_reads_and_posting() 
         );
         // A root's canonical bump is stored at initialization, then used for
         // runtime verification. Corrupting it must fail before settlement.
-        let saved_root = h.svm.get_account(&e.root_storage).unwrap();
+        let saved_root = h.account(&e.root_storage).unwrap();
         let mut invalid_root = saved_root.clone();
         let mut bad_bump = root.clone();
         bad_bump.bump ^= 1;
@@ -36,12 +34,9 @@ fn mint_is_the_ledger_identity_in_storage_discovery_parents_reads_and_posting() 
         rejects(&mut h, &[0, 1], deposit, LedgerError::InvalidAccount.into());
         h.svm.set_account(e.root_storage, saved_root).unwrap();
         let global = global_root_address().0;
-        let slot_key = child_index_address(&global, 0).0;
-        let slot = h.svm.get_account(&sa(slot_key)).unwrap();
+        let data = h.account(&sa(global)).unwrap().data;
         assert_eq!(
-            decode_child_data(&slot_key, &ap(slot.owner), &slot.data)
-                .unwrap()
-                .relative,
+            ledger::ledger_storage::child(&data, 0).unwrap(),
             Some(ap(e.mint))
         );
 
@@ -50,26 +45,26 @@ fn mint_is_the_ledger_identity_in_storage_discovery_parents_reads_and_posting() 
         assert_eq!(h.record(e.source).parent, ap(e.mint));
         // The leaf identifier is a name hash with no Solana account or signer.
         let relative = sa(ledger::ledger_lib::name_to_address("Arbitrary identity").unwrap());
-        assert!(h.svm.get_account(&relative).is_none());
+        assert!(h.account(&relative).is_none());
         let create = leaf(&h, e.root, h.key(0), app, relative, "", false);
         succeeds(&mut h, &[0], create);
         let deposit = e.movement(&h, (h.key(0), 1), (app, relative), 10, true, &[]);
         succeeds(&mut h, &[0, 1], deposit);
         let position = child(app, relative);
         assert_eq!(h.record(position).root, ap(e.mint));
-        assert_eq!(h.svm.get_account(&e.mint).unwrap(), mint_before);
-        assert!(h.svm.get_account(&relative).is_none());
+        assert_eq!(h.account(&e.mint).unwrap(), mint_before);
+        assert!(h.account(&relative).is_none());
 
         // Both the token mint and its separate Ledger record can be supplied,
         // in either order. All view arguments and returned identities use mint.
         for reverse in [false, true] {
-            let mut keys = vec![e.root_storage, e.mint, app, position, e.source];
+            let mut keys = vec![e.root_storage, e.mint, h.storage(app)];
             if reverse {
                 keys.reverse();
             }
             let mut reader = Reader::new();
             for key in keys {
-                let account = h.svm.get_account(&key).unwrap();
+                let account = h.account(&key).unwrap();
                 reader
                     .insert(ap(key), &ap(account.owner), &account.data)
                     .unwrap();
@@ -101,7 +96,7 @@ fn mint_is_the_ledger_identity_in_storage_discovery_parents_reads_and_posting() 
 
         // A physically authentic record cannot substitute its PDA as the
         // logical root, nor can copying the record onto the mint authenticate it.
-        let mut stored = h.svm.get_account(&e.root_storage).unwrap();
+        let mut stored = h.account(&e.root_storage).unwrap();
         assert!(decode_data(&ap(e.mint), &ledger::ID, &stored.data).is_err());
         let mut forged = h.record(e.root);
         forged.root = ap(e.root_storage);

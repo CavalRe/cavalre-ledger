@@ -9,6 +9,37 @@ const COMPUTE_UNITS: u32 = 300_000;
 // Sampling range for these transaction shapes, not a Ledger policy.
 const PROFILE_DEPTHS: std::ops::RangeInclusive<u8> = 4..=13;
 
+#[test]
+fn existing_leaf_transfer_keeps_address_validation_below_20k_cu() {
+    let mut h = Harness::new();
+    let e = External::new(&mut h, 110, 0);
+    let parent = branch(&mut h, e.root, 0, true);
+    let alice = h.key(0);
+    let bob = h.key(1);
+    for (relative, amount) in [(alice, 100), (bob, 1)] {
+        let deposit = e.movement(&h, (alice, 0), (parent, relative), amount, true, &[]);
+        succeeds(&mut h, &[0], deposit);
+    }
+    let unchanged = [e.root_storage, e.vault].map(|key| (key, h.account(&key).unwrap()));
+    let mut call = transfer(&h, e.root, alice, (parent, alice), (parent, bob), 10, &[]);
+    for meta in &mut call.accounts {
+        if meta.pubkey == e.root_storage {
+            meta.is_writable = false;
+        }
+    }
+    let result = run(&mut h, &[0], call).unwrap();
+    eprintln!(
+        "existing mapped SPL leaves: {} CU",
+        result.compute_units_consumed
+    );
+    assert!(result.compute_units_consumed < 20_000, "{result:?}");
+    assert_eq!(h.record(child(parent, alice)).debit, 90);
+    assert_eq!(h.record(child(parent, bob)).debit, 11);
+    for (key, before) in unchanged {
+        assert_eq!(h.account(&key).unwrap(), before);
+    }
+}
+
 struct Profile {
     h: Harness,
     rows: Vec<serde_json::Value>,
@@ -104,7 +135,7 @@ impl Profile {
                 // Exercise the real lookup-table program, including warm-up. Setup
                 // costs are separate from the measured Ledger operation, not hidden.
                 let payer = self.h.key(0);
-                let payer_before = self.h.svm.get_account(&payer).unwrap().lamports;
+                let payer_before = self.h.account(&payer).unwrap().lamports;
                 let slot = self.h.svm.get_sysvar::<anchor_lang::prelude::Clock>().slot;
                 let mut setup = Vec::new();
                 let mut table = self.lookup.take().unwrap_or_else(|| {
@@ -138,8 +169,7 @@ impl Profile {
                     setup_fee += result.fee;
                     setup_compute += result.compute_units_consumed;
                 }
-                setup_rent =
-                    payer_before - self.h.svm.get_account(&payer).unwrap().lamports - setup_fee;
+                setup_rent = payer_before - self.h.account(&payer).unwrap().lamports - setup_fee;
                 self.h.svm.warp_to_slot(slot + 1);
                 let message = v0::Message::try_compile(
                     &payer,
@@ -161,7 +191,7 @@ impl Profile {
         let bytes = wincode::serialize(&tx).unwrap().len();
         let before: Vec<_> = account_keys
             .iter()
-            .map(|key| (*key, self.h.svm.get_account(key)))
+            .map(|key| (*key, self.h.account(key)))
             .collect();
         let mut row = serde_json::json!({"mode":self.mode,"depth":self.depth,"seed":self.seed,
             "operation":operation,"bytes":bytes,"legacy_bytes":legacy_bytes,
@@ -193,20 +223,19 @@ impl Profile {
             .as_ref()
             .unwrap()
             .lamports;
-        let rent = old_payer - self.h.svm.get_account(&self.h.key(0)).unwrap().lamports - meta.fee;
+        let rent = old_payer - self.h.account(&self.h.key(0)).unwrap().lamports - meta.fee;
         row["rent_lamports"] = rent.into();
         let mut allocated_rent = 0;
         for (key, old) in before {
-            let mut new = self.h.svm.get_account(&key);
+            let mut new = self.h.account(&key);
             if result.is_err() {
                 if key == self.h.key(0) {
                     new.as_mut().unwrap().lamports += meta.fee;
                 }
                 assert_eq!(new, old, "failed profile changed {key}");
-            } else if old.is_none() && new.as_ref().is_some_and(|a| a.owner == sa(ledger::ID)) {
-                let space = new.as_ref().unwrap().data.len();
-                assert!(space == 512 || space == ledger::ledger_lib::CHILD_SPACE);
-                allocated_rent += self.h.svm.minimum_balance_for_rent_exemption(space);
+            } else if let Some(new) = new.filter(|a| a.owner == sa(ledger::ID)) {
+                assert!(new.data.len() >= ledger::ledger_storage::HEADER);
+                allocated_rent += new.lamports.saturating_sub(old.map_or(0, |a| a.lamports));
             }
         }
         if result.is_ok() {

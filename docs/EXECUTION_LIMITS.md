@@ -1,5 +1,11 @@
 # Solana execution measurements
 
+**Historical profile:** the numeric tables below describe the former per-leaf
+PDA layout. Current mapping measurements and physical locking/storage regressions
+are in [TRANSFER_COSTS.md](TRANSFER_COSTS.md). `scripts/check.sh` generates a fresh
+`target/execution-profile.json` for the current implementation. Do not use the
+historical rent, account lists or CU values for current transaction planning.
+
 Ledger imposes no resource-based depth cap. Applications are responsible for
 ensuring their complete transactions fit the runtime's compute, heap, account
 and transaction-size limits, including all instructions and CPI calls. A depth

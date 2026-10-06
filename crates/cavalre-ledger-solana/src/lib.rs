@@ -5,6 +5,7 @@ pub mod ledger;
 #[cfg(feature = "cpi")]
 pub mod ledger_cpi;
 pub mod ledger_lib;
+pub mod ledger_storage;
 pub mod ledger_view;
 #[cfg(feature = "mutations")]
 use ledger::*;

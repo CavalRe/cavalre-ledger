@@ -51,22 +51,21 @@ fn all_ledger_kinds_are_discovered_as_root_children() {
     let expected = vec![internal, classic.root, token2022.root, native];
     let global = sa(global_root_address().0);
     assert_eq!(count(&h), 4);
-    let before = h.svm.get_account(&global).unwrap();
+    let before = h.account(&global).unwrap();
     let mut reader = Reader::new();
     reader
         .insert(ap(global), &ap(before.owner), &before.data)
         .unwrap();
     for (index, address) in expected.iter().enumerate() {
-        let slot = sa(ledger::ledger_lib::child_index_address(&ap(global), index as u32).0);
-        let bytes = h.svm.get_account(&slot).unwrap();
-        reader
-            .insert(ap(slot), &ap(bytes.owner), &bytes.data)
-            .unwrap();
+        assert_eq!(
+            ledger::ledger_storage::child(&before.data, index as u32).unwrap(),
+            Some(ap(*address))
+        );
         let r = h.record(*address);
         assert_eq!(r.parent, ap(global));
         assert_eq!(r.custodian, ap(global));
         assert_eq!(r.depth, 2);
-        let a = h.svm.get_account(&h.storage(*address)).unwrap();
+        let a = h.account(&h.storage(*address)).unwrap();
         reader
             .insert(ap(h.storage(*address)), &ap(a.owner), &a.data)
             .unwrap();
@@ -102,39 +101,30 @@ fn all_ledger_kinds_are_discovered_as_root_children() {
     );
     assert!(!i.accounts.iter().any(|a| a.pubkey == global));
     succeeds(&mut h, &[0], i);
-    assert_eq!(h.svm.get_account(&global).unwrap(), before);
+    assert_eq!(h.account(&global).unwrap(), before);
     assert_eq!(h.record(internal).debit, 20);
     assert_eq!(h.record(internal).credit, 20);
 }
 #[test]
-fn root_child_creation_is_atomic_and_stale_append_positions_are_rejected() {
+fn root_child_creation_needs_no_source_or_append_slot_account() {
     let mut h = Harness::new();
-    let id = h.key(2);
-    let i = add_internal(&h, id, false); // Source missing: allocation fails at commit.
-    rejects(&mut h, &[0], i, LedgerError::MissingAccount as u32 + 6000);
-    assert!(h.svm.get_account(&sa(global_root_address().0)).is_none());
-    let stale = h.indexed(add_internal(&h, Address::new_from_array([98; 32]), true));
-    h.internal();
-    // Root changed after account discovery. The stale instruction must fail
-    // atomically, then succeed with the current append slot supplied.
-    assert!(run_raw(&mut h, &[0], stale.clone()).is_err());
+    let id = Address::new_from_array([97; 32]);
+    let first = add_internal(&h, id, false);
+    let next = h.indexed(add_internal(&h, Address::new_from_array([98; 32]), false));
+    succeeds(&mut h, &[0], first);
     assert_eq!(count(&h), 1);
-    succeeds(&mut h, &[0], stale);
+    // The maintained vector determines the current append position atomically.
+    assert!(run_raw(&mut h, &[0], next).is_ok());
     assert_eq!(count(&h), 2);
-    let duplicate = add_internal(&h, id, true);
-    rejects(
-        &mut h,
-        &[0],
-        duplicate,
-        LedgerError::MetadataConflict as u32 + 6000,
-    );
-    let failed = add_internal(&h, Address::new_from_array([99; 32]), false);
-    rejects(
-        &mut h,
-        &[0],
-        failed,
-        LedgerError::MissingAccount as u32 + 6000,
-    );
+    let mut conflict = add_internal(&h, id, false);
+    conflict.data = instruction::AddLedger {
+        id: ap(id),
+        name: "Conflicting".into(),
+        symbol: "INT".into(),
+        decimals: 0,
+    }
+    .data();
+    rejects(&mut h, &[0], conflict, LedgerError::MetadataConflict.into());
     assert_eq!(count(&h), 2);
 }
 #[test]
@@ -155,7 +145,7 @@ fn creation_rejects_fake_root_readonly_root_and_child_count_overflow() {
     h.internal();
     // Corrupt a fixture to exercise the checked numeric boundary, not a policy cap.
     let key = sa(global_root_address().0);
-    let mut a = h.svm.get_account(&key).unwrap();
+    let mut a = h.account(&key).unwrap();
     let mut record = h.record(key);
     record.children = u32::MAX;
     anchor_lang::AnchorSerialize::serialize(&record, &mut &mut a.data[8..]).unwrap();

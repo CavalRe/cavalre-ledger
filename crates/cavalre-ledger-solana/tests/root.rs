@@ -3,14 +3,24 @@ use anchor_lang::{prelude::Pubkey, AnchorSerialize};
 use cavalre_ledger_core::ledger_lib::Error;
 use cavalre_ledger_solana::{
     ledger_lib::{decode_data, global_root_address, root_storage_address, Record, ROOT_NAME},
+    ledger_storage as mapping,
     ledger_view::Reader,
     ID,
 };
 fn bytes(record: &Record) -> Vec<u8> {
-    let mut data = vec![0; 512];
+    let mut data = vec![0; mapping::space(4)];
+    mapping::initialize(&mut data);
     data[..8].copy_from_slice(b"CVLEDG01");
     record.serialize(&mut &mut data[8..]).unwrap();
     data
+}
+
+#[test]
+fn fixed_root_matches_the_canonical_program_address() {
+    assert_eq!(
+        global_root_address(),
+        Pubkey::find_program_address(&[ROOT_NAME.as_bytes()], &ID)
+    );
 }
 fn root(children: u32) -> Record {
     let (key, bump) = global_root_address();
@@ -53,68 +63,32 @@ fn ledger(tag: u8) -> (Pubkey, Record) {
     (identifier, record)
 }
 #[test]
-fn discovery_reads_only_requested_root_child_slots() {
+fn discovery_reads_root_child_vector_without_ledger_containers() {
     let mut reader = Reader::new();
     let global = global_root_address().0;
     assert_eq!(reader.ledger_count(), Err(Error::MissingAccount));
-    reader.insert(global, &ID, &bytes(&root(2))).unwrap();
+    let first = ledger(90).0;
+    let second = ledger(10).0;
+    let mut data = bytes(&root(2));
+    mapping::set_child(&mut data, 0, Some(first)).unwrap();
+    mapping::set_child(&mut data, 1, Some(second)).unwrap();
+    reader.insert(global, &ID, &data).unwrap();
     assert_eq!(reader.name(&global).unwrap(), "Root");
     assert_eq!(reader.ledger_count(), Ok(2));
     assert_eq!(
         reader.ledger_count(),
         reader.sub_account_count(&global, &global)
     );
-    let (first, record) = ledger(90);
-    reader
-        .insert(
-            root_storage_address(&Pubkey::default(), &first).0,
-            &ID,
-            &bytes(&record),
-        )
-        .unwrap();
-    assert_eq!(reader.ledgers(0, 2), Err(Error::IncompleteIndex));
-    assert_eq!(reader.ledger_at(0), Err(Error::IncompleteIndex));
-    let (second, record) = ledger(10);
-    reader
-        .insert(
-            root_storage_address(&Pubkey::default(), &second).0,
-            &ID,
-            &bytes(&record),
-        )
-        .unwrap();
-    use cavalre_ledger_solana::ledger_lib::{
-        child_index_address, ChildSlot, CHILD_MAGIC, CHILD_SPACE,
-    };
-    for (index, relative) in [first, second].into_iter().enumerate() {
-        let mut data = vec![0; CHILD_SPACE];
-        data[..8].copy_from_slice(CHILD_MAGIC);
-        ChildSlot {
-            parent: global,
-            index: index as u32,
-            relative: Some(relative),
-        }
-        .serialize(&mut &mut data[8..])
-        .unwrap();
-        reader
-            .insert(child_index_address(&global, index as u32).0, &ID, &data)
-            .unwrap();
-        if index == 0 {
-            assert_eq!(reader.ledgers(0, 1), Ok(vec![first]));
-            assert_eq!(reader.ledgers(0, 2), Err(Error::IncompleteIndex));
-        }
-    }
-    let expected = vec![first, second];
-    assert_eq!(reader.ledgers(0, usize::MAX), Ok(expected.clone()));
+    assert_eq!(reader.ledgers(0, usize::MAX), Ok(vec![first, second]));
     assert_eq!(
         reader.ledgers(0, usize::MAX),
         reader.sub_accounts(&global, &global, 0, usize::MAX)
     );
     assert_eq!(reader.ledger_at(0), reader.sub_account(&global, &global, 0));
-    assert_eq!(reader.ledgers(1, 1), Ok(vec![expected[1]]));
+    assert_eq!(reader.ledgers(1, 1), Ok(vec![second]));
     assert_eq!(reader.ledger_at(2), Err(Error::InvalidIndex));
     assert_eq!(reader.ledgers(usize::MAX, usize::MAX), Ok(vec![]));
     assert_eq!(reader.ledgers(0, 0), Ok(vec![]));
-    // Stored gross debits are readable even though Root is not a token ledger.
     assert_eq!(reader.total_supply(&global), Ok(0));
     assert_eq!(reader.ledger(&global), Ok(None));
 }

@@ -1,10 +1,10 @@
 //! Solana host for the shared Ledger service. Owns runtime authentication,
 //! account encoding/allocation, token calls and transaction rollback integration.
 use crate::ledger_lib::{
-    child_index_address, decode_child_data, ChildSlot, CHILD_MAGIC, CHILD_SPACE,
+    account_storage_address, global_root_address, to_address, MAGIC, NATIVE_SOL, ROOT_NAME, SPACE,
 };
 pub use crate::ledger_lib::{decode, root_storage_address, LedgerError, Record, SOURCE};
-use crate::ledger_lib::{global_root_address, to_address, MAGIC, NATIVE_SOL, ROOT_NAME, SPACE};
+use crate::ledger_storage as mapping;
 use anchor_lang::{prelude::*, system_program};
 use anchor_spl::token_interface::{
     self as token, Mint, TokenAccount, TokenInterface, TransferChecked,
@@ -24,8 +24,8 @@ pub struct LedgerAccounts<'info> {
     /// authenticates ownership and identity. Write access only when changed.
     pub root: UncheckedAccount<'info>,
     pub system_program: Program<'info, System>,
-    // Remaining: endpoint records, parents, custody ancestors and changed ancestors.
-    // New endpoint/Source PDAs must be supplied writable for allocation.
+    // Remaining: endpoint parent containers, groups and custody/posting ancestors.
+    // New group containers need writable allocation inputs; leaves are mapped.
     // External/native ledgers also require their canonical vault, read-only.
 }
 #[derive(Accounts)]
@@ -40,7 +40,7 @@ pub struct RegisterLedger<'info> {
     /// CHECK: canonical Root account, decoded or initialized with its first child.
     #[account(mut)]
     pub global_root: UncheckedAccount<'info>,
-    // Remaining: writable Source PDA.
+    // Source is stored in the root container; no separate Source account.
 }
 #[derive(Accounts)]
 pub struct RegisterToken<'info> {
@@ -273,27 +273,27 @@ fn transfer_with_hook<'info>(
 
 struct StoredAccount {
     key: Pubkey,
+    storage: Pubkey,
+    allocate: bool,
+    retire: Option<Pubkey>,
     record: Record,
     changed: bool,
     metadata_changed: bool,
-    new: bool,
 }
 struct StoredChild {
-    key: Pubkey,
-    slot: ChildSlot,
-    changed: bool,
-    new: bool,
-    bump: u8,
+    parent: Pubkey,
+    index: u32,
+    relative: Option<Pubkey>,
 }
 struct DerivedAddress {
     parent: Pubkey,
     relative: Pubkey,
     key: Pubkey,
-    bump: u8,
 }
 struct State {
     records: Vec<StoredAccount>,
     children: Vec<StoredChild>,
+    missing: Vec<Pubkey>,
 }
 impl State {
     fn get(&self, key: &Pubkey) -> Result<&Record> {
@@ -334,47 +334,46 @@ fn load(root: &AccountInfo, rest: &[AccountInfo]) -> Result<State> {
         r.depth == 2 && r.registered && r.kind == 0,
         LedgerError::InvalidAccount
     );
-    let mut records = Vec::with_capacity(rest.len() + 1);
-    let mut children = Vec::new();
+    let mut records = Vec::with_capacity(rest.len() + 3);
     let ledger = r.root;
     records.push(StoredAccount {
         key: ledger,
+        storage: *root.key,
+        allocate: false,
+        retire: None,
         record: r,
         changed: false,
         metadata_changed: false,
-        new: false,
     });
     for a in rest {
         if a.owner == &crate::ID {
-            require!(
-                a.key != root.key
-                    && !records.iter().any(|record| record.key == *a.key)
-                    && !children.iter().any(|slot: &StoredChild| slot.key == *a.key),
-                LedgerError::InvalidAccount
-            );
-            if a.try_borrow_data()?.get(..8) == Some(CHILD_MAGIC) {
-                children.push(StoredChild {
-                    key: *a.key,
-                    slot: decode_child_data(a.key, a.owner, &a.try_borrow_data()?)?,
-                    changed: false,
-                    new: false,
-                    bump: 0, // Existing slots need no allocation signer.
-                });
-                continue;
-            }
             let r = decode(a)?;
             require_keys_eq!(r.root, ledger, LedgerError::InvalidAccount);
             require!(r.depth > 2, LedgerError::InvalidAccount);
+            if !r.registered {
+                continue;
+            }
+            let key = r.address();
+            require!(
+                !records.iter().any(|record| record.key == key),
+                LedgerError::InvalidAccount
+            );
             records.push(StoredAccount {
-                key: *a.key,
+                key,
+                storage: *a.key,
+                allocate: false,
+                retire: None,
                 record: r,
                 changed: false,
                 metadata_changed: false,
-                new: false,
             });
         }
     }
-    Ok(State { records, children })
+    Ok(State {
+        records,
+        children: Vec::new(),
+        missing: Vec::new(),
+    })
 }
 // Borsh offsets within the unchanged 512-byte record. The variable-length name
 // precedes sub_index; balance and child-count fields are in the fixed prefix.
@@ -545,6 +544,7 @@ impl<'a, 'info> SolanaHost<'a, 'info> {
                     State {
                         records: Vec::with_capacity(rest.len() + 2),
                         children: Vec::new(),
+                        missing: Vec::new(),
                     }
                 } else {
                     load(&root_info, rest)?
@@ -588,7 +588,7 @@ impl<'a, 'info> SolanaHost<'a, 'info> {
             derived: RefCell::new(Vec::new()),
         })
     }
-    fn child_address(&self, parent: &Pubkey, relative: &Pubkey) -> (Pubkey, u8) {
+    fn child_address(&self, parent: &Pubkey, relative: &Pubkey) -> Pubkey {
         // Loaded records and this instruction's newly derived addresses are
         // authenticated. Never cache an address merely supplied by the caller.
         if let Some(entry) = self.state.records.iter().find(|entry| {
@@ -596,23 +596,22 @@ impl<'a, 'info> SolanaHost<'a, 'info> {
                 && entry.record.parent == *parent
                 && entry.record.relative == *relative
         }) {
-            return (entry.key, entry.record.bump);
+            return entry.key;
         }
         let mut derived = self.derived.borrow_mut();
         if let Some(entry) = derived
             .iter()
             .find(|entry| entry.parent == *parent && entry.relative == *relative)
         {
-            return (entry.key, entry.bump);
+            return entry.key;
         }
-        let (key, bump) = to_address(&crate::ID, parent, relative);
+        let key = to_address(parent, relative);
         derived.push(DerivedAddress {
             parent: *parent,
             relative: *relative,
             key,
-            bump,
         });
-        (key, bump)
+        key
     }
     fn accounts(ctx: &Context<'info, LedgerAccounts<'info>>) -> Result<Self>
     where
@@ -707,10 +706,12 @@ impl<'a, 'info> SolanaHost<'a, 'info> {
             require!(record.depth == 1, LedgerError::InvalidAccount);
             self.state.records.push(StoredAccount {
                 key: *global.key,
+                storage: *global.key,
+                allocate: false,
+                retire: None,
                 record,
                 changed: false,
                 metadata_changed: false,
-                new: false,
             });
         } else {
             require_keys_eq!(
@@ -729,22 +730,105 @@ impl<'a, 'info> SolanaHost<'a, 'info> {
         if let Some(global) = self.global_root_info.as_ref().filter(|a| a.key == key) {
             return Ok(global);
         }
+        if let Some(entry) = self.state.records.iter().find(|entry| entry.key == *key) {
+            return info(&self.root_info, self.rest, &entry.storage);
+        }
+        if let Some(derived) = self.derived.borrow().iter().find(|a| a.key == *key) {
+            let storage = account_storage_address(&derived.parent, &derived.relative).0;
+            return info(&self.root_info, self.rest, &storage);
+        }
         info(&self.root_info, self.rest, key)
     }
+    fn prefetch(&mut self, parent: Pubkey, relative: Pubkey) -> Result<()> {
+        let key = self.child_address(&parent, &relative);
+        if self.state.optional(&key).is_some() || self.state.missing.contains(&key) {
+            return Ok(());
+        }
+        let value = if let Some(group) = self.state.optional(&parent) {
+            require!(group.kind < 2, LedgerError::InvalidAccount);
+            let container = self.account_info(&parent)?;
+            mapping::get_with_parent(&container.try_borrow_data()?, &key, group, &parent)?
+        } else if parent == self.root.address && self.root_info.data_is_empty() {
+            None
+        } else {
+            return Err(error!(LedgerError::InvalidAccount));
+        };
+        match value {
+            Some(mapping::Value::Leaf(record)) => {
+                require!(
+                    record.parent == parent
+                        && record.relative == relative
+                        && record.root == self.root.address,
+                    LedgerError::InvalidAccount
+                );
+                self.state.records.push(StoredAccount {
+                    key,
+                    storage: *self.account_info(&parent)?.key,
+                    allocate: false,
+                    retire: None,
+                    record,
+                    changed: false,
+                    metadata_changed: false,
+                });
+            }
+            Some(mapping::Value::Group(_)) => return Err(error!(LedgerError::MissingAccount)),
+            None => self.state.missing.push(key),
+        }
+        Ok(())
+    }
     fn run(mut self, command: service::Command<Pubkey>) -> Result<()> {
+        use service::Command;
+        match &command {
+            Command::Initialize { .. } => self.prefetch(self.root.address, self.root.source)?,
+            Command::Add { child, .. } | Command::Remove { child, .. } => {
+                self.prefetch(child.parent, child.relative)?;
+                let key = self.child_address(&child.parent, &child.relative);
+                if matches!(command, Command::Remove { .. })
+                    && self.state.optional(&key).is_some_and(|r| r.registered)
+                {
+                    if let Some(parent) = self.state.optional(&child.parent) {
+                        if let Some(last) = parent.children.checked_sub(1) {
+                            let container = self.account_info(&child.parent)?;
+                            let relative = mapping::child(&container.try_borrow_data()?, last)?
+                                .ok_or(LedgerError::InvalidAccount)?;
+                            self.prefetch(child.parent, relative)?;
+                        }
+                    }
+                }
+            }
+            Command::Transfer { from, to, .. } => {
+                self.prefetch(from.parent, from.relative)?;
+                self.prefetch(to.parent, to.relative)?;
+            }
+            Command::MoveTokens { child, .. } => {
+                self.prefetch(child.parent, child.relative)?;
+                self.prefetch(self.root.address, self.root.source)?;
+            }
+        }
         service::execute(&mut self, command).map_err(|error| error.0)
     }
 }
 impl cavalre_ledger_core::ledger_view::ChildIndex<Pubkey> for SolanaHost<'_, '_> {
     fn child_at(&self, parent: &Pubkey, index: u32) -> std::result::Result<Pubkey, core::Error> {
-        self.state
+        if let Some(slot) = self
+            .state
             .children
             .iter()
-            .find(|a| a.slot.parent == *parent && a.slot.index == index)
-            .ok_or(core::Error::MissingAccount)?
-            .slot
-            .relative
-            .ok_or(core::Error::InvalidIndex)
+            .find(|s| s.parent == *parent && s.index == index)
+        {
+            return slot.relative.ok_or(core::Error::InvalidIndex);
+        }
+        let container = self
+            .account_info(parent)
+            .map_err(|_| core::Error::MissingAccount)?;
+        mapping::child(
+            &container
+                .try_borrow_data()
+                .map_err(|_| core::Error::InvalidAccount)?,
+            index,
+        )
+        .map_err(|_| core::Error::InvalidAccount)?
+        .ok_or(core::Error::InvalidIndex)
     }
 }
 impl service::Host<Pubkey> for SolanaHost<'_, '_> {
@@ -800,7 +884,19 @@ impl service::Host<Pubkey> for SolanaHost<'_, '_> {
         } else if is_root {
             root_storage_address(&scope, &identifier)
         } else {
-            self.child_address(&account.flags.parent, &account.relative)
+            let key = self.child_address(&account.flags.parent, &account.relative);
+            let bump = if account.flags.account_kind.is_group() {
+                self.state
+                    .optional(&key)
+                    .filter(|r| r.is_container())
+                    .map_or_else(
+                        || account_storage_address(&account.flags.parent, &account.relative).1,
+                        |r| r.bump,
+                    )
+            } else {
+                0
+            };
+            (key, bump)
         };
         let logical = if is_root && scope == Pubkey::default() {
             identifier
@@ -846,18 +942,38 @@ impl service::Host<Pubkey> for SolanaHost<'_, '_> {
             symbol: account.symbol,
             decimals: account.decimals,
         };
+        let container = r.is_container();
+        let previous = self.state.records.iter().find(|a| a.key == key);
+        let allocate = container && previous.is_none_or(|a| !a.record.is_container());
+        let retire = previous
+            .filter(|a| a.record.is_container() && !container)
+            .map(|a| a.storage);
+        let storage = if container {
+            if let Some(previous) = previous.filter(|a| a.record.is_container()) {
+                previous.storage
+            } else {
+                r.storage_address()
+            }
+        } else {
+            *self.account_info(&r.parent)?.key
+        };
         if let Some(existing) = self.state.records.iter_mut().find(|a| a.key == key) {
             let changed = existing.record != r;
             existing.changed |= changed;
             existing.metadata_changed |= changed;
+            existing.allocate |= allocate;
+            existing.retire = retire.or(existing.retire);
+            existing.storage = storage;
             existing.record = r;
         } else {
             self.state.records.push(StoredAccount {
                 key,
+                storage,
+                allocate,
+                retire,
                 record: r,
                 changed: true,
                 metadata_changed: true,
-                new: true,
             });
         }
         Ok(())
@@ -892,37 +1008,18 @@ impl service::Host<Pubkey> for SolanaHost<'_, '_> {
         index: u32,
         relative: Option<Pubkey>,
     ) -> std::result::Result<(), HostError> {
-        if let Some(entry) = self
+        if let Some(slot) = self
             .state
             .children
             .iter_mut()
-            .find(|a| a.slot.parent == parent && a.slot.index == index)
+            .find(|s| s.parent == parent && s.index == index)
         {
-            entry.changed |= entry.slot.relative != relative;
-            entry.slot.relative = relative;
+            slot.relative = relative;
         } else {
-            let (key, bump) = child_index_address(&parent, index);
-            let target = self.account_info(&key)?;
-            let new = target.data_is_empty();
-            if !new {
-                decode_child_data(
-                    &key,
-                    target.owner,
-                    &target
-                        .try_borrow_data()
-                        .map_err(anchor_lang::error::Error::from)?,
-                )?;
-            }
             self.state.children.push(StoredChild {
-                key,
-                slot: ChildSlot {
-                    parent,
-                    index,
-                    relative,
-                },
-                changed: true,
-                new,
-                bump,
+                parent,
+                index,
+                relative,
             });
         }
         Ok(())
@@ -1049,63 +1146,163 @@ impl service::Host<Pubkey> for SolanaHost<'_, '_> {
         Ok(())
     }
     fn commit(&mut self) -> std::result::Result<(), HostError> {
+        // Only groups allocate Solana storage. Leaves are mapping entries.
         for entry in &self.state.records {
-            let (key, record) = (&entry.key, &entry.record);
-            if entry.new {
-                let target = self.account_info(key)?;
-                let bump = [record.bump];
-                let seeds: &[&[u8]] = if record.depth == 1 {
+            let r = &entry.record;
+            if entry.allocate {
+                let target = self.account_info(&entry.key)?;
+                let bump = [r.bump];
+                let seeds: &[&[u8]] = if r.depth == 1 {
                     &[ROOT_NAME.as_bytes(), &bump]
-                } else if *key == self.root.address {
-                    &[
-                        b"ledger",
-                        record.scope.as_ref(),
-                        record.identifier.as_ref(),
-                        &bump,
-                    ]
+                } else if r.depth == 2 {
+                    &[b"ledger", r.scope.as_ref(), r.identifier.as_ref(), &bump]
                 } else {
-                    &[
-                        b"account",
-                        record.parent.as_ref(),
-                        record.relative.as_ref(),
-                        &bump,
-                    ]
+                    &[b"account", r.parent.as_ref(), r.relative.as_ref(), &bump]
                 };
-                allocate(&self.payer, target, &self.system, seeds, SPACE)?;
+                if target.data_is_empty() {
+                    allocate(
+                        &self.payer,
+                        target,
+                        &self.system,
+                        seeds,
+                        mapping::INITIAL_SPACE,
+                    )?;
+                    mapping::initialize(
+                        &mut target
+                            .try_borrow_mut_data()
+                            .map_err(anchor_lang::error::Error::from)?,
+                    );
+                } else {
+                    let previous = decode(target)?;
+                    if previous.address() != entry.key {
+                        return Err(core::Error::InvalidAccount.into());
+                    }
+                }
             }
         }
-        for entry in &self.state.children {
+        // Grow containers once, with in-place copies. Never deserialize or clone
+        // all siblings into the program heap.
+        for group in self
+            .state
+            .records
+            .iter()
+            .filter(|e| e.record.is_container())
+        {
+            if !self
+                .state
+                .records
+                .iter()
+                .any(|e| e.metadata_changed && e.record.parent == group.key && e.key != group.key)
+                && !self.state.children.iter().any(|s| s.parent == group.key)
+            {
+                continue;
+            }
+            let target = self.account_info(&group.key)?;
+            let (capacity, required) = {
+                let data = target
+                    .try_borrow_data()
+                    .map_err(anchor_lang::error::Error::from)?;
+                let additions = self
+                    .state
+                    .records
+                    .iter()
+                    .filter(|e| {
+                        e.changed
+                            && e.key != group.key
+                            && e.record.parent == group.key
+                            && !mapping::contains(&data, &e.key)
+                    })
+                    .count();
+                (
+                    mapping::capacity(&data)?,
+                    mapping::required_space(&data, additions, group.record.children as usize)?,
+                )
+            };
+            if required > target.data_len() {
+                if !(target.is_writable) {
+                    return Err(core::Error::InvalidAccount.into());
+                }
+                let rent = Rent::get()
+                    .map_err(anchor_lang::error::Error::from)?
+                    .minimum_balance(required)
+                    .saturating_sub(target.lamports());
+                if rent > 0 {
+                    system_program::transfer(
+                        CpiContext::new(
+                            *self.system.key,
+                            system_program::Transfer {
+                                from: self.payer.clone(),
+                                to: target.clone(),
+                            },
+                        ),
+                        rent,
+                    )?;
+                }
+                target
+                    .resize(required)
+                    .map_err(anchor_lang::error::Error::from)?;
+                mapping::grow(
+                    &mut target
+                        .try_borrow_mut_data()
+                        .map_err(anchor_lang::error::Error::from)?,
+                    capacity,
+                );
+            }
+        }
+        for entry in &self.state.records {
+            let r = &entry.record;
             if !entry.changed {
                 continue;
             }
-            let target = self.account_info(&entry.key)?;
-            if entry.new {
-                let bump = [entry.bump];
-                let index = entry.slot.index.to_le_bytes();
-                let seeds: &[&[u8]] = &[b"subs", entry.slot.parent.as_ref(), &index, &bump];
-                allocate(&self.payer, target, &self.system, seeds, CHILD_SPACE)?;
+            if r.is_container() {
+                save(self.account_info(&entry.key)?, r, entry.metadata_changed)?;
+                if entry.metadata_changed && r.depth > 1 {
+                    let parent = self.account_info(&r.parent)?;
+                    if !(parent.is_writable) {
+                        return Err(core::Error::InvalidAccount.into());
+                    }
+                    mapping::put(
+                        &mut parent
+                            .try_borrow_mut_data()
+                            .map_err(anchor_lang::error::Error::from)?,
+                        &entry.key,
+                        mapping::Value::Group(*self.account_info(&entry.key)?.key),
+                    )?;
+                }
+            } else {
+                if let Some(storage) = entry.retire {
+                    let old_container = info(&self.root_info, self.rest, &storage)?;
+                    save(old_container, r, true)?;
+                }
+                let parent = self.account_info(&r.parent)?;
+                if !(parent.is_writable) {
+                    return Err(core::Error::InvalidAccount.into());
+                }
+                let mut data = parent
+                    .try_borrow_mut_data()
+                    .map_err(anchor_lang::error::Error::from)?;
+                if entry.metadata_changed {
+                    mapping::put(&mut data, &entry.key, mapping::Value::Leaf(r.clone()))?;
+                } else {
+                    mapping::update_fields(&mut data, &entry.key, r)?;
+                }
             }
-            if !target.is_writable {
+        }
+        for slot in &self.state.children {
+            let parent = self.account_info(&slot.parent)?;
+            if !(parent.is_writable) {
                 return Err(core::Error::InvalidAccount.into());
             }
-            let mut data = target
-                .try_borrow_mut_data()
-                .map_err(anchor_lang::error::Error::from)?;
-            data.fill(0);
-            data[..8].copy_from_slice(CHILD_MAGIC);
-            entry
-                .slot
-                .serialize(&mut &mut data[8..])
-                .map_err(|_| error!(LedgerError::InvalidAccount))?;
-        }
-        for entry in &self.state.records {
-            if entry.changed {
-                let r = &entry.record;
-                save(self.account_info(&entry.key)?, r, entry.metadata_changed)?;
-            }
+            mapping::set_child(
+                &mut parent
+                    .try_borrow_mut_data()
+                    .map_err(anchor_lang::error::Error::from)?,
+                slot.index,
+                slot.relative,
+            )?;
         }
         if let Some(vault) = self.initialize_vault {
-            if !self.root_info.is_writable {
+            if !(self.root_info.is_writable) {
                 return Err(core::Error::InvalidAccount.into());
             }
             self.root_info
@@ -1476,7 +1673,7 @@ pub struct Debit {
 
 impl core::AddressDerivation<Pubkey> for SolanaHost<'_, '_> {
     fn to_address(&self, parent: &Pubkey, relative: &Pubkey) -> Pubkey {
-        self.child_address(parent, relative).0
+        self.child_address(parent, relative)
     }
 }
 
@@ -1488,14 +1685,20 @@ impl core::ReadStore<Pubkey> for SolanaHost<'_, '_> {
         if let Some(record) = self.state.optional(key) {
             return Ok(Some(record.borrowed()));
         }
-        let account = self
-            .account_info(key)
-            .map_err(|_| core::Error::MissingAccount)?;
-        if *account.owner == system_program::ID && account.data_is_empty() {
-            Ok(None)
-        } else {
-            Err(core::Error::InvalidAccount)
+        if self.state.missing.contains(key) {
+            return Ok(None);
         }
+        // Initialization may query the not-yet-created Root or ledger header.
+        if (*key == self.root.address && self.root_info.data_is_empty())
+            || (*key == self.root.parent
+                && self
+                    .global_root_info
+                    .as_ref()
+                    .is_some_and(|a| a.data_is_empty()))
+        {
+            return Ok(None);
+        }
+        Err(core::Error::MissingAccount)
     }
 }
 

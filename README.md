@@ -20,7 +20,7 @@ work is deferred until this implementation settles.
 | `crates/cavalre-ledger-core/src/ledger_lib.rs` | Original LedgerLib identity and posting rules |
 | `crates/cavalre-ledger-core/src/ledger.rs` | Shared service operations and authenticated host interface |
 | `crates/cavalre-ledger-core/src/ledger_view.rs` | Independent, non-mutating queries |
-| `crates/cavalre-ledger-solana/src/ledger_lib.rs` | Solana PDA derivation and calls into the core |
+| `crates/cavalre-ledger-solana/src/ledger_lib.rs` | Logical child hashing, group storage and calls into the core |
 | `crates/cavalre-ledger-solana/src/ledger.rs` | Solana implementation of the host interface |
 | `crates/cavalre-ledger-solana/src/ledger_view.rs` | Read helpers |
 | `crates/cavalre-ledger-solana/src/ledger_cpi.rs` | In-place custody instruction preparation |

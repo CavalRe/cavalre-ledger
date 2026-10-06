@@ -1,9 +1,9 @@
 //! Read helpers corresponding to LedgerView.sol. Public record data can be read
 //! directly by RPC clients; on-program readers validate ownership and identity.
-use crate::ledger_lib::{child_index_address, decode_child_data, ChildSlot, CHILD_MAGIC};
 use crate::ledger_lib::{
     decode, decode_data, global_root_address, root_storage_address, to_address, LedgerError, Record,
 };
+use crate::ledger_storage as mapping;
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::program_pack::Pack;
 use cavalre_ledger_core::{ledger_lib as core, ledger_view as view};
@@ -15,6 +15,7 @@ use spl_token_2022_interface::{
     state::Mint,
 };
 use spl_token_metadata_interface::state::TokenMetadata;
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 
 pub const METAPLEX_METADATA_PROGRAM: Pubkey =
@@ -207,7 +208,9 @@ pub struct Reader {
     // Deduplicate only this supplied input list; queries use the indexes below.
     inputs: Vec<Pubkey>,
     records: BTreeMap<Pubkey, Option<Record>>,
-    children: BTreeMap<Pubkey, ChildSlot>,
+    children: BTreeMap<(Pubkey, u32), Pubkey>,
+    locations: BTreeMap<Pubkey, Pubkey>,
+    derived: RefCell<BTreeMap<Pubkey, Pubkey>>,
     mints: BTreeMap<Pubkey, MintMetadata>,
     metadata: BTreeMap<Pubkey, Labels>,
 }
@@ -234,20 +237,44 @@ impl Reader {
     /// Metadata is a snapshot, so use a fresh reader after source updates.
     pub fn insert(&mut self, address: Pubkey, owner: &Pubkey, data: &[u8]) -> Result<()> {
         require!(!self.contains(&address), LedgerError::InvalidAccount);
-        if *owner == crate::ID && data.get(..8) == Some(CHILD_MAGIC) {
-            let slot = decode_child_data(&address, owner, data)?;
-            self.children.insert(address, slot);
-        } else if *owner == crate::ID {
+        if *owner == crate::ID {
             let record = decode_data(&address, owner, data)?;
-            let logical = if record.depth == 2 {
-                record.root
-            } else {
-                address
-            };
+            if !record.registered && record.depth > 2 {
+                self.inputs.push(address);
+                return Ok(());
+            }
+            let logical = record.address();
             require!(
                 !self.records.contains_key(&logical),
                 LedgerError::InvalidAccount
             );
+            self.locations.insert(logical, address);
+            for index in 0..record.children {
+                let relative = mapping::child(data, index)?.ok_or(LedgerError::InvalidAccount)?;
+                self.children.insert((logical, index), relative);
+            }
+            for index in 0..mapping::len(data) {
+                let (key, value) = mapping::entry_with_parent(data, index, &record, &logical)?;
+                match value {
+                    mapping::Value::Leaf(leaf) => {
+                        require!(
+                            leaf.parent == logical
+                                && leaf.root == record.root
+                                && leaf.address() == key,
+                            LedgerError::InvalidAccount
+                        );
+                        require!(
+                            !self.records.contains_key(&key),
+                            LedgerError::InvalidAccount
+                        );
+                        self.records.insert(key, Some(leaf));
+                        self.locations.insert(key, address);
+                    }
+                    mapping::Value::Group(storage) => {
+                        self.locations.insert(key, storage);
+                    }
+                }
+            }
             self.records.insert(logical, Some(record));
         } else if *owner == METAPLEX_METADATA_PROGRAM {
             let labels = metaplex_labels(&address, data)?;
@@ -337,12 +364,19 @@ impl Reader {
     ) -> std::result::Result<Vec<Pubkey>, core::Error> {
         let mut addresses = view::transfer_writable_accounts(self, ledger, from, to, amount)?;
         for address in &mut addresses {
-            if let Some(Some(record)) = self.records.get(address) {
-                if record.depth == 2 {
-                    *address = root_storage_address(&record.scope, &record.identifier).0;
-                }
+            if let Some(storage) = self.locations.get(address) {
+                *address = *storage;
+            } else if let Some(parent) = self.derived.borrow().get(address) {
+                *address = *self
+                    .locations
+                    .get(parent)
+                    .ok_or(core::Error::MissingAccount)?;
+            } else {
+                return Err(core::Error::MissingAccount);
             }
         }
+        addresses.sort_unstable();
+        addresses.dedup();
         Ok(addresses)
     }
     pub fn name(&self, absolute: &Pubkey) -> std::result::Result<String, core::Error> {
@@ -454,7 +488,9 @@ impl Reader {
 }
 impl core::AddressDerivation<Pubkey> for Reader {
     fn to_address(&self, parent: &Pubkey, relative: &Pubkey) -> Pubkey {
-        to_address(&crate::ID, parent, relative).0
+        let key = to_address(parent, relative);
+        self.derived.borrow_mut().insert(key, *parent);
+        key
     }
 }
 impl core::ReadStore<Pubkey> for Reader {
@@ -462,10 +498,25 @@ impl core::ReadStore<Pubkey> for Reader {
         &self,
         address: &Pubkey,
     ) -> std::result::Result<Option<core::Account<Pubkey, &str>>, core::Error> {
-        let record = self
-            .records
-            .get(address)
-            .ok_or(core::Error::MissingAccount)?;
+        let record = match self.records.get(address) {
+            Some(record) => record,
+            None => {
+                // A supplied container proves absence of an entry. A group
+                // reference whose container was omitted does not prove absence.
+                if !self.locations.contains_key(address) {
+                    if let Some(parent) = self.derived.borrow().get(address) {
+                        if self
+                            .records
+                            .get(parent)
+                            .is_some_and(|r| r.as_ref().is_some_and(|r| r.kind < 2))
+                        {
+                            return Ok(None);
+                        }
+                    }
+                }
+                return Err(core::Error::MissingAccount);
+            }
+        };
         let Some(record) = record else {
             return Ok(None);
         };
@@ -490,9 +541,8 @@ impl core::ReadStore<Pubkey> for Reader {
 impl view::ChildIndex<Pubkey> for Reader {
     fn child_at(&self, parent: &Pubkey, index: u32) -> std::result::Result<Pubkey, core::Error> {
         self.children
-            .get(&child_index_address(parent, index).0)
-            .ok_or(core::Error::IncompleteIndex)?
-            .relative
-            .ok_or(core::Error::InvalidIndex)
+            .get(&(*parent, index))
+            .copied()
+            .ok_or(core::Error::IncompleteIndex)
     }
 }

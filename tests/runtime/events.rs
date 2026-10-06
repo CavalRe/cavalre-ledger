@@ -327,11 +327,11 @@ fn failed_transactions_retain_speculative_logs_but_commit_no_event_effects() {
     let parent = branch(&mut h, e.root, 0, true);
     let user = h.key(1);
     let valid = e.movement(&h, (h.key(0), 0), (parent, user), 10, true, &[]);
-    let before_root = h.svm.get_account(&e.root_storage).unwrap();
-    let before_parent = h.svm.get_account(&parent).unwrap();
+    let before_root = h.account(&e.root_storage).unwrap();
+    let before_parent = h.account(&parent).unwrap();
     let mut late_failure = valid.clone();
     for account in &mut late_failure.accounts {
-        if account.pubkey == parent {
+        if account.pubkey == h.storage(parent) {
             account.is_writable = false;
         }
     }
@@ -348,9 +348,9 @@ fn failed_transactions_retain_speculative_logs_but_commit_no_event_effects() {
         5,
         "Solana retains logs emitted before a late commit failure"
     );
-    assert_eq!(h.svm.get_account(&e.root_storage).unwrap(), before_root);
-    assert_eq!(h.svm.get_account(&parent).unwrap(), before_parent);
-    assert!(h.svm.get_account(&child(parent, user)).is_none());
+    assert_eq!(h.account(&e.root_storage).unwrap(), before_root);
+    assert_eq!(h.account(&parent).unwrap(), before_parent);
+    assert!(h.maybe_record(child(parent, user)).is_none());
     assert_eq!((h.token(e.wallet), h.token(e.vault)), (1000, 0));
 
     // Even a successful Ledger instruction is rolled back by a later instruction.
@@ -371,8 +371,8 @@ fn failed_transactions_retain_speculative_logs_but_commit_no_event_effects() {
         TransactionError::InstructionError(1, _)
     ));
     assert_eq!(event_bytes(&failed.meta.logs).len(), 5);
-    assert_eq!(h.svm.get_account(&e.root_storage).unwrap(), before_root);
-    assert_eq!(h.svm.get_account(&parent).unwrap(), before_parent);
-    assert!(h.svm.get_account(&child(parent, user)).is_none());
+    assert_eq!(h.account(&e.root_storage).unwrap(), before_root);
+    assert_eq!(h.account(&parent).unwrap(), before_parent);
+    assert!(h.maybe_record(child(parent, user)).is_none());
     assert_eq!((h.token(e.wallet), h.token(e.vault)), (1000, 0));
 }

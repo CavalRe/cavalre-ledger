@@ -208,13 +208,13 @@ fn extras(e: &External, mut ix: Instruction) -> Instruction {
 }
 fn count(h: &Harness, e: &External) -> u64 {
     u64::from_le_bytes(
-        h.svm.get_account(&hook_state(e.mint)).unwrap().data[1..9]
+        h.account(&hook_state(e.mint)).unwrap().data[1..9]
             .try_into()
             .unwrap(),
     )
 }
 fn mode(h: &mut Harness, e: &External, mode: u8) {
-    let mut state = h.svm.get_account(&hook_state(e.mint)).unwrap();
+    let mut state = h.account(&hook_state(e.mint)).unwrap();
     state.data[0] = mode;
     h.svm.set_account(hook_state(e.mint), state).unwrap();
 }
@@ -248,11 +248,11 @@ fn reject_many_unchanged(
     let before: Vec<_> = instructions
         .iter()
         .flat_map(|ix| ix.accounts.iter())
-        .map(|m| (m.pubkey, h.svm.get_account(&m.pubkey)))
+        .map(|m| (m.pubkey, h.account(&m.pubkey)))
         .collect();
     let failure = *run_many(h, signers, &instructions).expect_err("operation must reject");
     for (key, old) in before {
-        let mut now = h.svm.get_account(&key);
+        let mut now = h.account(&key);
         if key == h.key(0) {
             now.as_mut().unwrap().lamports += failure.meta.fee;
         }
@@ -276,7 +276,7 @@ fn hooks_and_permissioned_burn_settle_directly_and_through_application_cpi() {
             let e = initialized(&mut h, hook, burn, false);
             let init = e.registration(&h);
             let result = run(&mut h, &[0], init.clone()).unwrap();
-            rows.push(serde_json::json!({"hook":hook,"burn":burn,"cpi":cpi,"operation":"register","compute_units":result.compute_units_consumed,"custody_bytes":h.svm.get_account(&e.vault).unwrap().data.len()}));
+            rows.push(serde_json::json!({"hook":hook,"burn":burn,"cpi":cpi,"operation":"register","compute_units":result.compute_units_consumed,"custody_bytes":h.account(&e.vault).unwrap().data.len()}));
             let authority = if cpi { app_authority(&h) } else { h.key(0) };
             let parent = child(e.root, authority);
             let holder = h.key(2);
@@ -322,9 +322,9 @@ fn hooks_and_permissioned_burn_settle_directly_and_through_application_cpi() {
             );
             assert_eq!(h.record(child(parent, holder)).debit, 70);
             assert_eq!(count(&h, &e), if hook == Some(true) { 4 } else { 0 });
-            let before = h.svm.get_account(&e.root_storage).unwrap();
+            let before = h.account(&e.root_storage).unwrap();
             succeeds(&mut h, &[0], init);
-            assert_eq!(h.svm.get_account(&e.root_storage).unwrap(), before);
+            assert_eq!(h.account(&e.root_storage).unwrap(), before);
             // Internal postings observe backing and do not call a token hook.
             let ix = call(
                 &h,
@@ -387,7 +387,7 @@ fn hook_failures_missing_records_and_reentrancy_roll_back_token_and_ledger_chang
     }
     let fake = Address::new_from_array([81; 32]);
     h.svm
-        .set_account(fake, h.svm.get_account(&hook_state(e.mint)).unwrap())
+        .set_account(fake, h.account(&hook_state(e.mint)).unwrap())
         .unwrap();
     let mut ix = call(&h, true, 100);
     for m in &mut ix.accounts {
@@ -403,7 +403,7 @@ fn hook_failures_missing_records_and_reentrancy_roll_back_token_and_ledger_chang
     mode(&mut h, &e, 1);
     let ix = call(&h, true, 100);
     rejects(&mut h, &[0, 1], ix, 7101);
-    assert!(h.svm.get_account(&child(parent, holder)).is_none());
+    assert!(h.maybe_record(child(parent, holder)).is_none());
     mode(&mut h, &e, 0);
     let ix = call(&h, true, 100);
     succeeds(&mut h, &[0, 1], ix);
@@ -536,7 +536,7 @@ fn permissioned_burn_preserves_owner_consent_and_program_controlled_burns() {
         ),
         (900, 0, 0)
     );
-    let data = h.svm.get_account(&e.mint).unwrap().data;
+    let data = h.account(&e.mint).unwrap().data;
     assert_eq!(
         StateWithExtensions::<MintRecord>::unpack(&data)
             .unwrap()
@@ -617,7 +617,7 @@ fn underbacking_still_freezes_hook_tokens_and_direct_repairs_restore_activity() 
         e.movement(&h, (h.key(0), 1), (parent, holder), 100, true, &[]),
     );
     succeeds(&mut h, &[0, 1], ix);
-    let mut damaged = h.svm.get_account(&e.vault).unwrap();
+    let mut damaged = h.account(&e.vault).unwrap();
     damaged.data[64..72].copy_from_slice(&80u64.to_le_bytes());
     h.svm.set_account(e.vault, damaged).unwrap();
     for deposit in [true, false] {

@@ -29,6 +29,8 @@ mod root;
 mod token2022;
 #[path = "token_hooks.rs"]
 mod token_hooks;
+#[path = "transfer_costs.rs"]
+mod transfer_costs;
 #[path = "writable_accounts.rs"]
 mod writable_accounts;
 
@@ -79,7 +81,7 @@ fn rejects_with_error(
     let before: Vec<_> = instruction
         .accounts
         .iter()
-        .map(|m| (m.pubkey, h.svm.get_account(&m.pubkey)))
+        .map(|m| (m.pubkey, h.account(&m.pubkey)))
         .collect();
     let failure = run_raw(h, signers, instruction).expect_err("expected rejection");
     assert_eq!(
@@ -88,7 +90,7 @@ fn rejects_with_error(
         "wrong rejection: {failure:?}"
     );
     for (key, old) in before {
-        let mut new = h.svm.get_account(&key);
+        let mut new = h.account(&key);
         if key == h.key(0) {
             if let (Some(old), Some(new)) = (&old, &mut new) {
                 assert_eq!(
@@ -226,7 +228,7 @@ impl External {
         let mut rest = vec![self.source, parent, child(parent, relative)];
         rest.extend(extra);
         let rest = remaining(self.root, &rest);
-        if deposit {
+        h.indexed(if deposit {
             ix(
                 accounts,
                 instruction::Wrap {
@@ -246,7 +248,7 @@ impl External {
                 },
                 &rest,
             )
-        }
+        })
     }
 }
 
@@ -269,7 +271,7 @@ fn group(
 ) -> Instruction {
     let mut rest = vec![parent, child(parent, relative)];
     rest.extend(extra);
-    ix(
+    h.indexed(ix(
         base(h, root, authority),
         instruction::AddSubAccountGroup {
             parent: ap(parent),
@@ -279,7 +281,7 @@ fn group(
             implicit_allowed,
         },
         &remaining(root, &rest),
-    )
+    ))
 }
 fn leaf(
     h: &Harness,
@@ -290,7 +292,7 @@ fn leaf(
     name: &str,
     credit: bool,
 ) -> Instruction {
-    ix(
+    h.indexed(ix(
         base(h, root, authority),
         instruction::AddSubAccount {
             parent: ap(parent),
@@ -299,7 +301,7 @@ fn leaf(
             credit,
         },
         &remaining(root, &[parent, child(parent, relative)]),
-    )
+    ))
 }
 fn remove(
     h: &Harness,
@@ -310,7 +312,7 @@ fn remove(
     is_group: bool,
 ) -> Instruction {
     let rest = remaining(root, &[parent, child(parent, relative)]);
-    if is_group {
+    h.indexed(if is_group {
         ix(
             base(h, root, authority),
             instruction::RemoveSubAccountGroup {
@@ -328,7 +330,7 @@ fn remove(
             },
             &rest,
         )
-    }
+    })
 }
 fn transfer(
     h: &Harness,
@@ -341,7 +343,7 @@ fn transfer(
 ) -> Instruction {
     let mut rest = vec![from.0, child(from.0, from.1), to.0, child(to.0, to.1)];
     rest.extend(extra);
-    ix(
+    h.indexed(ix(
         base(h, root, authority),
         instruction::Transfer {
             from_parent: ap(from.0),
@@ -351,7 +353,7 @@ fn transfer(
             amount,
         },
         &remaining(root, &rest),
-    )
+    ))
 }
 fn branch(h: &mut Harness, root: Address, owner: usize, implicit: bool) -> Address {
     let authority = h.key(owner);
@@ -422,7 +424,7 @@ fn distinct_payer_funds_application_pda_and_unsigned_recipient_can_withdraw() {
     succeeds(&mut h, &[0], i);
 
     // A generic SPL delegation does not authorize Ledger to pull another owner's tokens.
-    let mut wallet = TokenAccount::unpack(&h.svm.get_account(&e.wallet).unwrap().data).unwrap();
+    let mut wallet = TokenAccount::unpack(&h.account(&e.wallet).unwrap().data).unwrap();
     wallet.delegate = COption::Some(h.key(0));
     wallet.delegated_amount = 1000;
     h.pack(e.wallet, wallet);
@@ -534,10 +536,10 @@ fn transfers_require_same_custodian_leaf_kind_membership_and_self_transfer_funds
     rejects(&mut h, &[0, 1], i, LedgerError::Accounting.into());
     let i = transfer(&h, e.root, h.key(0), (a, user), (a, user), 101, &[]);
     rejects(&mut h, &[0], i, LedgerError::Accounting.into());
-    let before = h.svm.get_account(&child(a, user)).unwrap();
+    let before = h.account(&child(a, user)).unwrap();
     let i = transfer(&h, e.root, h.key(0), (a, user), (a, user), 100, &[]);
     succeeds(&mut h, &[0], i);
-    assert_eq!(h.svm.get_account(&child(a, user)).unwrap(), before);
+    assert_eq!(h.account(&child(a, user)).unwrap(), before);
     let other = External::new(&mut h, 70, 0);
     let i = transfer(&h, e.root, h.key(0), (a, user), (other.root, user), 1, &[]);
     rejects(&mut h, &[0], i, LedgerError::InvalidAccount.into());
@@ -566,8 +568,9 @@ fn registered_leaf_labels_allow_empty_names_and_keep_the_byte_limit() {
     assert!(record.name.is_empty());
     assert_eq!((record.kind, record.debit, record.sub_index), (2, 17, 2));
     let mut reader = ledger::ledger_view::Reader::new();
-    for key in [root, account] {
-        let a = h.svm.get_account(&key).unwrap();
+    {
+        let key = root;
+        let a = h.account(&key).unwrap();
         reader.insert(ap(key), &ap(a.owner), &a.data).unwrap();
     }
     let view = reader
@@ -577,18 +580,15 @@ fn registered_leaf_labels_allow_empty_names_and_keep_the_byte_limit() {
     assert!(view.name.is_empty());
     assert_eq!(view.balances.debit, 17);
     // Matching empty-label registration retains funded state, index and rent.
-    let before = [root, source, account].map(|key| h.svm.get_account(&key));
-    let payer_before = h.svm.get_account(&h.key(0)).unwrap().lamports;
+    let before = [root, source, account].map(|key| h.account(&key));
+    let payer_before = h.account(&h.key(0)).unwrap().lamports;
     let repeat = run(&mut h, &[0], register).unwrap();
     assert!(events::event_bytes(&repeat.logs).is_empty());
     assert_eq!(
-        h.svm.get_account(&h.key(0)).unwrap().lamports + repeat.fee,
+        h.account(&h.key(0)).unwrap().lamports + repeat.fee,
         payer_before
     );
-    assert_eq!(
-        [root, source, account].map(|key| h.svm.get_account(&key)),
-        before
-    );
+    assert_eq!([root, source, account].map(|key| h.account(&key)), before);
     let conflict = leaf(&h, root, h.key(0), root, relative, "Changed", false);
     rejects(&mut h, &[0], conflict, LedgerError::MetadataConflict.into());
     let credit_relative = h.key(2);
@@ -632,10 +632,10 @@ fn registration_preserves_funded_implicit_balances_and_checks_repeated_calls() {
     let i = e.movement(&h, (h.key(0), 0), (a, user), 100, true, &[]);
     succeeds(&mut h, &[0], i);
     // Removing an implicit balance is an authorized no-op, not deletion.
-    let before = h.svm.get_account(&account).unwrap();
+    let before = h.account(&account).unwrap();
     let i = remove(&h, e.root, h.key(0), a, user, false);
     succeeds(&mut h, &[0], i);
-    assert_eq!(h.svm.get_account(&account).unwrap(), before);
+    assert_eq!(h.account(&account).unwrap(), before);
     let i = remove(&h, e.root, h.key(1), a, user, false);
     rejects(&mut h, &[0, 1], i, LedgerError::Unauthorized.into());
     let i = group(&h, e.root, h.key(0), a, user, true, &[]);
@@ -644,9 +644,9 @@ fn registration_preserves_funded_implicit_balances_and_checks_repeated_calls() {
     succeeds(&mut h, &[0], create.clone());
     assert_eq!(h.record(a).children, 1);
     assert_eq!(h.record(account).debit, 100);
-    let registered = h.svm.get_account(&account).unwrap();
+    let registered = h.account(&account).unwrap();
     succeeds(&mut h, &[0], create);
-    assert_eq!(h.svm.get_account(&account).unwrap(), registered);
+    assert_eq!(h.account(&account).unwrap(), registered);
     assert_eq!(h.record(a).children, 1);
     let i = leaf(&h, e.root, h.key(0), a, user, "Rename", false);
     rejects(&mut h, &[0], i, LedgerError::MetadataConflict.into());
@@ -687,7 +687,7 @@ fn registered_only_parent_checks_every_monetary_route_and_allows_subgroup_policy
         let i = transfer(&h, e.root, h.key(0), (a, from), (a, to), 0, &[]);
         rejects(&mut h, &[0], i, LedgerError::InvalidAccount.into());
     }
-    assert!(h.svm.get_account(&child(a, implicit_user)).is_none());
+    assert!(h.maybe_record(child(a, implicit_user)).is_none());
     // A registered subgroup controls its own immediate children.
     let subgroup = child(a, implicit_user);
     let i = group(&h, e.root, h.key(0), a, implicit_user, true, &[]);
@@ -732,18 +732,20 @@ fn malformed_records_omitted_ancestors_duplicates_and_wrong_addresses_reject() {
     let user = h.key(1);
     let valid = e.movement(&h, (h.key(0), 0), (a, user), 1, true, &[]);
     let mut duplicate = valid.clone();
-    duplicate.accounts.push(AccountMeta::new(a, false));
+    duplicate
+        .accounts
+        .push(AccountMeta::new(h.storage(a), false));
     rejects(&mut h, &[0], duplicate, LedgerError::InvalidAccount.into());
     let mut omitted = valid.clone();
-    omitted.accounts.retain(|m| m.pubkey != a);
+    omitted.accounts.retain(|m| m.pubkey != h.storage(a));
     rejects(&mut h, &[0], omitted, LedgerError::InvalidAccount.into());
-    let saved = h.svm.get_account(&a).unwrap();
+    let saved = h.account(&a).unwrap();
     // Account substitution with a genuine record at a different key is not a PDA proof.
     let fake = Address::new_from_array([90; 32]);
     h.svm.set_account(fake, saved.clone()).unwrap();
     let mut substituted = valid.clone();
     for m in &mut substituted.accounts {
-        if m.pubkey == a {
+        if m.pubkey == h.storage(a) {
             m.pubkey = fake;
         }
     }
@@ -753,7 +755,8 @@ fn malformed_records_omitted_ancestors_duplicates_and_wrong_addresses_reject() {
         substituted,
         LedgerError::InvalidAccount.into(),
     );
-    for malformed in 0..4 {
+    let storage = h.storage(a);
+    for malformed in 0..6 {
         let mut account = saved.clone();
         match malformed {
             0 => account.owner = TOKEN,
@@ -761,19 +764,23 @@ fn malformed_records_omitted_ancestors_duplicates_and_wrong_addresses_reject() {
             2 => account.data.truncate(20),
             _ => {
                 let mut record = h.record(a);
-                record.bump ^= 1;
+                match malformed {
+                    3 => record.bump ^= 1,
+                    4 => record.parent = ap(fake),
+                    _ => record.relative = ap(fake),
+                }
                 anchor_lang::AnchorSerialize::serialize(&record, &mut &mut account.data[8..])
                     .unwrap();
             }
         }
-        h.svm.set_account(a, account).unwrap();
+        h.svm.set_account(storage, account).unwrap();
         rejects(
             &mut h,
             &[0],
             valid.clone(),
             LedgerError::InvalidAccount.into(),
         );
-        h.svm.set_account(a, saved.clone()).unwrap();
+        h.svm.set_account(storage, saved.clone()).unwrap();
     }
     succeeds(&mut h, &[0], valid); // Same valid accounts and request do succeed.
 }
@@ -813,7 +820,7 @@ fn token_mint_vault_authority_wallet_alias_and_program_substitutions_reject() {
         }
         rejects(&mut h, &[0], substituted, code);
     }
-    let mut vault = TokenAccount::unpack(&h.svm.get_account(&e.vault).unwrap().data).unwrap();
+    let mut vault = TokenAccount::unpack(&h.account(&e.vault).unwrap().data).unwrap();
     vault.owner = h.key(0);
     h.pack(e.vault, vault);
     rejects(&mut h, &[0], valid, ErrorCode::ConstraintTokenOwner.into());
@@ -826,7 +833,7 @@ fn failed_token_settlement_and_late_commit_undo_new_leaf_allocation() {
     let a = branch(&mut h, e.root, 0, true);
     let user = h.key(1);
     let valid = e.movement(&h, (h.key(0), 0), (a, user), 10, true, &[]);
-    let mut frozen = TokenAccount::unpack(&h.svm.get_account(&e.wallet).unwrap().data).unwrap();
+    let mut frozen = TokenAccount::unpack(&h.account(&e.wallet).unwrap().data).unwrap();
     frozen.state = AccountState::Frozen;
     h.pack(e.wallet, frozen);
     rejects(
@@ -839,12 +846,12 @@ fn failed_token_settlement_and_late_commit_undo_new_leaf_allocation() {
     h.pack(e.wallet, frozen);
     let mut readonly = valid.clone();
     for m in &mut readonly.accounts {
-        if m.pubkey == a {
+        if m.pubkey == h.storage(a) {
             m.is_writable = false;
         }
     }
     rejects(&mut h, &[0], readonly, LedgerError::InvalidAccount.into());
-    assert!(h.svm.get_account(&child(a, user)).is_none());
+    assert!(h.maybe_record(child(a, user)).is_none());
     assert_eq!((h.token(e.wallet), h.token(e.vault)), (1000, 0));
     succeeds(&mut h, &[0], valid);
     assert_eq!(h.record(child(a, user)).debit, 10);
@@ -940,7 +947,7 @@ fn direct_implicit_holder_and_prefunded_storage_do_not_require_registration() {
 fn internal_u128_overflow_rolls_back_and_does_not_affect_external_claims() {
     let mut h = Harness::new();
     let e = External::new(&mut h, 60, 0);
-    let external_before = h.svm.get_account(&e.root_storage).unwrap();
+    let external_before = h.account(&e.root_storage).unwrap();
     let (root, source) = h.internal();
     let user = h.key(1);
     let i = transfer(
@@ -968,7 +975,7 @@ fn internal_u128_overflow_rolls_back_and_does_not_affect_external_claims() {
     );
     rejects(&mut h, &[0], i, LedgerError::Accounting.into());
     assert_eq!(h.record(source).credit, u128::MAX);
-    assert!(h.svm.get_account(&child(root, h.key(2))).is_none());
+    assert!(h.maybe_record(child(root, h.key(2))).is_none());
     let i = transfer(
         &h,
         root,
@@ -980,6 +987,6 @@ fn internal_u128_overflow_rolls_back_and_does_not_affect_external_claims() {
     );
     succeeds(&mut h, &[0], i);
     assert_eq!((h.record(root).debit, h.record(root).credit), (0, 0));
-    assert_eq!(h.svm.get_account(&e.root_storage).unwrap(), external_before);
+    assert_eq!(h.account(&e.root_storage).unwrap(), external_before);
     assert_eq!(h.token(e.vault), 0);
 }

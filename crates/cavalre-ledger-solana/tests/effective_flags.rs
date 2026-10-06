@@ -45,7 +45,7 @@ fn root() -> MemoryStore {
 }
 
 fn group(store: &mut MemoryStore, credit: bool) -> Pubkey {
-    let absolute = to_address(&key(9), &key(1), &key(2)).0;
+    let absolute = to_address(&key(1), &key(2));
     store.flags.insert(
         absolute,
         Flags {
@@ -68,7 +68,7 @@ fn group(store: &mut MemoryStore, credit: bool) -> Pubkey {
 fn direct_implicit_leaf_needs_no_registration() {
     let store = root();
     let (effective, original, absolute) =
-        effective_flags(&store, &key(9), &key(1), &key(1), &key(3)).unwrap();
+        effective_flags(&store, &key(1), &key(1), &key(3)).unwrap();
     assert_eq!(original, None);
     assert_eq!(effective.account_kind, AccountKind::DebitLedger);
     assert_eq!(effective.token_kind, TokenKind::Unregistered);
@@ -86,8 +86,7 @@ fn nested_implicit_leaves_inherit_both_polarities_and_custody() {
     for credit in [false, true] {
         let mut store = root();
         let parent = group(&mut store, credit);
-        let (effective, original, _) =
-            effective_flags(&store, &key(9), &key(1), &parent, &key(3)).unwrap();
+        let (effective, original, _) = effective_flags(&store, &key(1), &parent, &key(3)).unwrap();
         assert_eq!(original, None);
         assert_eq!(effective.account_kind.is_credit(), credit);
         assert!(!effective.account_kind.is_group());
@@ -103,7 +102,7 @@ fn nested_implicit_leaves_inherit_both_polarities_and_custody() {
 fn registered_leaf_keeps_its_own_polarity() {
     let mut store = root();
     let parent = group(&mut store, false);
-    let absolute = to_address(&key(9), &parent, &key(3)).0;
+    let absolute = to_address(&parent, &key(3));
     let original = Flags {
         parent,
         account_kind: AccountKind::CreditLedger,
@@ -112,7 +111,7 @@ fn registered_leaf_keeps_its_own_polarity() {
     };
     store.flags.insert(absolute, original);
     assert_eq!(
-        effective_flags(&store, &key(9), &key(1), &parent, &key(3)),
+        effective_flags(&store, &key(1), &parent, &key(3)),
         Ok((original, Some(original), absolute))
     );
     // Custodian polarity is independent of the leaf's polarity.
@@ -126,16 +125,16 @@ fn registered_leaf_keeps_its_own_polarity() {
 fn rejects_wrong_root_and_non_group_parent() {
     let mut store = root();
     assert_eq!(
-        effective_flags(&store, &key(9), &key(8), &key(1), &key(3)),
+        effective_flags(&store, &key(8), &key(1), &key(3)),
         Err(Error::DifferentRoots)
     );
     assert_eq!(
-        effective_flags(&store, &key(9), &key(1), &key(7), &key(3)),
+        effective_flags(&store, &key(1), &key(7), &key(3)),
         Err(Error::InvalidAccountGroup)
     );
     store.flags.get_mut(&key(1)).unwrap().account_kind = AccountKind::DebitLedger;
     assert_eq!(
-        effective_flags(&store, &key(9), &key(1), &key(1), &key(3)),
+        effective_flags(&store, &key(1), &key(1), &key(3)),
         Err(Error::InvalidAccountGroup)
     );
 }
@@ -146,14 +145,22 @@ fn rejects_depth_overflow() {
     let parent = group(&mut store, false);
     store.flags.get_mut(&parent).unwrap().depth = u8::MAX;
     assert_eq!(
-        effective_flags(&store, &key(9), &key(1), &parent, &key(3)),
+        effective_flags(&store, &key(1), &parent, &key(3)),
         Err(Error::DepthOverflow)
     );
 }
 
 #[test]
-fn relative_identity_is_scoped_by_parent_and_program() {
-    let address = to_address(&key(9), &key(1), &key(3)).0;
-    assert_ne!(address, to_address(&key(9), &key(2), &key(3)).0);
-    assert_ne!(address, to_address(&key(8), &key(1), &key(3)).0);
+fn relative_identity_is_exactly_the_packed_parent_and_relative_hash() {
+    let address = to_address(&key(1), &key(3));
+    assert_ne!(address, to_address(&key(2), &key(3)));
+    assert_ne!(address, to_address(&key(3), &key(1)));
+    let mut packed = [0; 64];
+    packed[..32].copy_from_slice(key(1).as_ref());
+    packed[32..].copy_from_slice(key(3).as_ref());
+    assert_eq!(
+        address.to_bytes(),
+        solana_keccak_hasher::hash(&packed).to_bytes()
+    );
+    assert_ne!(address, account_storage_address(&key(1), &key(3)).0);
 }

@@ -16,7 +16,7 @@ fn replays_all_original_solidity_custody_steps_with_classic_and_token2022() {
     for token_program in [TOKEN, TOKEN_2022] {
         let mut h = Harness::new();
         let mut token = External::setup(&mut h, 174, 1, token_program);
-        let mut mint = Mint::unpack(&h.svm.get_account(&token.mint).unwrap().data).unwrap();
+        let mut mint = Mint::unpack(&h.account(&token.mint).unwrap().data).unwrap();
         mint.supply = 2 * initial;
         h.pack_for(token.mint, mint, token_program);
         let users = [h.key(1), h.key(2)];
@@ -69,7 +69,7 @@ fn replays_all_original_solidity_custody_steps_with_classic_and_token2022() {
                 _ => panic!("unknown custody fixture kind {kind}"),
             };
             let ledger_keys = [token.root_storage, token.source, positions[0], positions[1]];
-            let before = ledger_keys.map(|key| h.svm.get_account(&key));
+            let before = ledger_keys.map(|key| h.account(&key));
             if step["success"].as_bool().unwrap() {
                 let result = run(&mut h, &[0, user + 1], instruction);
                 assert!(result.is_ok(), "{token_program}, step {index}: {result:?}");
@@ -87,16 +87,13 @@ fn replays_all_original_solidity_custody_steps_with_classic_and_token2022() {
             }
             if kind == 2 || !step["success"].as_bool().unwrap() {
                 assert_eq!(
-                    ledger_keys.map(|key| h.svm.get_account(&key)),
+                    ledger_keys.map(|key| h.account(&key)),
                     before,
                     "{token_program}, step {index}: changed Ledger state"
                 );
             }
             for i in 0..2 {
-                let position = h
-                    .svm
-                    .get_account(&positions[i])
-                    .map(|_| h.record(positions[i]));
+                let position = h.maybe_record(positions[i]);
                 assert_eq!(
                     position.as_ref().map_or(0, |a| a.debit),
                     u128::from(step["positions"][i].as_u64().unwrap()),

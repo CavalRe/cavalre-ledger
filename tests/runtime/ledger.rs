@@ -22,7 +22,7 @@ fn sa(a: anchor_lang::prelude::Pubkey) -> Address {
     Address::new_from_array(a.to_bytes())
 }
 fn child(parent: Address, relative: Address) -> Address {
-    sa(ledger::ledger_lib::to_address(&ledger::ID, &ap(parent), &ap(relative)).0)
+    sa(ledger::ledger_lib::to_address(&ap(parent), &ap(relative)))
 }
 fn ix(a: impl ToAccountMetas, d: impl InstructionData, rest: &[Address]) -> Instruction {
     use anchor_lang::Discriminator;
@@ -65,12 +65,17 @@ struct Harness {
     svm: LiteSVM,
     keys: [Keypair; 3],
     roots: std::collections::BTreeMap<Address, Address>,
+    nodes: std::cell::RefCell<std::collections::BTreeMap<Address, (Address, Address)>>,
 }
 impl Harness {
     fn new() -> Self {
         let mut svm = LiteSVM::new();
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/deploy/cavalre_ledger_solana.so");
+        let path = std::env::var_os("CAVALRE_LEDGER_TEST_PROGRAM")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../target/deploy/cavalre_ledger_solana.so")
+            });
         svm.add_program(
             sa(ledger::ID),
             &std::fs::read(path).expect("build sBPF first"),
@@ -84,6 +89,7 @@ impl Harness {
             svm,
             keys,
             roots: Default::default(),
+            nodes: Default::default(),
         }
     }
     fn key(&self, n: usize) -> Address {
@@ -95,27 +101,51 @@ impl Harness {
         mint
     }
     fn storage(&self, address: Address) -> Address {
-        self.roots.get(&address).copied().unwrap_or(address)
+        if let Some(storage) = self.roots.get(&address) {
+            return *storage;
+        }
+        let Some((parent, relative)) = self.nodes.borrow().get(&address).copied() else {
+            return address;
+        };
+        let group = sa(ledger::ledger_lib::account_storage_address(&ap(parent), &ap(relative)).0);
+        if self.svm.get_account(&group).is_some_and(|a| {
+            a.owner == sa(ledger::ID)
+                && ledger::ledger_lib::decode_data(&ap(group), &ap(a.owner), &a.data)
+                    .is_ok_and(|r| r.is_container())
+        }) {
+            group
+        } else {
+            self.storage(parent)
+        }
     }
-    // Test client: derive the exact ordinary child slots required by a tree
-    // mutation from a current snapshot. Never append them to posting operations.
+    fn account(&self, address: &Address) -> Option<Account> {
+        let key = if self.nodes.borrow().contains_key(address) {
+            self.storage(*address)
+        } else {
+            *address
+        };
+        self.svm.get_account(&key)
+    }
+    fn remember(&self, parent: Address, relative: Address) -> Address {
+        let key = child(parent, relative);
+        self.nodes.borrow_mut().insert(key, (parent, relative));
+        key
+    }
+    // Client adapter: instructions carry logical identities; account metas carry
+    // group containers. Merge duplicate containers and their write privileges.
     fn indexed(&self, mut instruction: Instruction) -> Instruction {
         use anchor_lang::Discriminator;
-        use ledger::ledger_lib::{
-            child_index_address, decode_child_data, decode_data, global_root_address,
-        };
         let offset = if instruction.program_id == sa(ledger::ID) {
             0
         } else {
             2
         };
         let data = &instruction.data;
-        let get = |key: Address| {
-            self.svm
-                .get_account(&self.storage(key))
-                .and_then(|a| decode_data(&ap(self.storage(key)), &ap(a.owner), &a.data).ok())
-        };
-        if [
+        let is = |d: &[u8]| data.starts_with(d);
+        if ![
+            instruction::AddLedger::DISCRIMINATOR,
+            instruction::AddExternalToken::DISCRIMINATOR,
+            instruction::AddNativeSol::DISCRIMINATOR,
             instruction::AddSubAccount::DISCRIMINATOR,
             instruction::AddSubAccountGroup::DISCRIMINATOR,
             instruction::AddSubAccountByName::DISCRIMINATOR,
@@ -123,97 +153,159 @@ impl Harness {
             instruction::RemoveSubAccount::DISCRIMINATOR,
             instruction::RemoveSubAccountGroup::DISCRIMINATOR,
             instruction::Transfer::DISCRIMINATOR,
+            instruction::Wrap::DISCRIMINATOR,
+            instruction::Unwrap::DISCRIMINATOR,
+            instruction::WrapSol::DISCRIMINATOR,
+            instruction::UnwrapSol::DISCRIMINATOR,
         ]
         .iter()
-        .any(|discriminator| data.starts_with(discriminator))
+        .any(|d| is(d))
         {
-            let root = instruction.accounts[offset + 2].pubkey;
-            if get(root).is_some_and(|record| record.depth == 2 && record.scope == ap(SYSTEM)) {
-                let vault = sa(anchor_lang::prelude::Pubkey::find_program_address(
-                    &[b"vault", root.as_ref()],
-                    &ledger::ID,
-                )
-                .0);
-                if !instruction.accounts.iter().any(|meta| meta.pubkey == vault) {
-                    instruction
-                        .accounts
-                        .push(AccountMeta::new_readonly(vault, false));
-                }
-            }
+            return instruction;
         }
-        let mut extra = Vec::new();
-        if data.starts_with(instruction::AddLedger::DISCRIMINATOR)
-            || data.starts_with(instruction::AddExternalToken::DISCRIMINATOR)
-            || data.starts_with(instruction::AddNativeSol::DISCRIMINATOR)
-        {
-            let root_position = if data.starts_with(instruction::AddLedger::DISCRIMINATOR) {
-                2
-            } else {
-                1
-            };
-            let root = if data.starts_with(instruction::AddExternalToken::DISCRIMINATOR) {
+        let key = |at: usize| Address::new_from_array(data[at..at + 32].try_into().unwrap());
+        let init = is(instruction::AddLedger::DISCRIMINATOR)
+            || is(instruction::AddExternalToken::DISCRIMINATOR)
+            || is(instruction::AddNativeSol::DISCRIMINATOR);
+        let settlement = is(instruction::Wrap::DISCRIMINATOR)
+            || is(instruction::Unwrap::DISCRIMINATOR)
+            || is(instruction::WrapSol::DISCRIMINATOR)
+            || is(instruction::UnwrapSol::DISCRIMINATOR);
+        let mut new_group = None;
+        if init {
+            let root = if is(instruction::AddExternalToken::DISCRIMINATOR) {
                 instruction.accounts[offset + 2].pubkey
-            } else if data.starts_with(instruction::AddNativeSol::DISCRIMINATOR) {
+            } else if is(instruction::AddNativeSol::DISCRIMINATOR) {
                 sa(ledger::ledger_lib::NATIVE_SOL)
             } else {
-                instruction.accounts[offset + root_position].pubkey
+                instruction.accounts[offset + 2].pubkey
             };
-            let global = sa(global_root_address().0);
-            let count = get(global).map_or(0, |a| a.children);
-            extra.push(sa(child_index_address(&ap(global), count).0));
-            extra.push(sa(child_index_address(&ap(root), 0).0));
-        } else if data.starts_with(instruction::AddSubAccount::DISCRIMINATOR)
-            || data.starts_with(instruction::AddSubAccountGroup::DISCRIMINATOR)
-            || data.starts_with(instruction::AddSubAccountByName::DISCRIMINATOR)
-            || data.starts_with(instruction::AddSubAccountGroupByName::DISCRIMINATOR)
-            || data.starts_with(instruction::RemoveSubAccount::DISCRIMINATOR)
-            || data.starts_with(instruction::RemoveSubAccountGroup::DISCRIMINATOR)
-        {
-            let parent = Address::new_from_array(data[8..40].try_into().unwrap());
-            let relative = if data.starts_with(instruction::AddSubAccountByName::DISCRIMINATOR)
-                || data.starts_with(instruction::AddSubAccountGroupByName::DISCRIMINATOR)
-            {
+            self.remember(root, sa(SOURCE));
+        } else {
+            let parent = key(8);
+            let named = is(instruction::AddSubAccountByName::DISCRIMINATOR)
+                || is(instruction::AddSubAccountGroupByName::DISCRIMINATOR);
+            let relative = if named {
                 let name = String::deserialize(&mut &data[40..]).unwrap();
-                let Ok(relative) = ledger::ledger_lib::name_to_address(&name) else {
-                    return instruction; // Invalid names need no append slot.
-                };
-                sa(relative)
+                match ledger::ledger_lib::name_to_address(&name) {
+                    Ok(key) => sa(key),
+                    Err(_) => return instruction,
+                }
             } else {
-                Address::new_from_array(data[40..72].try_into().unwrap())
+                key(40)
             };
-            let account = get(child(parent, relative));
-            let removing = data.starts_with(instruction::RemoveSubAccount::DISCRIMINATOR)
-                || data.starts_with(instruction::RemoveSubAccountGroup::DISCRIMINATOR);
-            if let Some(group) = get(parent) {
-                if removing {
-                    if let Some(account) = account.filter(|a| a.registered && a.sub_index > 0) {
-                        let position = account.sub_index - 1;
-                        if let Some(last) = group.children.checked_sub(1) {
-                            extra.push(sa(child_index_address(&ap(parent), position).0));
-                            let last_key = sa(child_index_address(&ap(parent), last).0);
-                            extra.push(last_key);
-                            if last != position {
-                                if let Some(slot) = self.svm.get_account(&last_key).and_then(|a| {
-                                    decode_child_data(&ap(last_key), &ap(a.owner), &a.data).ok()
-                                }) {
-                                    if let Some(relative) = slot.relative {
-                                        extra.push(child(parent, sa(relative)));
-                                    }
-                                }
-                            }
+            let logical = self.remember(parent, relative);
+            if is(instruction::AddSubAccountGroup::DISCRIMINATOR)
+                || is(instruction::AddSubAccountGroupByName::DISCRIMINATOR)
+            {
+                new_group = Some((
+                    logical,
+                    sa(ledger::ledger_lib::account_storage_address(&ap(parent), &ap(relative)).0),
+                ));
+            }
+            if is(instruction::Transfer::DISCRIMINATOR) {
+                self.remember(key(72), key(104));
+            }
+            if is(instruction::RemoveSubAccount::DISCRIMINATOR)
+                || is(instruction::RemoveSubAccountGroup::DISCRIMINATOR)
+            {
+                if let Some(record) = self.maybe_record(parent) {
+                    if let Some(last) = record.children.checked_sub(1) {
+                        let bytes = self.svm.get_account(&self.storage(parent)).unwrap();
+                        let relative = sa(ledger::ledger_storage::child(&bytes.data, last)
+                            .unwrap()
+                            .unwrap());
+                        let last = self.remember(parent, relative);
+                        if !instruction
+                            .accounts
+                            .iter()
+                            .any(|m| m.pubkey == self.storage(last))
+                        {
+                            instruction.accounts.push(AccountMeta::new(last, false));
                         }
                     }
-                } else if !account.is_some_and(|a| a.registered) {
-                    extra.push(sa(child_index_address(&ap(parent), group.children).0));
+                }
+            }
+            if !settlement {
+                let root = instruction.accounts[offset + 2].pubkey;
+                if self
+                    .maybe_record(root)
+                    .is_some_and(|r| r.scope == ap(SYSTEM))
+                {
+                    let vault = sa(anchor_lang::prelude::Pubkey::find_program_address(
+                        &[b"vault", root.as_ref()],
+                        &ledger::ID,
+                    )
+                    .0);
+                    if !instruction.accounts.iter().any(|m| m.pubkey == vault) {
+                        instruction
+                            .accounts
+                            .push(AccountMeta::new_readonly(vault, false));
+                    }
                 }
             }
         }
-        for key in extra {
-            if !instruction.accounts.iter().any(|a| a.pubkey == key) {
-                instruction.accounts.push(AccountMeta::new(key, false));
+        let fixed = offset
+            + if init {
+                if is(instruction::AddLedger::DISCRIMINATOR) {
+                    5
+                } else if is(instruction::AddExternalToken::DISCRIMINATOR) {
+                    7
+                } else {
+                    5
+                }
+            } else if settlement {
+                if is(instruction::WrapSol::DISCRIMINATOR)
+                    || is(instruction::UnwrapSol::DISCRIMINATOR)
+                {
+                    7
+                } else {
+                    9
+                }
+            } else {
+                4
+            };
+        let mut accounts: Vec<AccountMeta> = Vec::new();
+        for (index, mut meta) in instruction.accounts.into_iter().enumerate() {
+            if index >= fixed {
+                let logical = meta.pubkey;
+                meta.pubkey = if let Some((logical, storage)) =
+                    new_group.filter(|(logical, _)| *logical == meta.pubkey)
+                {
+                    let _ = logical;
+                    storage
+                } else {
+                    self.storage(meta.pubkey)
+                };
+                if let Some(previous) = accounts
+                    .iter_mut()
+                    .skip(offset)
+                    .find(|m| m.pubkey == meta.pubkey && logical != meta.pubkey)
+                {
+                    previous.is_writable |= meta.is_writable;
+                    previous.is_signer |= meta.is_signer;
+                    continue;
+                }
             }
+            accounts.push(meta);
         }
+        instruction.accounts = accounts;
         instruction
+    }
+    fn maybe_record(&self, key: Address) -> Option<Record> {
+        let storage = self.storage(key);
+        let a = self.svm.get_account(&storage)?;
+        if a.owner != sa(ledger::ID) {
+            return None;
+        }
+        let group = ledger::ledger_lib::decode_data(&ap(storage), &ap(a.owner), &a.data).ok()?;
+        if group.address() == ap(key) || storage == key {
+            return Some(group);
+        }
+        match ledger::ledger_storage::get(&a.data, &ap(key)).ok()? {
+            Some(ledger::ledger_storage::Value::Leaf(r)) => Some(r),
+            _ => None,
+        }
     }
     fn run(&mut self, n: usize, mut ix: Instruction) -> bool {
         ix = self.indexed(ix);
@@ -238,8 +330,8 @@ impl Harness {
         }
     }
     fn record(&self, key: Address) -> Record {
-        let a = self.svm.get_account(&self.storage(key)).unwrap();
-        Record::deserialize(&mut &a.data[8..]).unwrap()
+        self.maybe_record(key)
+            .unwrap_or_else(|| panic!("missing logical record {key}"))
     }
     fn base(&self, n: usize, root: Address) -> accounts::LedgerAccounts {
         accounts::LedgerAccounts {
@@ -355,7 +447,7 @@ fn internal_posting_implicit_receipt_and_atomic_rejection() {
     assert_eq!(h.record(receiver).debit, 100);
     assert!(!h.record(receiver).registered);
     assert_eq!(h.record(root).debit, 100);
-    let before = h.svm.get_account(&receiver).unwrap();
+    let before = h.account(&receiver).unwrap();
     let i = ix(
         h.base(1, root),
         instruction::Transfer {
@@ -368,7 +460,7 @@ fn internal_posting_implicit_receipt_and_atomic_rejection() {
         &[receiver, source],
     );
     assert!(!h.run(1, i));
-    assert_eq!(h.svm.get_account(&receiver).unwrap(), before);
+    assert_eq!(h.account(&receiver).unwrap(), before);
     let mut i = ix(
         h.base(0, root),
         instruction::Transfer {
@@ -417,7 +509,7 @@ fn account_lifecycle_and_registered_only_parent() {
     );
     i.accounts[2].is_writable = true;
     assert!(!h.run(0, i));
-    assert!(h.svm.get_account(&leaf).is_none());
+    assert!(h.maybe_record(leaf).is_none());
     let i = ix(
         h.base(0, root),
         instruction::AddSubAccount {
@@ -601,7 +693,7 @@ fn external_token_deposit_transfer_withdraw_and_isolation() {
     assert_eq!(h.token(wallet), 940);
     assert_eq!(h.record(root).debit, 60);
     assert_eq!(h.record(source).credit, 60);
-    let old = h.svm.get_account(&a).unwrap();
+    let old = h.account(&a).unwrap();
     assert!(!h.run(
         0,
         ix(
@@ -614,7 +706,7 @@ fn external_token_deposit_transfer_withdraw_and_isolation() {
             &[source, group, a]
         )
     ));
-    assert_eq!(h.svm.get_account(&a).unwrap(), old);
+    assert_eq!(h.account(&a).unwrap(), old);
     // Token transfer succeeds before the late read-only ancestor write fails.
     // The runtime must undo token movement, rent allocation and ledger writes.
     let before_vault = h.token(vault);
@@ -628,18 +720,19 @@ fn external_token_deposit_transfer_withdraw_and_isolation() {
         },
         &[source, group, a],
     );
+    late_failure = h.indexed(late_failure);
     late_failure
         .accounts
         .iter_mut()
-        .find(|m| m.pubkey == group)
+        .find(|m| m.pubkey == h.storage(group))
         .unwrap()
         .is_writable = false;
     assert!(!h.run(0, late_failure));
     assert_eq!(h.token(vault), before_vault);
     assert_eq!(h.token(wallet), before_wallet);
-    assert_eq!(h.svm.get_account(&a).unwrap(), old);
+    assert_eq!(h.account(&a).unwrap(), old);
     // A vault that can pay this amount but cannot cover total claims must reject.
-    let mut native = TokenAccount::unpack(&h.svm.get_account(&vault).unwrap().data).unwrap();
+    let mut native = TokenAccount::unpack(&h.account(&vault).unwrap().data).unwrap();
     native.amount = 10;
     h.pack(vault, native);
     assert!(!h.run(
@@ -659,8 +752,8 @@ fn external_token_deposit_transfer_withdraw_and_isolation() {
     // Read actual persisted program records even while custody cannot satisfy a
     // withdrawal. Inspection has no signer, token settlement or mutation gate.
     let mut reader = ledger::ledger_view::Reader::new();
-    for key in [root, source, group, a, b] {
-        let snapshot = h.svm.get_account(&h.storage(key)).unwrap();
+    for key in [root, group] {
+        let snapshot = h.account(&h.storage(key)).unwrap();
         reader
             .insert(ap(h.storage(key)), &ap(snapshot.owner), &snapshot.data)
             .unwrap();
@@ -757,7 +850,7 @@ fn application_pda_can_create_its_branch_but_another_application_cannot() {
         data: inner.data.clone(),
     };
     assert!(!h.run(0, proxy));
-    assert!(h.svm.get_account(&group).is_none());
+    assert!(h.maybe_record(group).is_none());
     assert!(h.run(
         0,
         Instruction {

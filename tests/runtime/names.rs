@@ -46,12 +46,7 @@ fn named_source_resolves_the_initialized_protected_credit_account() {
         (internal, internal_source),
         (external.root, external.source),
     ] {
-        assert_eq!(
-            sa(to_address_by_name(&ledger::ID, &ap(root), "Source")
-                .unwrap()
-                .0),
-            source
-        );
+        assert_eq!(sa(to_address_by_name(&ap(root), "Source").unwrap()), source);
         assert_eq!(child(root, relative), source);
         let record = h.record(source);
         assert!(record.registered);
@@ -60,8 +55,7 @@ fn named_source_resolves_the_initialized_protected_credit_account() {
             (ap(relative), 3, "Source")
         );
         assert!(h
-            .svm
-            .get_account(&child(root, Address::new_from_array([83; 32])))
+            .account(&child(root, Address::new_from_array([83; 32])))
             .is_none());
         // A named creation request cannot bypass the reserved Source check,
         // even when its metadata matches or the root owner is the signer.
@@ -114,10 +108,7 @@ fn named_and_explicit_creation_share_records_events_and_idempotence() {
         let name = "é".repeat(32); // Maximum length is bytes, not characters.
         let relative = sa(name_to_address(&name).unwrap());
         let absolute = child(root, relative);
-        assert_eq!(
-            absolute,
-            sa(to_address_by_name(&ledger::ID, &ap(root), &name).unwrap().0)
-        );
+        assert_eq!(absolute, sa(to_address_by_name(&ap(root), &name).unwrap()));
         let by_name = named(&a, root, a.key(0), root, &name, kind);
         let explicit = if kind.is_group() {
             ix(
@@ -140,29 +131,27 @@ fn named_and_explicit_creation_share_records_events_and_idempotence() {
             events::event_bytes(&result_a.logs),
             events::event_bytes(&result_b.logs)
         );
-        let slot = sa(ledger::ledger_lib::child_index_address(&ap(root), 1).0);
+        let slot = root; // Child vector lives in the parent container.
         for key in [root, absolute, slot] {
-            assert_eq!(a.svm.get_account(&key), b.svm.get_account(&key));
+            assert_eq!(a.account(&key), b.account(&key));
         }
-        assert_eq!(a.svm.get_account(&a.key(0)), b.svm.get_account(&b.key(0)));
+        assert_eq!(a.account(&a.key(0)), b.account(&b.key(0)));
         // Either form can repeat the other's registration with no Ledger writes,
         // events or rent. No slot input is required for matching registration.
-        let before = [root, absolute, slot].map(|k| a.svm.get_account(&k));
-        for mut repeat in [by_name.clone(), explicit] {
+        let before = [root, absolute, slot].map(|k| a.account(&k));
+        for repeat in [by_name.clone(), explicit] {
+            let mut repeat = a.indexed(repeat);
             for meta in repeat.accounts.iter_mut().skip(2) {
                 meta.is_writable = false;
             }
-            let lamports = a.svm.get_account(&a.key(0)).unwrap().lamports;
+            let lamports = a.account(&a.key(0)).unwrap().lamports;
             let result = run_raw(&mut a, &[0], repeat).unwrap();
             assert!(events::event_bytes(&result.logs).is_empty());
             assert_eq!(
-                a.svm.get_account(&a.key(0)).unwrap().lamports + result.fee,
+                a.account(&a.key(0)).unwrap().lamports + result.fee,
                 lamports
             );
-            assert_eq!(
-                [root, absolute, slot].map(|k| a.svm.get_account(&k)),
-                before
-            );
+            assert_eq!([root, absolute, slot].map(|k| a.account(&k)), before);
         }
         let opposite = if kind.is_group() {
             if kind.is_credit() {

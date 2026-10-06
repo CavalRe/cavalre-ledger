@@ -7,12 +7,12 @@ fn assert_noop(h: &mut Harness, instruction: Instruction) {
     let before: Vec<_> = instruction
         .accounts
         .iter()
-        .map(|m| (m.pubkey, h.svm.get_account(&m.pubkey)))
+        .map(|m| (m.pubkey, h.account(&m.pubkey)))
         .collect();
     let result = run_raw(h, &[0], instruction).unwrap();
     assert!(events::event_bytes(&result.logs).is_empty());
     for (key, old) in before {
-        let mut current = h.svm.get_account(&key);
+        let mut current = h.account(&key);
         if key == h.key(0) {
             current.as_mut().unwrap().lamports += result.fee;
         }
@@ -56,7 +56,7 @@ fn external_registration_snapshots_issuer_metadata_and_repeats_are_noops() {
             (10, 10, 10)
         );
         h.metadata(e.mint, "New issuer name", "NEW");
-        let stored = h.svm.get_account(&e.root_storage).unwrap();
+        let stored = h.account(&e.root_storage).unwrap();
         let mut reader = Reader::new();
         reader
             .insert(ap(e.root_storage), &ap(stored.owner), &stored.data)
@@ -70,7 +70,7 @@ fn external_registration_snapshots_issuer_metadata_and_repeats_are_noops() {
             registration,
             LedgerError::MetadataConflict.into(),
         );
-        assert_eq!(h.svm.get_account(&e.root_storage).unwrap(), stored);
+        assert_eq!(h.account(&e.root_storage).unwrap(), stored);
     }
 }
 
@@ -109,7 +109,7 @@ fn registration_rejects_missing_empty_forged_or_malformed_issuer_metadata_atomic
                     LedgerError::InvalidAccount
                 }
                 _ => {
-                    let mut record = h.svm.get_account(&key).unwrap();
+                    let mut record = h.account(&key).unwrap();
                     match case {
                         "owner" => record.owner = SYSTEM,
                         "mint" => record.data[33..65].copy_from_slice(h.key(2).as_ref()),
@@ -129,7 +129,7 @@ fn registration_rejects_missing_empty_forged_or_malformed_issuer_metadata_atomic
                 sa(ledger::ledger_lib::global_root_address().0),
             ] {
                 assert!(
-                    h.svm.get_account(&key).is_none(),
+                    h.account(&key).is_none(),
                     "failed {case} left allocated state"
                 );
             }
@@ -200,8 +200,8 @@ fn token2022_inline_names_are_issuer_authenticated_and_obey_original_string_limi
             assert_noop(&mut h, registration);
         } else {
             rejects(&mut h, &[0], registration, LedgerError::InvalidName.into());
-            assert!(h.svm.get_account(&e.root_storage).is_none());
-            assert!(h.svm.get_account(&e.vault).is_none());
+            assert!(h.account(&e.root_storage).is_none());
+            assert!(h.account(&e.vault).is_none());
         }
     }
 }
@@ -250,8 +250,8 @@ fn registration_obeys_metadata_pointer_instead_of_stale_inline_labels() {
                 LedgerError::InvalidAccount
             };
             rejects(&mut h, &[0], registration, error.into());
-            assert!(h.svm.get_account(&e.root_storage).is_none());
-            assert!(h.svm.get_account(&e.vault).is_none());
+            assert!(h.account(&e.root_storage).is_none());
+            assert!(h.account(&e.vault).is_none());
         }
     }
 }

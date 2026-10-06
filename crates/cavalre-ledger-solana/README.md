@@ -11,147 +11,80 @@ LedgerLib commit `34d159ff4e88fdfdee16738d9a1228f0bf407212`.
 
 Read clients can depend on this crate with `default-features = false`. That
 excludes the mutation program and SPL call dependency. Shared `Record` decoding
-and PDA derivation live in `ledger_lib.rs`; `ledger_view::Reader` queries a
+and logical/physical address helpers live in `ledger_lib.rs`; `ledger_view::Reader` queries a
 validated account snapshot without invoking Ledger. Existing exports from
 `ledger` remain available when mutations are enabled. See [read usage](../../docs/READS.md).
 
 ## Accounts and authority
 
-Each entry point invokes the shared core service through `SolanaHost`. The host
-authenticates runtime signers, validates and serializes accounts, derives PDAs,
-allocates rent-funded storage and moves native SOL, classic SPL Token or
-Token-2022 assets. Custodian,
-lifecycle, admission, posting, backing and exact-settlement rules live in the
-core. Its `atomic` contract uses Solana transaction rollback: every error is
-propagated directly to the entry point. The host is consumed by each call.
+The reusable core retains the original effective flags, custody ancestry,
+registration, checked posting walk and shared-ancestor cancellation. The Solana
+host authenticates signers and storage, commits changes and performs token calls.
+Failures propagate to the runtime for atomic rollback.
 
-The 512-byte record allocation is unchanged. The
-record stores a one-based `sub_index`, symbol and decimals in previously reserved space. Earlier
-draft records without these metadata fields and child indexes require fresh initialization;
-they are not a supported upgrade target. No deployed-state migration or deployment
-is included.
+`to_address(parent, relative)` returns `Keccak256(parent32 || relative32)`.
+There is no program ID, prefix, bump or curve test in logical child identities.
+`to_address_by_name(parent, name)` first hashes the exact UTF-8 name. `SOURCE`
+is the precomputed full hash of `"Source"`. Relative identities retain their
+permission role; a derived absolute address is a lookup key, not signing authority.
 
-The host decodes each supplied record once and borrows its metadata for core
-reads. It updates balances and child counts directly and tracks changed records
-without a second before/after snapshot. Solana owns rollback; the core still
-computes the same checked posting changes before applying them.
+Each registered group has one physical container. Its leaves are mapping entries
+inside that container. `account_storage_address(parent, relative)` returns the
+physical group PDA; it is not the logical child helper. Leaf receipt needs no
+recipient signature, registration, keypair or separate PDA. The transaction payer
+funds required container growth and receives no authority over the balance.
 
-An external token's logical ledger address is its mint address. This is the
-identity used in parent links, discovery, events and view/instruction arguments.
-It carries no implication about the mint's Solana account owner or signing rights.
-`ledger_address(zero, mint)` returns that identity. Its accounting record lives
-at `root_storage_address(zero, mint)`, the PDA `["ledger", zero, mint]`.
-The `root` account meta in Anchor instructions supplies this **storage PDA**.
-All applications share the tree and its vault `["vault", root_storage]`.
-The explicit credit Source is `["account", mint, SOURCE]`; `SOURCE` is the
-exported fixed relative identifier. All other external-token accounts are debits.
+External ledger roots use their mint as logical identity and
+`root_storage_address(zero, mint)` as physical storage. Native SOL uses the
+reserved `NATIVE_SOL` identity. Accounting-only roots retain the authority-scoped
+`["ledger", authority, identifier]` identity; the signed authority controls
+issuance and postings. External direct children use their relative signer; nested
+children use that branch's custodian authority. Applications sign with PDAs via
+CPI. Tree mutations require runtime signatures, not off-chain intents.
 
-This corrects the earlier draft's use of the root storage PDA as its logical
-identity. External/native child and index addresses change because their parent
-is now the asset identifier. Old draft records require fresh initialization;
-there is no deployed state to migrate. Root storage and custody vault derivations,
-record sizes, instruction account counts and permission rules are unchanged.
-Rust clients replace the old `root_address` helper with `root_storage_address`
-for account metas and `ledger_address` for logical root identifiers. The core's
-accounting rules and interfaces are unchanged.
+All applications share a token tree and its custody `["vault", root_storage]`.
+Each external/native ledger has one protected Source credit leaf in its root
+mapping. Other external accounts are debits. Accounting-only ledgers can contain
+credit accounts and have no native redemption route.
 
-An accounting-only root uses `["ledger", authority, identifier]`. Its signed
-authority manages its accounts and authorizes postings, including credit issuance.
-The identifier is an application-chosen public key, not a required token mint.
-Such balances have no native redemption route. This is the initial root-ownership
-interface; there is no delegation or recovery mechanism yet.
+Group labels require 1–64 UTF-8 bytes; explicit leaf labels allow 0–64 bytes.
+Named helpers require 1–64 bytes, with no normalization. A name hash grants no
+signing authority. Matching registration is idempotent. Group admission policy
+remains fixed while registered; incompatible metadata or balances reject.
+Removal requires zero gross balances and no registered children, and retains
+allocated storage. Registration remains distinct from allocation.
 
-A child PDA is `["account", absolute parent, relative identifier]`. Direct
-external-token children require that relative identifier to sign when created.
-Descendants require the branch's direct-child authority. An application uses a
-PDA signer through CPI; its administrator wallet cannot substitute for that PDA.
-Tree operations use runtime signatures, not off-chain intents.
+## Global Root and child indexes
 
-`ledger_lib::name_to_address(name)` derives a relative identity from the full
-Keccak-256 hash of the name's exact UTF-8 bytes. `to_address_by_name(program,
-parent, name)` returns its child PDA and bump using the existing seeds. Names
-require 1–64 bytes and are case-sensitive, with no trimming or normalization.
-These helpers work without the `mutations` feature and do not allocate storage.
-The reserved `SOURCE` identifier is the compile-time hash of `"Source"`, so named
-lookup resolves the same protected credit account without a special case.
+The fixed global `Root` is a debit group at depth 1. Its ordinary children are
+ledger groups at depth 2; each has a Source. Posting stops at the selected ledger,
+so global Root's balances stay zero. Root initializes on first successful ledger
+creation, without granting its payer global authority.
 
-Named creation delegates to the explicit creation path. It needs the same
-accounts, child-index slots and authenticated custodian; a name hash grants no
-signing authority. Use named children inside an external token's application
-branch, whose direct child remains the application's signer identity. An
-accounting-only root's authority can create named children directly. Explicit
-identities may share display names, and can repeat named creation idempotently
-when the identity, metadata and flags match.
+Creation supplies writable global and ledger containers. Source and child indexes
+are stored inside them; no Source PDA or append-slot PDA is supplied. Repeated
+matching creation performs no writes or allocation. Ordinary posting needs no
+global Root input.
 
-`Record` stores identity, flags, custody ancestry, current `u128` debit and
-credit balances, registration, parent admission, child count, reverse index, name,
-symbol and decimals. Metadata
-and balances share a 512-byte account; logical registration is independent of
-storage allocation. First receipt allocates the destination with the transaction's
-rent payer, without requiring the recipient's signature or registration.
-The allocating payer receives no balance authority.
+Every group maintains the original insertion-ordered child vector and one-based
+reverse indexes. Removal swaps the last child into the removed position and
+updates its reverse index atomically. Supply that child's group container if it
+is a group; mapped leaves already reside in the parent. Implicit leaves have no
+registered index. Root lists absolute ledger identities; other groups list
+relative identities. Discovery reads Root's vector, with no separate registry.
 
-Groups choose whether immediate implicit children are allowed. This policy is
-fixed while the group is registered. Matching repeated registration is a no-op;
-conflicting metadata and registration over incompatible balances are rejected.
-Removal requires zero gross balances and no registered children. Removal clears
-registration, retaining storage; rent reclamation is not implemented.
+A group container is 528 base bytes plus 288 bytes per mapping capacity slot.
+Binary search locates a logical key. Mutation decodes requested leaves only;
+insertions and growth can move existing bytes. Group references point to separate
+group containers with one authoritative balance store. Capacity is retained on
+removal. Clients fetch parent containers for reads, not separate leaf/index PDAs.
+See [READS.md](../../docs/READS.md) for layout, client helpers and absence semantics.
 
-## Global Root
-
-One global `Root` is the parent of every token and accounting ledger. It is a
-registered debit group at depth 1 using the existing 512-byte `Record`, including
-its ordinary `children` count. `global_root_address()` derives it from `["Root"]`.
-Root's parent, relative identity and custodian point to itself. Token ledgers
-remain debit groups at depth 2, each with its own credit Source; posting stops
-there and Root's balances stay zero.
-
-The first successful ledger creation initializes Root automatically. The payer
-receives no global authority. Creating a ledger sets its parent to Root and
-increments Root's child count through the same core storage operations used
-for other groups. Root, ledger, Source and any vault initialization commit
-together. Failed creation changes none of them. Matching repeat creation succeeds without
-writes, allocation or events; conflicting metadata rejects.
-
-`add_ledger` uses `RegisterLedger`; `RegisterToken` and `RegisterSol` also include
-a writable `global_root` account. The remaining accounts include writable Source,
-Root's next child slot, and the new ledger's slot zero for Source. Creation uses
-the current Root count; if another creation changes it after accounts are chosen,
-the transaction rejects atomically and the client retries with the current slot.
-Ordinary account mutations, transfers and settlement do not use global Root.
-
-Ledger discovery delegates to Root's ordinary child index. Count needs only Root;
-lookup needs one slot; pagination needs only the requested slots. Order follows
-insertion and swap-and-pop removal, matching Solidity. See [read semantics](../../docs/READS.md).
-
-## Child index accounts
-
-Every group uses the same maintained child array. `child_index_address(parent, i)`
-derives its zero-based slot PDA from `["subs", parent, i.to_le_bytes()]`. An 80-byte
-slot stores the parent, position and optional child identity. Each registered
-child record stores its one-based `sub_index`; implicit leaves have zero and do
-not occupy slots. Root slots hold absolute ledger addresses; other slots hold
-relative identities.
-
-Supply these writable accounts in addition to the existing tree-mutation inputs:
-
-| Operation | Index accounts |
-| --- | --- |
-| Create ledger | Root slot `Root.children`, ledger slot zero, and Source record |
-| Register leaf/group | Parent slot `parent.children`; matching repeat registration needs no slot |
-| Remove registered child | Its slot `child.sub_index - 1`, the last slot `parent.children - 1`, and the last child's record if different |
-| Remove implicit leaf | None |
-| Transfer, deposit, withdrawal | None |
-
-Supply each account once. Removing a child swaps the last entry into its position,
-updates that child's reverse index, clears the last slot and decrements the count
-atomically. Empty slots retain their rent-funded allocation and are reused on
-later appends; this draft does not reclaim their rent. Index storage costs one
-80-byte account per allocated child position, in addition to child records.
-
-Counts and reverse indexes must come from a current snapshot. A concurrent tree
-mutation can change the required accounts; stale transactions fail atomically
-and must be rebuilt. Readers need only their requested slots, not all siblings.
+This replaces the previous draft layout and account lists. No existing deployment
+is migrated. Logical cancellation is preserved, but siblings now share a physical
+write lock. Containers are not paged, so physical size and insertion cost limit
+large groups. These regressions and fresh measurements are documented in
+[TRANSFER_COSTS.md](../../docs/TRANSFER_COSTS.md).
 
 ## Instructions
 
@@ -233,10 +166,10 @@ Vault, wallet and payer retain their writable requirements; zero amounts still
 invoke the native token/System transfer. These shared writable accounts can
 still serialize custody calls.
 
-Supply all endpoint records, parents, custody ancestors and changed ancestors as
-remaining accounts, once each, excluding the fixed root. Include new destination
-and Source PDAs for allocation. Records whose data changes must be writable.
-The program verifies owners, canonical PDAs and root membership. See executable
+Supply endpoint parent containers, group endpoints, custody ancestors and posting
+ancestors once each, excluding the fixed root. New groups need their physical
+container address for allocation. Leaves and Source need no separate account meta.
+The program verifies owners, physical identities and logical root membership. See executable
 instruction-building examples in `tests/runtime/ledger.rs`.
 
 For external/native `LedgerAccounts` calls, also supply the canonical vault
@@ -253,11 +186,11 @@ dependency on custody but no write permission or storage allocation.
 
 `LedgerAccounts.root` accepts read-only access. For transfers, use
 `Reader::transfer_writable_accounts` to determine exactly which Ledger records
-need write access from a consistent snapshot. Same-polarity paths stop below
-their lowest common ancestor, so that ancestor, the app group and token root
-can remain read-only when unchanged. Opposite-polarity postings change both
-gross columns through the token root. Changed absent endpoints require write
-access for allocation. Zero-amount and self-transfers allocate no storage and
+need write access from a consistent snapshot. Same-polarity paths preserve the
+common ancestor balance, but any container holding a changed leaf must be writable.
+An unchanged token root can remain readonly for transfers within an app group.
+Opposite-polarity postings change both gross columns through the token root.
+Changed absent endpoints require writable parent containers for map growth. Zero-amount and self-transfers allocate no storage and
 need no writable Ledger records, including when endpoints are absent. All
 required checks still run, and zero-amount posting events are preserved. The
 transaction fee payer remains writable. The helper reuses the core posting walk; it does not
@@ -275,9 +208,9 @@ their token/System calls, settlement checks and fixed account declarations.
 Existing clients that supply extra writable accounts still work, but retain
 those unnecessary transaction locks.
 
-Clients can deserialize public `Record` data after its eight-byte `CVLEDG01`
-header. Parent is at byte offset 40 for RPC filtering; filter registered records
-when listing registered children. `LedgerAdded`, leaf/group creation and removal,
+Clients decode group headers with `ledger_lib` and mapped leaves with
+`ledger_storage` or `record_at`. Enumerate the parent child vector for registered
+children; RPC filters over group headers cannot enumerate mapped leaves. `LedgerAdded`, leaf/group creation and removal,
 `Credit` and `Debit` report the original structural and posting semantics through
 Anchor logs. They replace the draft `AccountChanged` snapshots. Only consume
 events from successful transactions; see [event fields and compatibility](../../docs/EVENTS.md).
@@ -380,7 +313,8 @@ them in the same transaction; a failed burn also rolls back the withdrawal.
 Ledger neither burns tokens nor grants burn authority. Custody withdrawals first
 retire the corresponding Source credit and debit balance under the existing rules.
 
-Instruction data, account order, PDA seeds and Ledger record layouts are unchanged.
+The token custody instruction data and fixed custody accounts retain their
+meaning; mapped Ledger inputs follow the container rules above.
 The Rust `RegisterToken.vault` field is now `UncheckedAccount`; the adapter
 explicitly initializes and authenticates its token mint and authority using the
 current Token-2022 decoder. This replaces Anchor's older allocation helper, which
@@ -402,9 +336,9 @@ and [Token-2022 extensions](https://solana.com/docs/tokens/extensions), includin
 - Native SOL, classic SPL Token and the Token-2022 configurations above are supported.
 - Cross-custodian external-token transfers, off-chain intents, delegated app
   authority, upgrades/migration policy and rent reclamation are not implemented.
-- Group cancellation preserves the original accounting walk. Unchanged roots
-  and ancestors can be supplied read-only; clients select the write set before
-  signing. Shared writable payers, wallets and other application state can still
+- Group cancellation preserves the original accounting walk. An ancestor
+  container is readonly only when neither its header nor mapped leaves change.
+  Clients select the physical write set before signing. Shared writable payers, wallets and other application state can still
   prevent parallel execution.
 - No resource-based depth cap is imposed. Depth remains a checked `u8`, with
   root depth 2. Applications must budget their complete transactions, including

@@ -1,20 +1,73 @@
 //! Maintained child slots and reverse indexes, matching Solidity subs/subIndex.
 use super::*;
-use ledger::ledger_lib::{child_index_address, decode_child_data};
+use ledger::ledger_storage as mapping;
 use ledger::ledger_view::Reader;
+
+#[test]
+fn removed_group_can_receive_as_implicit_leaf_and_become_a_group_again() {
+    let mut h = Harness::new();
+    let (root, _) = h.internal();
+    let relative = h.key(1);
+    let key = h.remember(root, relative);
+    let create = group(&h, root, h.key(0), root, relative, true, &[]);
+    succeeds(&mut h, &[0], create);
+    let container = h.storage(key);
+    let removal = remove(&h, root, h.key(0), root, relative, true);
+    succeeds(&mut h, &[0], removal);
+    let retired = h.svm.get_account(&container).unwrap();
+    // No-op removal must not require an unrelated last-child container.
+    let repeat = remove(&h, root, h.key(0), root, relative, true);
+    succeeds(&mut h, &[0], repeat);
+    for amount in [10, 15] {
+        let call = transfer(
+            &h,
+            root,
+            h.key(0),
+            (root, sa(SOURCE)),
+            (root, relative),
+            amount,
+            &[],
+        );
+        succeeds(&mut h, &[0], call);
+    }
+    assert_eq!(h.record(key).debit, 25);
+    assert!(!h.record(key).registered);
+    assert_eq!(h.svm.get_account(&container).unwrap(), retired);
+    let register = leaf(&h, root, h.key(0), root, relative, "", false);
+    succeeds(&mut h, &[0], register);
+    assert_eq!(h.record(key).debit, 25);
+    let burn = transfer(
+        &h,
+        root,
+        h.key(0),
+        (root, relative),
+        (root, sa(SOURCE)),
+        25,
+        &[],
+    );
+    succeeds(&mut h, &[0], burn);
+    let removal = remove(&h, root, h.key(0), root, relative, false);
+    succeeds(&mut h, &[0], removal);
+    let create = group(&h, root, h.key(0), root, relative, true, &[]);
+    succeeds(&mut h, &[0], create);
+    assert!(h.record(key).is_container());
+    assert_eq!(h.record(key).debit, 0);
+    assert_eq!(h.storage(key), container);
+    assert_eq!(
+        h.svm.get_account(&container).unwrap().lamports,
+        retired.lamports
+    );
+    let nested = leaf(&h, root, h.key(0), key, h.key(2), "Nested", false);
+    succeeds(&mut h, &[0], nested);
+    assert_eq!(h.record(key).children, 1);
+}
 
 fn page(h: &Harness, root: Address, start: u32, limit: u32) -> Vec<Address> {
     let mut reader = Reader::new();
-    let record = h.svm.get_account(&h.storage(root)).unwrap();
+    let record = h.account(&h.storage(root)).unwrap();
     reader
         .insert(ap(h.storage(root)), &ap(record.owner), &record.data)
         .unwrap();
-    let count = h.record(root).children;
-    for index in start..start.saturating_add(limit).min(count) {
-        let key = sa(child_index_address(&ap(root), index).0);
-        let slot = h.svm.get_account(&key).unwrap();
-        reader.insert(ap(key), &ap(slot.owner), &slot.data).unwrap();
-    }
     reader
         .sub_accounts(&ap(root), &ap(root), start as usize, limit as usize)
         .unwrap()
@@ -45,20 +98,12 @@ fn child_slots_preserve_insertion_order_swap_pop_and_reuse_without_sibling_reads
     );
     assert_eq!(h.record(child(root, values[3])).sub_index, 3);
     assert_eq!(h.record(child(root, values[1])).sub_index, 0);
-    let last_key = sa(child_index_address(&ap(root), 4).0);
-    let last = h.svm.get_account(&last_key).unwrap();
-    assert_eq!(
-        decode_child_data(&ap(last_key), &ap(last.owner), &last.data)
-            .unwrap()
-            .relative,
-        None
-    );
+    let last_key = h.storage(root);
+    let last = h.account(&last_key).unwrap();
+    assert_eq!(mapping::child(&last.data, 4).unwrap(), Some(ap(SYSTEM)));
     let i = leaf(&h, root, h.key(0), root, values[1], "Leaf", false);
     succeeds(&mut h, &[0], i);
-    assert_eq!(
-        h.svm.get_account(&last_key).unwrap().lamports,
-        last.lamports
-    );
+    assert_eq!(h.account(&last_key).unwrap().lamports, last.lamports);
     assert_eq!(page(&h, root, 4, 1), vec![values[1]]);
     assert_eq!(h.record(child(root, values[1])).sub_index, 5);
     let i = remove(&h, root, h.key(0), root, values[1], false);
@@ -70,7 +115,7 @@ fn child_slots_preserve_insertion_order_swap_pop_and_reuse_without_sibling_reads
 }
 
 #[test]
-fn missing_readonly_or_forged_child_slots_and_missing_swap_child_roll_back() {
+fn missing_readonly_or_forged_parent_container_rolls_back() {
     let mut h = Harness::new();
     let (root, _) = h.internal();
     let a = Address::new_from_array([70; 32]);
@@ -80,8 +125,8 @@ fn missing_readonly_or_forged_child_slots_and_missing_swap_child_roll_back() {
         succeeds(&mut h, &[0], i);
     }
     let valid = h.indexed(remove(&h, root, h.key(0), root, a, false));
-    let slot = sa(child_index_address(&ap(root), 1).0);
-    for (target, readonly) in [(slot, false), (slot, true), (child(root, b), false)] {
+    let slot = h.storage(root);
+    for (target, readonly) in [(slot, false), (slot, true)] {
         let mut invalid = valid.clone();
         if readonly {
             invalid
@@ -96,11 +141,11 @@ fn missing_readonly_or_forged_child_slots_and_missing_swap_child_roll_back() {
         let before: Vec<_> = valid
             .accounts
             .iter()
-            .map(|m| (m.pubkey, h.svm.get_account(&m.pubkey)))
+            .map(|m| (m.pubkey, h.account(&m.pubkey)))
             .collect();
         let failure = run_raw(&mut h, &[0], invalid).expect_err("invalid index inputs must reject");
         for (key, old) in before {
-            let mut current = h.svm.get_account(&key);
+            let mut current = h.account(&key);
             if key == h.key(0) {
                 current.as_mut().unwrap().lamports += failure.meta.fee;
             }
@@ -108,11 +153,9 @@ fn missing_readonly_or_forged_child_slots_and_missing_swap_child_roll_back() {
         }
     }
     // Valid program bytes at the wrong slot address cannot supply that position.
-    let mut forged = h.svm.get_account(&slot).unwrap();
-    let mut entry = decode_child_data(&ap(slot), &ap(forged.owner), &forged.data).unwrap();
-    entry.index = 2;
-    anchor_lang::AnchorSerialize::serialize(&entry, &mut &mut forged.data[8..]).unwrap();
-    let original = h.svm.get_account(&slot).unwrap();
+    let mut forged = h.account(&slot).unwrap();
+    mapping::set_child(&mut forged.data, 1, Some(ap(b))).unwrap();
+    let original = h.account(&slot).unwrap();
     h.svm.set_account(slot, forged).unwrap();
     assert!(run_raw(&mut h, &[0], valid.clone()).is_err());
     h.svm.set_account(slot, original).unwrap();

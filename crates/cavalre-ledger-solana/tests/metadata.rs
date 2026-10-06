@@ -53,7 +53,8 @@ fn root(scope: Pubkey, mint: Pubkey) -> (Pubkey, Vec<u8>) {
         },
         decimals: if mint == NATIVE_SOL { 9 } else { 3 },
     };
-    let mut data = vec![0; 512];
+    let mut data = vec![0; cavalre_ledger_solana::ledger_storage::space(4)];
+    cavalre_ledger_solana::ledger_storage::initialize(&mut data);
     data[..8].copy_from_slice(b"CVLEDG01");
     record.serialize(&mut &mut data[8..]).unwrap();
     (address, data)
