@@ -35,21 +35,51 @@ previous packed-PDA implementation, with the same checks and events.
 
 | Existing-account operation | Current lean CU | Before CU | Reduction | Structural service CU |
 | --- | ---: | ---: | ---: | ---: |
-| Internal opposite-polarity issuance through the ledger | 8,181 | 9,611 | 14.9% | 85,314 |
-| Internal debit transfer, unequal depths across branches | 6,284 | 7,604 | 17.4% | 79,968 |
-| Internal credit transfer between application and Source | 4,233 | 5,184 | 18.3% | 53,029 |
+| Internal opposite-polarity issuance through the ledger | 8,181 | 9,611 | 14.9% | 86,019 |
+| Internal debit transfer, unequal depths across branches | 6,284 | 7,604 | 17.4% | 80,895 |
+| Internal credit transfer between application and Source | 4,233 | 5,184 | 18.3% | 53,544 |
 | Native SOL, custodian siblings | 2,260 | — | — | — |
 | Classic token, depth-4 siblings | 2,048 | 2,788 | 26.5% | — |
 | Plain Token-2022, custodian siblings | 1,947 | 3,031 | 35.8% | — |
 | Classic token, custodian siblings | 1,930 | 2,740 | 29.6% | — |
-| Internal credit siblings at depth 4 | 1,821 | — | — | 51,146 |
+| Internal credit siblings at depth 4 | 1,821 | — | — | 51,695 |
 
 The four internal comparisons restore the exact same pre-state and run both
 entrypoints. They assert equality of every supplied accounting record and the
 full sequence of event bytes, not just endpoint balances. The structural service
-still authenticates and decodes the supplied hierarchy and supports allocation;
+still authenticates the supplied hierarchy, reads fixed headers and supports allocation;
 the lean path accesses existing records through typed PDA links. These are
 specific transaction shapes, not universal depth-dependent cost formulas.
+
+## In-place child writes
+
+The structural service now reads only fixed headers and the indexed child slots
+it needs. Append grows the trailing array by 32 bytes; removal swaps the last
+entry into the removed slot and shrinks the array. Untouched child bytes are
+neither decoded into a heap vector nor serialized again. The layout and core
+accounting rules are unchanged.
+
+Fresh sBPF measurements, ordered by decreasing maximum CU:
+
+| Operation | 8 children | 256 children | 2,048 children | 4,096 children |
+| --- | ---: | ---: | ---: | ---: |
+| First receipt | 37,917 | 37,917 | 37,917 | 37,917 |
+| Remove with swap-and-pop | 33,579 | 33,579 | 33,579 | 33,579 |
+| Add child | 22,377 | 22,409 | 22,638 | 22,901 |
+
+The test seeds untouched sibling slots offchain, omits their individual accounts,
+and verifies their bytes remain unchanged. It also verifies new and swapped
+reverse indexes, allocation, closure, and double-entry balances. Runtime
+loading/resizing and CPI costs can still depend on account size.
+
+The previous binary failed with heap exhaustion when adding at 2,048 children.
+At 8 children its first receipt/remove/add costs were 37,586/32,752/22,291 CU:
+this change removes the heap/scaling failure, with a small constant overhead in
+these small-parent fixtures. Existing-account lean transfers are unchanged.
+
+Reproduce with `cargo test -p cavalre-ledger-runtime-tests --test ledger --locked
+structural_writes_preserve_large_child_arrays -- --nocapture` after building
+fresh sBPF. The full `scripts/check.sh` gate passes, including 80 runtime tests.
 
 ## Optimization changes
 

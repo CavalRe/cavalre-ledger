@@ -37,7 +37,9 @@ ancestor walk and direct parent PDA links.
 ## Entry points
 
 Structural operations and custody settlement use the existing Anchor service.
-It may create missing leaves and update parent child vectors. The program also
+It reads only fixed accounting headers, may create missing leaves, and stages
+indexed child changes. Commit resizes and writes those slots directly, without
+decoding or serializing the parent's existing children. The program also
 exports the lean existing-account transfer instruction through
 `ledger_transfer::instruction`. It uses Pinocchio account parsing, fixed-offset
 reads/writes, two namespace hashes with client-supplied bumps, and the same core

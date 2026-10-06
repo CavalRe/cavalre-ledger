@@ -84,6 +84,13 @@ RPC clients can request a byte slice for a fixed field. On-chain code can borrow
 and read/write the fixed fields directly. The runtime still loads the account's
 whole data; avoiding decoding does not eliminate that loading cost.
 
+The mutation adapter reads a `Header` containing fixed fields and the child
+count. It reads an existing child directly at its stored index and stages only
+changed slots. Commit resizes the account, writes the header, and appends or
+overwrites those slots in place; it never copies untouched siblings. Removal
+swaps the last slot into the removed position and shrinks the trailing array.
+The full `Record` decoder remains available for clients that enumerate children.
+
 The namespace is implicit in the authenticated PDA, not extractable from the
 address bytes. Structural decoding alone does not authenticate an arbitrary
 program-owned account's type. Use an expected PDA or a typed pointer already

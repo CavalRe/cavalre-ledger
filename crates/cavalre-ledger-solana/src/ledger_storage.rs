@@ -1,6 +1,6 @@
 //! Packed little-endian storage. The namespace selects the layout; there is no
 //! discriminator, version, registration bit, relative identity or stored bump.
-use crate::ledger_lib::{LedgerConfig, LedgerError, Metadata, Record};
+use crate::ledger_lib::{Header, LedgerConfig, LedgerError, Metadata, Record};
 use anchor_lang::prelude::*;
 
 pub const PARENT: usize = 0;
@@ -70,12 +70,12 @@ pub fn valid_layout(data: &[u8]) -> bool {
         && (kind < 2 || count == 0)
         && (depth != 2 || (kind == 0 && (1..=3).contains(&data[TOKEN_KIND])))
 }
-pub fn decode(data: &[u8]) -> Result<Record> {
+pub fn decode_header(data: &[u8]) -> Result<Header> {
     validate(data)?;
     let address = |offset| Pubkey::new_from_array(*key(data, offset));
     let depth = data[DEPTH];
     let offset = children_offset(depth);
-    Ok(Record {
+    Ok(Header {
         parent: address(PARENT),
         custodian: address(CUSTODIAN),
         kind: data[KIND],
@@ -89,7 +89,21 @@ pub fn decode(data: &[u8]) -> Result<Record> {
             authority: address(AUTHORITY),
             vault: address(VAULT),
         }),
-        children: data[offset + 4..]
+        children: u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()),
+    })
+}
+pub fn decode(data: &[u8]) -> Result<Record> {
+    let header = decode_header(data)?;
+    Ok(Record {
+        parent: header.parent,
+        custodian: header.custodian,
+        kind: header.kind,
+        depth: header.depth,
+        debit: header.debit,
+        credit: header.credit,
+        child_index: header.child_index,
+        ledger: header.ledger,
+        children: data[children_offset(header.depth) + 4..]
             .as_chunks::<32>()
             .0
             .iter()
@@ -97,7 +111,8 @@ pub fn decode(data: &[u8]) -> Result<Record> {
             .collect(),
     })
 }
-pub fn encode(record: &Record, data: &mut [u8]) -> Result<()> {
+/// Write fixed fields and length only; all existing child slots remain in place.
+pub fn encode_header(record: &Header, data: &mut [u8]) -> Result<()> {
     require!(data.len() == record.space(), LedgerError::InvalidAccount);
     data[PARENT..PARENT + 32].copy_from_slice(record.parent.as_ref());
     data[CUSTODIAN..CUSTODIAN + 32].copy_from_slice(record.custodian.as_ref());
@@ -120,9 +135,12 @@ pub fn encode(record: &Record, data: &mut [u8]) -> Result<()> {
         require!(record.depth != 2, LedgerError::InvalidAccount);
     }
     let offset = children_offset(record.depth);
-    let count =
-        u32::try_from(record.children.len()).map_err(|_| error!(LedgerError::InvalidAccount))?;
-    data[offset..offset + 4].copy_from_slice(&count.to_le_bytes());
+    data[offset..offset + 4].copy_from_slice(&record.children.to_le_bytes());
+    validate(data)
+}
+pub fn encode(record: &Record, data: &mut [u8]) -> Result<()> {
+    encode_header(&record.header(), data)?;
+    let offset = children_offset(record.depth);
     for (bytes, child) in data[offset + 4..]
         .as_chunks_mut::<32>()
         .0
@@ -132,6 +150,28 @@ pub fn encode(record: &Record, data: &mut [u8]) -> Result<()> {
         bytes.copy_from_slice(child.as_ref());
     }
     validate(data)
+}
+/// Read one slot from a validated accounting record, without decoding siblings.
+pub fn child_at(data: &[u8], index: u32) -> Result<Pubkey> {
+    validate(data)?;
+    let offset = children_offset(data[DEPTH]);
+    let count = u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap());
+    require!(index < count, LedgerError::InvalidAccount);
+    Ok(Pubkey::new_from_array(*key(
+        data,
+        offset + 4 + 32 * index as usize,
+    )))
+}
+/// Write one slot after the account has been resized and its length updated.
+pub fn set_child(data: &mut [u8], index: u32, relative: &Pubkey) -> Result<()> {
+    let offset = children_offset(data[DEPTH]);
+    let count = u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap());
+    require!(index < count, LedgerError::InvalidAccount);
+    let at = offset + 4 + 32 * index as usize;
+    data.get_mut(at..at + 32)
+        .ok_or_else(|| error!(LedgerError::InvalidAccount))?
+        .copy_from_slice(relative.as_ref());
+    Ok(())
 }
 pub fn encode_metadata(metadata: &Metadata) -> Result<Vec<u8>> {
     require!(

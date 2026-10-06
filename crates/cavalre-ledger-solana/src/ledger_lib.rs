@@ -91,7 +91,7 @@ pub struct LedgerConfig {
     pub vault: Pubkey,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Record {
+pub struct Record<C = Vec<Pubkey>> {
     pub parent: Pubkey,
     pub custodian: Pubkey,
     pub kind: u8,
@@ -101,8 +101,10 @@ pub struct Record {
     pub child_index: u32,
     pub ledger: Option<LedgerConfig>,
     /// Relative identities, in insertion order with swap-and-pop removal.
-    pub children: Vec<Pubkey>,
+    pub children: C,
 }
+/// Fixed fields and child count, without materializing the trailing array.
+pub type Header = Record<u32>;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Metadata {
     /// Bump of the associated accounting PDA, not this metadata PDA.
@@ -112,6 +114,19 @@ pub struct Metadata {
     pub symbol: String,
 }
 impl Record {
+    pub fn header(&self) -> Header {
+        Header {
+            parent: self.parent,
+            custodian: self.custodian,
+            kind: self.kind,
+            depth: self.depth,
+            debit: self.debit,
+            credit: self.credit,
+            child_index: self.child_index,
+            ledger: self.ledger.clone(),
+            children: self.children.len() as u32,
+        }
+    }
     pub fn space(&self) -> usize {
         crate::ledger_storage::children_offset(self.depth) + 4 + 32 * self.children.len()
     }
@@ -120,6 +135,15 @@ impl Record {
         crate::ledger_storage::encode(self, &mut data)?;
         Ok(data)
     }
+    pub fn borrowed<'a>(
+        &self,
+        relative: Pubkey,
+        metadata: Option<&'a Metadata>,
+    ) -> core::Account<Pubkey, &'a str> {
+        self.header().borrowed(relative, metadata)
+    }
+}
+impl<C> Record<C> {
     pub fn flags(&self) -> core::Flags<Pubkey> {
         core::Flags {
             parent: self.parent,
@@ -138,6 +162,11 @@ impl Record {
             depth: self.depth,
         }
     }
+}
+impl Header {
+    pub fn space(&self) -> usize {
+        crate::ledger_storage::children_offset(self.depth) + 4 + 32 * self.children as usize
+    }
     pub fn borrowed<'a>(
         &self,
         relative: Pubkey,
@@ -149,7 +178,7 @@ impl Record {
             custodian: self.custodian,
             registered: true,
             implicit_allowed: self.depth > 1,
-            children: self.children.len() as u32,
+            children: self.children,
             sub_index: self.child_index,
             balances: core::Balances {
                 debit: self.debit,
@@ -209,8 +238,15 @@ pub fn decode(info: &AccountInfo) -> Result<Record> {
     decode_data(info.key, info.owner, &info.try_borrow_data()?)
 }
 pub fn decode_data(address: &Pubkey, owner: &Pubkey, data: &[u8]) -> Result<Record> {
+    authenticate_header(address, owner, data)?;
+    crate::ledger_storage::decode(data)
+}
+pub fn decode_header(info: &AccountInfo) -> Result<Header> {
+    authenticate_header(info.key, info.owner, &info.try_borrow_data()?)
+}
+fn authenticate_header(address: &Pubkey, owner: &Pubkey, data: &[u8]) -> Result<Header> {
     require_keys_eq!(*owner, crate::ID, LedgerError::InvalidAccount);
-    let record = crate::ledger_storage::decode(data)?;
+    let record = crate::ledger_storage::decode_header(data)?;
     if record.depth == 1 {
         require_keys_eq!(*address, GLOBAL_ROOT, LedgerError::InvalidAccount);
         require!(
