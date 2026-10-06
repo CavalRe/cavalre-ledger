@@ -1,251 +1,179 @@
-//! Group-local mapping storage. Logical keys are independent of Solana addresses.
-//! Only requested entries are decoded on the mutation path.
-use crate::ledger_lib::{LedgerError, Record, MAGIC, SPACE};
+//! Packed little-endian storage. The namespace selects the layout; there is no
+//! discriminator, version, registration bit, relative identity or stored bump.
+use crate::ledger_lib::{LedgerConfig, LedgerError, Metadata, Record};
 use anchor_lang::prelude::*;
 
-const MAP_MAGIC: &[u8; 8] = b"CVMAP001";
-const REFERENCE: &[u8; 8] = b"CVREF001";
-pub const HEADER: usize = SPACE + 16;
-const VALUE: usize = 224;
-const ENTRY: usize = 32 + VALUE;
-const SLOT: usize = ENTRY + 32;
-pub const INITIAL_CAPACITY: usize = 0;
-pub const INITIAL_SPACE: usize = HEADER + INITIAL_CAPACITY * SLOT;
+pub const PARENT: usize = 0;
+pub const CUSTODIAN: usize = 32;
+pub const KIND: usize = 64;
+pub const DEPTH: usize = 65;
+pub const DEBIT: usize = 66;
+pub const CREDIT: usize = 82;
+pub const CHILD_INDEX: usize = 98;
+pub const HEADER_LEN: usize = 102;
+pub const TOKEN_KIND: usize = HEADER_LEN;
+pub const IDENTIFIER: usize = TOKEN_KIND + 1;
+pub const AUTHORITY: usize = IDENTIFIER + 32;
+pub const VAULT: usize = AUTHORITY + 32;
+pub const LEDGER_HEADER_LEN: usize = VAULT + 32;
+pub const LEAF_LEN: usize = HEADER_LEN + 4;
+pub const METADATA_HEADER_LEN: usize = 10;
 
-// Inline return avoids a separate heap allocation for every decoded leaf.
-#[allow(clippy::large_enum_variant)]
-pub enum Value {
-    Leaf(Record),
-    Group(Pubkey),
+#[inline(always)]
+pub fn key(data: &[u8], at: usize) -> &[u8; 32] {
+    data[at..at + 32].try_into().unwrap()
 }
-
-fn u32_at(data: &[u8], at: usize) -> usize {
-    u32::from_le_bytes(data[at..at + 4].try_into().unwrap()) as usize
+#[inline(always)]
+pub fn balance(data: &[u8], at: usize) -> u128 {
+    u128::from_le_bytes(data[at..at + 16].try_into().unwrap())
 }
-pub fn capacity(data: &[u8]) -> Result<usize> {
-    require!(
-        data.len() >= HEADER && &data[SPACE..SPACE + 8] == MAP_MAGIC,
-        LedgerError::InvalidAccount
-    );
-    let cap = u32_at(data, SPACE + 8);
-    require!(
-        HEADER.checked_add(cap.checked_mul(SLOT).ok_or(LedgerError::InvalidAccount)?)
-            == Some(data.len()),
-        LedgerError::InvalidAccount
-    );
-    require!(len(data) <= cap, LedgerError::InvalidAccount);
-    Ok(cap)
+#[inline(always)]
+pub fn set_balance(data: &mut [u8], at: usize, value: u128) {
+    data[at..at + 16].copy_from_slice(&value.to_le_bytes());
 }
-pub fn len(data: &[u8]) -> usize {
-    u32_at(data, SPACE + 12)
-}
-pub fn initialize(data: &mut [u8]) {
-    data[SPACE..SPACE + 8].copy_from_slice(MAP_MAGIC);
-    let cap = ((data.len() - HEADER) / SLOT) as u32;
-    data[SPACE + 8..SPACE + 12].copy_from_slice(&cap.to_le_bytes());
-}
-fn search(data: &[u8], key: &Pubkey) -> std::result::Result<usize, usize> {
-    let mut left = 0;
-    let mut right = len(data);
-    while left < right {
-        let mid = left + (right - left) / 2;
-        let start = HEADER + mid * ENTRY;
-        match data[start..start + 32].cmp(key.as_ref()) {
-            std::cmp::Ordering::Less => left = mid + 1,
-            std::cmp::Ordering::Greater => right = mid,
-            std::cmp::Ordering::Equal => return Ok(mid),
-        }
-    }
-    Err(left)
-}
-pub fn space(capacity: usize) -> usize {
-    HEADER + capacity * SLOT
-}
-
-pub fn entry(data: &[u8], index: usize) -> Result<(Pubkey, Value)> {
-    let parent = Record::deserialize(&mut &data[8..SPACE])
-        .map_err(|_| error!(LedgerError::InvalidAccount))?;
-    let address = parent.address();
-    entry_with_parent(data, index, &parent, &address)
-}
-pub fn entry_with_parent(
-    data: &[u8],
-    index: usize,
-    parent: &Record,
-    parent_address: &Pubkey,
-) -> Result<(Pubkey, Value)> {
-    require!(index < len(data), LedgerError::InvalidAccount);
-    let offset = HEADER + index * ENTRY;
-    let key = Pubkey::new_from_array(data[offset..offset + 32].try_into().unwrap());
-    let value = &data[offset + 32..offset + ENTRY];
-    let value = if &value[..8] == REFERENCE {
-        Value::Group(Pubkey::new_from_array(value[8..40].try_into().unwrap()))
+pub fn children_offset(depth: u8) -> usize {
+    if depth == 2 {
+        LEDGER_HEADER_LEN
     } else {
-        require!(&value[..8] == MAGIC, LedgerError::InvalidAccount);
-        let kind = value[40];
-        let registered = value[41] == 1;
-        let implicit_allowed = value[42] == 1;
-        let sub_index = u32::from_le_bytes(value[43..47].try_into().unwrap());
-        let name_len = value[79] as usize;
-        let symbol_len = value[144] as usize;
-        require!(
-            kind <= 3
-                && !(registered && kind < 2)
-                && value[41] <= 1
-                && value[42] <= 1
-                && name_len <= 64
-                && symbol_len <= 64
-                && (sub_index > 0) == registered,
-            LedgerError::InvalidAccount
-        );
-        let string = |bytes: &[u8]| {
-            String::from_utf8(bytes.to_vec()).map_err(|_| error!(LedgerError::InvalidAccount))
-        };
-        Value::Leaf(Record {
-            root: parent.root,
-            parent: *parent_address,
-            relative: Pubkey::new_from_array(value[8..40].try_into().unwrap()),
-            custodian: if parent.depth == 2 {
-                key
-            } else {
-                parent.custodian
-            },
-            kind,
-            token_kind: 0,
-            depth: parent
-                .depth
-                .checked_add(1)
-                .ok_or(LedgerError::InvalidAccount)?,
-            registered,
-            implicit_allowed,
-            children: 0,
-            debit: u128::from_le_bytes(value[47..63].try_into().unwrap()),
-            credit: u128::from_le_bytes(value[63..79].try_into().unwrap()),
-            name: string(&value[80..80 + name_len])?,
-            scope: Pubkey::default(),
-            identifier: Pubkey::default(),
-            bump: 0,
-            sub_index,
-            symbol: string(&value[145..145 + symbol_len])?,
-            decimals: value[209],
-        })
-    };
-    Ok((key, value))
-}
-pub fn get(data: &[u8], key: &Pubkey) -> Result<Option<Value>> {
-    capacity(data)?;
-    search(data, key)
-        .ok()
-        .map(|i| entry(data, i).map(|(_, value)| value))
-        .transpose()
-}
-pub fn get_with_parent(
-    data: &[u8],
-    key: &Pubkey,
-    parent: &Record,
-    parent_address: &Pubkey,
-) -> Result<Option<Value>> {
-    capacity(data)?;
-    search(data, key)
-        .ok()
-        .map(|i| entry_with_parent(data, i, parent, parent_address).map(|(_, value)| value))
-        .transpose()
-}
-pub fn contains(data: &[u8], key: &Pubkey) -> bool {
-    search(data, key).is_ok()
-}
-pub fn child(data: &[u8], index: u32) -> Result<Option<Pubkey>> {
-    let cap = capacity(data)?;
-    if index as usize >= cap {
-        return Ok(None);
+        HEADER_LEN
     }
-    let offset = HEADER + cap * ENTRY + index as usize * 32;
-    let key = Pubkey::new_from_array(data[offset..offset + 32].try_into().unwrap());
-    // Child count, rather than a sentinel identity, determines slot validity.
-    Ok(Some(key))
 }
-pub fn set_child(data: &mut [u8], index: u32, relative: Option<Pubkey>) -> Result<()> {
-    let cap = capacity(data)?;
-    require!((index as usize) < cap, LedgerError::InvalidAccount);
-    let offset = HEADER + cap * ENTRY + index as usize * 32;
-    data[offset..offset + 32].copy_from_slice(relative.unwrap_or_default().as_ref());
+pub fn child_index(data: &[u8]) -> u32 {
+    u32::from_le_bytes(data[CHILD_INDEX..CHILD_INDEX + 4].try_into().unwrap())
+}
+/// Structural validation only. Callers must separately bind the expected PDA
+/// or use a typed pointer established by this program.
+pub fn validate(data: &[u8]) -> Result<()> {
+    require!(valid_layout(data), LedgerError::InvalidAccount);
     Ok(())
 }
-pub fn required_space(data: &[u8], additional: usize, children: usize) -> Result<usize> {
-    let cap = capacity(data)?;
-    let required = (len(data) + additional).max(children);
-    Ok(if required <= cap {
-        data.len()
-    } else {
-        space(required)
+/// Allocation-free validation shared by the structural and transfer paths.
+#[inline(always)]
+pub fn valid_layout(data: &[u8]) -> bool {
+    if data.len() < LEAF_LEN {
+        return false;
+    }
+    let depth = data[DEPTH];
+    let kind = data[KIND];
+    if depth == 0 || kind > 3 || (child_index(data) == 0) != (depth == 1) {
+        return false;
+    }
+    let offset = children_offset(depth);
+    if data.len() < offset + 4 {
+        return false;
+    }
+    let count = u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
+    count
+        .checked_mul(32)
+        .and_then(|n| n.checked_add(offset + 4))
+        == Some(data.len())
+        && (kind < 2 || count == 0)
+        && (depth != 2 || (kind == 0 && (1..=3).contains(&data[TOKEN_KIND])))
+}
+pub fn decode(data: &[u8]) -> Result<Record> {
+    validate(data)?;
+    let address = |offset| Pubkey::new_from_array(*key(data, offset));
+    let depth = data[DEPTH];
+    let offset = children_offset(depth);
+    Ok(Record {
+        parent: address(PARENT),
+        custodian: address(CUSTODIAN),
+        kind: data[KIND],
+        depth,
+        debit: balance(data, DEBIT),
+        credit: balance(data, CREDIT),
+        child_index: child_index(data),
+        ledger: (depth == 2).then(|| LedgerConfig {
+            token_kind: data[TOKEN_KIND],
+            identifier: address(IDENTIFIER),
+            authority: address(AUTHORITY),
+            vault: address(VAULT),
+        }),
+        children: data[offset + 4..]
+            .as_chunks::<32>()
+            .0
+            .iter()
+            .map(|bytes| Pubkey::new_from_array(*bytes))
+            .collect(),
     })
 }
-pub fn grow(data: &mut [u8], old_capacity: usize) {
-    let new_capacity = (data.len() - HEADER) / SLOT;
-    let old = HEADER + old_capacity * ENTRY;
-    let new = HEADER + new_capacity * ENTRY;
-    data.copy_within(old..old + old_capacity * 32, new);
-    data[old..new].fill(0);
-    data[SPACE + 8..SPACE + 12].copy_from_slice(&(new_capacity as u32).to_le_bytes());
-}
-pub fn put(data: &mut [u8], key: &Pubkey, value: Value) -> Result<()> {
-    let cap = capacity(data)?;
-    let index = match search(data, key) {
-        Ok(index) => index,
-        Err(index) => {
-            let count = len(data);
-            require!(count < cap, LedgerError::InvalidAccount);
-            let offset = HEADER + index * ENTRY;
-            data.copy_within(offset..HEADER + count * ENTRY, offset + ENTRY);
-            data[offset..offset + 32].copy_from_slice(key.as_ref());
-            data[SPACE + 12..SPACE + 16].copy_from_slice(&((count + 1) as u32).to_le_bytes());
-            index
+pub fn encode(record: &Record, data: &mut [u8]) -> Result<()> {
+    require!(data.len() == record.space(), LedgerError::InvalidAccount);
+    data[PARENT..PARENT + 32].copy_from_slice(record.parent.as_ref());
+    data[CUSTODIAN..CUSTODIAN + 32].copy_from_slice(record.custodian.as_ref());
+    data[KIND] = record.kind;
+    data[DEPTH] = record.depth;
+    set_balance(data, DEBIT, record.debit);
+    set_balance(data, CREDIT, record.credit);
+    data[CHILD_INDEX..CHILD_INDEX + 4].copy_from_slice(&record.child_index.to_le_bytes());
+    if let Some(config) = &record.ledger {
+        require!(record.depth == 2, LedgerError::InvalidAccount);
+        data[TOKEN_KIND] = config.token_kind;
+        for (offset, value) in [
+            (IDENTIFIER, config.identifier),
+            (AUTHORITY, config.authority),
+            (VAULT, config.vault),
+        ] {
+            data[offset..offset + 32].copy_from_slice(value.as_ref());
         }
-    };
-    let start = HEADER + index * ENTRY + 32;
-    let bytes = &mut data[start..start + VALUE];
-    bytes.fill(0);
-    match value {
-        Value::Group(storage) => {
-            bytes[..8].copy_from_slice(REFERENCE);
-            bytes[8..40].copy_from_slice(storage.as_ref());
-        }
-        Value::Leaf(record) => {
-            require!(
-                !record.is_container()
-                    && record.children == 0
-                    && record.name.len() <= 64
-                    && record.symbol.len() <= 64,
-                LedgerError::InvalidAccount
-            );
-            bytes[..8].copy_from_slice(MAGIC);
-            bytes[8..40].copy_from_slice(record.relative.as_ref());
-            bytes[40] = record.kind;
-            bytes[41] = u8::from(record.registered);
-            bytes[42] = u8::from(record.implicit_allowed);
-            leaf_fields(bytes, &record);
-            bytes[79] = record.name.len() as u8;
-            bytes[80..80 + record.name.len()].copy_from_slice(record.name.as_bytes());
-            bytes[144] = record.symbol.len() as u8;
-            bytes[145..145 + record.symbol.len()].copy_from_slice(record.symbol.as_bytes());
-            bytes[209] = record.decimals;
-        }
+    } else {
+        require!(record.depth != 2, LedgerError::InvalidAccount);
     }
-    Ok(())
+    let offset = children_offset(record.depth);
+    let count =
+        u32::try_from(record.children.len()).map_err(|_| error!(LedgerError::InvalidAccount))?;
+    data[offset..offset + 4].copy_from_slice(&count.to_le_bytes());
+    for (bytes, child) in data[offset + 4..]
+        .as_chunks_mut::<32>()
+        .0
+        .iter_mut()
+        .zip(&record.children)
+    {
+        bytes.copy_from_slice(child.as_ref());
+    }
+    validate(data)
 }
-fn leaf_fields(bytes: &mut [u8], record: &Record) {
-    bytes[43..47].copy_from_slice(&record.sub_index.to_le_bytes());
-    bytes[47..63].copy_from_slice(&record.debit.to_le_bytes());
-    bytes[63..79].copy_from_slice(&record.credit.to_le_bytes());
-}
-pub fn update_fields(data: &mut [u8], key: &Pubkey, record: &Record) -> Result<()> {
-    capacity(data)?;
-    let index = search(data, key).map_err(|_| error!(LedgerError::MissingAccount))?;
-    let start = HEADER + index * ENTRY + 32;
+pub fn encode_metadata(metadata: &Metadata) -> Result<Vec<u8>> {
     require!(
-        &data[start..start + 8] == MAGIC,
+        metadata.name.len() <= 64 && metadata.symbol.len() <= 64,
+        LedgerError::InvalidName
+    );
+    let mut data =
+        Vec::with_capacity(METADATA_HEADER_LEN + metadata.name.len() + metadata.symbol.len());
+    data.push(metadata.bump);
+    data.push(metadata.decimals);
+    for value in [&metadata.name, &metadata.symbol] {
+        data.extend_from_slice(&(value.len() as u32).to_le_bytes());
+        data.extend_from_slice(value.as_bytes());
+    }
+    Ok(data)
+}
+pub fn decode_metadata(data: &[u8]) -> Result<Metadata> {
+    require!(
+        data.len() >= METADATA_HEADER_LEN,
         LedgerError::InvalidAccount
     );
-    leaf_fields(&mut data[start..start + VALUE], record);
-    Ok(())
+    let mut fields = &data[2..];
+    fn string(fields: &mut &[u8]) -> Result<String> {
+        require!(fields.len() >= 4, LedgerError::InvalidAccount);
+        let len = u32::from_le_bytes(fields[..4].try_into().unwrap()) as usize;
+        require!(
+            len <= 64 && fields.len() >= 4 + len,
+            LedgerError::InvalidAccount
+        );
+        let value = std::str::from_utf8(&fields[4..4 + len])
+            .map_err(|_| error!(LedgerError::InvalidAccount))?
+            .to_owned();
+        *fields = &fields[4 + len..];
+        Ok(value)
+    }
+    let name = string(&mut fields)?;
+    let symbol = string(&mut fields)?;
+    require!(fields.is_empty(), LedgerError::InvalidAccount);
+    Ok(Metadata {
+        bump: data[0],
+        decimals: data[1],
+        name,
+        symbol,
+    })
 }

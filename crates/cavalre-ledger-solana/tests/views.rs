@@ -1,411 +1,251 @@
-//! Also compiled and run without the mutating program or Anchor SPL movement dependency.
-use anchor_lang::{prelude::*, AnchorSerialize};
-use cavalre_ledger_core::ledger_lib::Error as CoreError;
-use cavalre_ledger_solana::{
-    ledger_lib::{account_storage_address, root_storage_address, to_address, Record, SOURCE},
-    ledger_storage as mapping,
-    ledger_view::Reader,
-    ID,
-};
+//! Read-only coverage of the packed layout, independent metadata and typed PDAs.
+use anchor_lang::prelude::*;
+use cavalre_ledger_core::ledger_lib::Error;
+use cavalre_ledger_solana::{ledger_lib::*, ledger_storage as storage, ledger_view::Reader, ID};
 
-struct Stored {
-    key: Pubkey,
-    owner: Pubkey,
-    lamports: u64,
-    data: Vec<u8>,
+fn key(n: u8) -> Pubkey {
+    Pubkey::new_from_array([n; 32])
 }
-fn stored(key: Pubkey, record: Record) -> Stored {
-    let mut data = vec![0; mapping::space(4)];
-    mapping::initialize(&mut data);
-    data[..8].copy_from_slice(b"CVLEDG01");
-    record.serialize(&mut &mut data[8..]).unwrap();
-    Stored {
-        key,
-        owner: ID,
-        lamports: 10_000_000,
-        data,
+fn fixture() -> (Reader, Pubkey, Pubkey, Pubkey, Record) {
+    let ledger = ledger_pda(&key(1), &key(2)).0;
+    let app = to_address(&ID, &ledger, &key(3)).0;
+    let leaf = to_address(&ID, &app, &key(4)).0;
+    let root = Record {
+        parent: GLOBAL_ROOT,
+        custodian: GLOBAL_ROOT,
+        kind: 0,
+        depth: 2,
+        debit: 50,
+        credit: 50,
+        child_index: 1,
+        ledger: Some(LedgerConfig {
+            token_kind: 3,
+            authority: key(1),
+            identifier: key(2),
+            vault: Pubkey::default(),
+        }),
+        children: vec![key(3)],
+    };
+    let group = Record {
+        parent: ledger,
+        custodian: app,
+        kind: 0,
+        depth: 3,
+        debit: 50,
+        credit: 0,
+        child_index: 1,
+        ledger: None,
+        children: vec![key(4)],
+    };
+    let record = Record {
+        parent: app,
+        custodian: app,
+        kind: 2,
+        depth: 4,
+        debit: 50,
+        credit: 0,
+        child_index: 1,
+        ledger: None,
+        children: vec![],
+    };
+    let mut reader = Reader::new();
+    for (address, r) in [(ledger, root), (app, group), (leaf, record.clone())] {
+        reader.insert(address, &ID, &r.to_bytes().unwrap()).unwrap();
     }
-}
-struct Fixture {
-    records: Vec<Stored>,
-    root: Pubkey,
-    app: Pubkey,
-    authority: Pubkey,
-    relative: Pubkey,
-    leaf: Pubkey,
-}
-impl Fixture {
-    fn new() -> Self {
-        let mint = Pubkey::new_from_array([20; 32]);
-        let authority = Pubkey::new_from_array([21; 32]);
-        let relative = Pubkey::new_from_array([22; 32]);
-        let (storage, bump) = root_storage_address(&Pubkey::default(), &mint);
-        let root = mint;
-        let base = Record {
-            root,
-            parent: cavalre_ledger_solana::ledger_lib::global_root_address().0,
-            relative: mint,
-            custodian: Pubkey::default(),
-            kind: 0,
-            token_kind: 2,
-            depth: 2,
-            registered: true,
-            implicit_allowed: true,
-            children: 2,
-            debit: 50,
-            credit: 50,
-            name: "Token".into(),
-            scope: Pubkey::default(),
-            identifier: mint,
-            bump,
-            sub_index: 1,
-            symbol: "UNIT".into(),
-            decimals: 6,
-        };
-        let mut records = vec![stored(storage, base.clone())];
-        let source = to_address(&root, &SOURCE);
-        let bump = 0;
-        records.push(stored(
-            source,
-            Record {
-                parent: root,
-                relative: SOURCE,
-                custodian: source,
-                kind: 3,
-                token_kind: 0,
-                depth: 3,
-                children: 0,
-                debit: 0,
-                name: "Source".into(),
-                identifier: Pubkey::default(),
-                bump,
-                ..base.clone()
-            },
-        ));
-        let app = to_address(&root, &authority);
-        let bump = account_storage_address(&root, &authority).1;
-        records.push(stored(
-            app,
-            Record {
-                parent: root,
-                relative: authority,
-                custodian: app,
-                token_kind: 0,
-                depth: 3,
-                children: 0,
-                implicit_allowed: false,
-                credit: 0,
-                name: "Application".into(),
-                sub_index: 2,
-                identifier: Pubkey::default(),
-                bump,
-                ..base.clone()
-            },
-        ));
-        let leaf = to_address(&app, &relative);
-        let bump = 0;
-        records.push(stored(
-            leaf,
-            Record {
-                parent: app,
-                relative,
-                custodian: app,
-                kind: 2,
-                token_kind: 0,
-                depth: 4,
-                registered: false,
-                sub_index: 0,
-                children: 0,
-                credit: 0,
-                name: String::new(),
-                identifier: Pubkey::default(),
-                bump,
-                ..base
-            },
-        ));
-        let decoded: Vec<_> = records
-            .iter()
-            .map(|r| Record::deserialize(&mut &r.data[8..]).unwrap())
-            .collect();
-        let mut containers: Vec<_> = decoded
-            .iter()
-            .filter(|r| r.kind < 2)
-            .map(|r| stored(r.storage_address(), r.clone()))
-            .collect();
-        for r in &decoded {
-            if r.depth <= 2 {
-                continue;
-            }
-            let parent = containers
-                .iter_mut()
-                .find(|c| Record::deserialize(&mut &c.data[8..]).unwrap().address() == r.parent)
-                .unwrap();
-            let value = if r.kind < 2 {
-                mapping::Value::Group(r.storage_address())
-            } else {
-                mapping::Value::Leaf(r.clone())
-            };
-            mapping::put(&mut parent.data, &r.address(), value).unwrap();
-        }
-        mapping::set_child(&mut containers[0].data, 0, Some(SOURCE)).unwrap();
-        mapping::set_child(&mut containers[0].data, 1, Some(authority)).unwrap();
-        records = containers;
-        Self {
-            records,
-            root,
-            app,
-            authority,
-            relative,
-            leaf,
-        }
-    }
-    fn reader(&self) -> Reader {
-        let mut reader = Reader::new();
-        for r in &self.records {
-            reader.insert(r.key, &r.owner, &r.data).unwrap();
-        }
-        reader
-    }
-}
-
-#[test]
-fn nonsigner_readonly_accounts_work_without_executing_a_mutation_program() {
-    let mut fixture = Fixture::new();
-    let before: Vec<_> = fixture
-        .records
-        .iter()
-        .map(|r| (r.lamports, r.data.clone()))
-        .collect();
-    let accounts: Vec<_> = fixture
-        .records
-        .iter_mut()
-        .map(|r| {
-            AccountInfo::new(
-                &r.key,
-                false,
-                false,
-                &mut r.lamports,
-                &mut r.data,
-                &r.owner,
-                false,
-            )
-        })
-        .collect();
-    let reader = Reader::from_account_infos(&accounts).unwrap();
-    assert!(accounts.iter().all(|a| !a.is_signer && !a.is_writable));
-    let view = reader
-        .account_view(&fixture.root, &fixture.app, &fixture.relative)
-        .unwrap();
-    assert_eq!(view.custodian, fixture.authority);
-    assert!(!view.registered && !view.admitted);
-    assert_eq!(
-        reader
-            .balance_of(&fixture.root, &fixture.app, &fixture.relative)
+    let relative = ledger_relative(&key(1), &key(2));
+    reader
+        .insert_metadata(
+            metadata_address(&GLOBAL_ROOT, &relative).0,
+            &ID,
+            &storage::encode_metadata(&Metadata {
+                bump: ledger_pda(&key(1), &key(2)).1,
+                decimals: 18,
+                name: "Units".into(),
+                symbol: "UNIT".into(),
+            })
             .unwrap(),
-        50
-    );
-    assert_eq!(reader.total_supply(&fixture.root).unwrap(), 50);
-    drop(accounts);
-    assert_eq!(
-        fixture
-            .records
-            .iter()
-            .map(|r| (r.lamports, r.data.clone()))
-            .collect::<Vec<_>>(),
-        before
-    );
+            &GLOBAL_ROOT,
+            &relative,
+        )
+        .unwrap();
+    (reader, ledger, app, leaf, record)
 }
-
 #[test]
-fn rpc_reader_distinguishes_unknown_absent_and_allocated_implicit_accounts() {
-    let fixture = Fixture::new();
-    let reader = fixture.reader();
-    let relative = Pubkey::new_from_array([23; 32]);
-    // The supplied group mapping proves the entry is absent.
+fn direct_balances_children_and_metadata_are_independent() {
+    let (reader, ledger, app, leaf, record) = fixture();
+    assert_eq!(record.space(), 106);
+    assert_eq!(reader.balance_of(&ledger, &app, &key(4)), Ok(50));
+    assert_eq!(reader.ledger(&leaf), Ok(Some(ledger)));
+    assert_eq!(
+        reader.sub_accounts(&ledger, &app, 0, usize::MAX),
+        Ok(vec![key(4)])
+    );
+    assert_eq!(reader.sub_account_index(&leaf), Ok(1));
+    assert_eq!(reader.name(&leaf), Ok(String::new()));
+    assert_eq!(reader.symbol(&leaf), Ok(Some("UNIT".into())));
+    assert_eq!(reader.decimals(&leaf), Ok(Some(18)));
     assert!(
-        !reader
-            .account_view(&fixture.root, &fixture.app, &relative)
+        reader
+            .account_view(&ledger, &app, &key(4))
             .unwrap()
             .registered
     );
+}
+#[test]
+fn unknown_and_absent_accounts_remain_distinct() {
+    let (mut reader, ledger, app, _, _) = fixture();
+    let missing = to_address(&ID, &app, &key(5)).0;
     assert_eq!(
-        reader
-            .balance_of(&fixture.root, &fixture.app, &relative)
-            .unwrap(),
-        0
+        reader.balance_of(&ledger, &app, &key(5)),
+        Err(Error::MissingAccount)
     );
+    reader.insert_missing(missing).unwrap();
+    assert_eq!(reader.balance_of(&ledger, &app, &key(5)), Ok(0));
     assert_eq!(
-        reader
-            .balance_of(&fixture.root, &fixture.app, &fixture.relative)
-            .unwrap(),
+        reader.sub_accounts(&ledger, &app, usize::MAX, 1),
+        Ok(vec![])
+    );
+}
+#[test]
+fn fixed_offsets_and_vector_lengths_reject_malformed_data() {
+    let (_, _, _, _, record) = fixture();
+    let mut bytes = record.to_bytes().unwrap();
+    for n in 0..bytes.len() {
+        assert!(storage::decode(&bytes[..n]).is_err());
+    }
+    assert_eq!(storage::balance(&bytes, storage::DEBIT), 50);
+    storage::set_balance(&mut bytes, storage::DEBIT, u128::MAX);
+    assert_eq!(storage::decode(&bytes).unwrap().debit, u128::MAX);
+    bytes[storage::HEADER_LEN..storage::HEADER_LEN + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+    assert!(storage::decode(&bytes).is_err());
+    let mut bytes = record.to_bytes().unwrap();
+    bytes.push(0);
+    assert!(storage::decode(&bytes).is_err());
+}
+#[test]
+fn wrong_owner_identity_and_metadata_namespace_are_rejected() {
+    let (mut reader, ledger, app, leaf, record) = fixture();
+    assert!(reader
+        .insert(key(8), &key(9), &record.to_bytes().unwrap())
+        .is_err());
+    assert!(reader
+        .insert(leaf, &ID, &record.to_bytes().unwrap())
+        .is_err());
+    let fake = key(8);
+    reader
+        .insert(fake, &ID, &record.to_bytes().unwrap())
+        .unwrap();
+    assert_eq!(reader.total_supply(&fake), Err(Error::InvalidAccount));
+    let meta = Metadata {
+        bump: to_address(&ID, &app, &key(4)).1,
+        decimals: 0,
+        name: "Leaf".into(),
+        symbol: String::new(),
+    };
+    let bytes = storage::encode_metadata(&meta).unwrap();
+    assert!(reader
+        .insert_metadata(leaf, &ID, &bytes, &app, &key(4))
+        .is_err());
+    assert!(reader
+        .insert_metadata(
+            metadata_address(&app, &key(4)).0,
+            &key(9),
+            &bytes,
+            &app,
+            &key(4)
+        )
+        .is_err());
+    assert_eq!(reader.total_supply(&ledger), Ok(50));
+}
+#[test]
+fn readonly_account_infos_preserve_bytes_and_balances() {
+    let (_, _, app, leaf, record) = fixture();
+    let parent_record = Record {
+        parent: key(9),
+        custodian: app,
+        kind: 0,
+        depth: 3,
+        debit: 50,
+        credit: 0,
+        child_index: 1,
+        ledger: None,
+        children: vec![key(4)],
+    };
+    let mut data = record.to_bytes().unwrap();
+    let before = data.clone();
+    let mut lamports = 10;
+    let account = AccountInfo::new(&leaf, false, false, &mut lamports, &mut data, &ID, false);
+    assert_eq!(
+        cavalre_ledger_solana::ledger_view::debit_balance_of(&account).unwrap(),
         50
     );
-    assert_eq!(reader.name(&fixture.leaf).unwrap(), "");
-    assert_eq!(reader.known_ledgers().unwrap(), vec![fixture.root]);
+    assert!(!account.is_writable && !account.is_signer);
+    drop(account);
+    assert_eq!(data, before);
+    assert_eq!(lamports, 10);
+    assert_eq!(parent_record.children.len(), 1);
 }
 
 #[test]
-fn registered_child_listing_uses_slots_without_child_records() {
-    let fixture = Fixture::new();
-    let reader = fixture.reader();
-    assert!(reader
-        .sub_accounts(&fixture.root, &fixture.app, 0, 10)
-        .unwrap()
-        .is_empty());
-    let expected = vec![SOURCE, fixture.authority];
-
-    assert_eq!(
-        reader
-            .sub_accounts(&fixture.root, &fixture.root, 0, 10)
-            .unwrap(),
-        expected
-    );
-    let mut partial = Reader::new();
-    for r in fixture
-        .records
-        .iter()
-        .filter(|r| r.key != account_storage_address(&fixture.root, &fixture.authority).0)
-    {
-        partial.insert(r.key, &r.owner, &r.data).unwrap();
-    }
-    assert_eq!(
-        partial.sub_accounts(&fixture.root, &fixture.root, 0, 10),
-        Ok(expected)
-    );
-}
-
-#[test]
-fn readers_reject_wrong_owners_addresses_headers_duplicates_and_root_context() {
-    let fixture = Fixture::new();
-    let record = &fixture.records[0];
-    let mut reader = Reader::new();
-    assert!(reader
-        .insert(record.key, &Pubkey::default(), &record.data)
-        .is_err());
-    assert!(reader
-        .insert(Pubkey::new_from_array([25; 32]), &ID, &record.data)
-        .is_err());
-    let mut corrupt = record.data.clone();
-    corrupt[0] ^= 1;
-    assert!(reader.insert(record.key, &ID, &corrupt).is_err());
-    reader.insert(record.key, &ID, &record.data).unwrap();
-    assert!(reader.insert(record.key, &ID, &record.data).is_err());
-    assert!(reader.insert_missing(record.key).is_err());
-    let mut partial = Reader::new();
-    let leaf = fixture
-        .records
-        .iter()
-        .find(|r| r.key == account_storage_address(&fixture.root, &fixture.authority).0)
-        .unwrap();
-    partial.insert(leaf.key, &ID, &leaf.data).unwrap();
-    assert_eq!(partial.name(&fixture.leaf), Err(CoreError::MissingAccount));
-    assert_eq!(
-        partial.total_supply(&fixture.leaf),
-        Err(CoreError::MissingAccount)
-    );
-    assert_eq!(
-        partial.symbol(&fixture.leaf),
-        Err(CoreError::MissingAccount)
-    );
-    assert_eq!(
-        partial.decimals(&fixture.leaf),
-        Err(CoreError::MissingAccount)
-    );
-    // Removing getter-level root restrictions must not suppress host validation.
-    for registered in [false, true] {
-        let mut bad = Record::deserialize(&mut &record.data[8..]).unwrap();
-        bad.registered = registered;
-        bad.sub_index = u32::from(registered);
-        bad.kind = 1; // A token ledger must be a registered debit group.
-        let bad = stored(record.key, bad);
-        let mut reader = Reader::new();
-        reader.insert(bad.key, &bad.owner, &bad.data).unwrap();
-        assert_eq!(
-            reader.total_supply(&fixture.root),
-            Err(CoreError::InvalidAccount)
-        );
-        assert_eq!(reader.symbol(&fixture.root), Err(CoreError::InvalidAccount));
-        assert_eq!(
-            reader.decimals(&fixture.root),
-            Err(CoreError::InvalidAccount)
-        );
-        assert_eq!(reader.known_ledgers(), Err(CoreError::InvalidAccount));
-    }
-}
-
-#[test]
-fn stored_getters_preserve_values_and_distinguish_missing_input_from_absence() {
-    let fixture = Fixture::new();
-    let mut reader = fixture.reader();
-    // These fixture records store the same labels, but differ in kind and
-    // registration. The queried address need not itself be a ledger root.
-    for address in [fixture.root, fixture.app, fixture.leaf] {
-        assert_eq!(reader.total_supply(&address), Ok(50));
-        assert_eq!(reader.symbol(&address), Ok(Some("UNIT".into())));
-        assert_eq!(reader.decimals(&address), Ok(Some(6)));
-    }
-    let absent = to_address(&fixture.app, &Pubkey::new_from_array([23; 32]));
-    assert_eq!(reader.total_supply(&absent), Err(CoreError::MissingAccount));
-    assert_eq!(reader.symbol(&absent), Err(CoreError::MissingAccount));
-    assert_eq!(reader.decimals(&absent), Err(CoreError::MissingAccount));
-    reader.insert_missing(absent).unwrap();
-    assert_eq!(reader.total_supply(&absent), Ok(0));
-    assert_eq!(reader.symbol(&absent), Ok(Some(String::new())));
-    assert_eq!(reader.decimals(&absent), Ok(Some(0)));
-
-    // The same defaults apply to a confirmed absent runtime account, without
-    // requiring a token root, signatures, write access or storage allocation.
-    let mut lamports = 0;
-    let mut data = [];
-    let owner = anchor_lang::system_program::ID;
-    let info = AccountInfo::new(
-        &absent,
-        false,
-        false,
-        &mut lamports,
-        &mut data,
-        &owner,
-        false,
-    );
-    let reader = Reader::from_account_infos(&[info]).unwrap();
-    assert_eq!(reader.total_supply(&absent), Ok(0));
-    assert_eq!(reader.symbol(&absent), Ok(Some(String::new())));
-    assert_eq!(reader.decimals(&absent), Ok(Some(0)));
-    assert_eq!(lamports, 0);
-}
-
-#[test]
-fn pages_use_parent_container_without_sibling_records() {
-    let fixture = Fixture::new();
-    let root = &fixture.records[0];
-    let mut reader = Reader::new();
-    reader.insert(root.key, &root.owner, &root.data).unwrap();
-    assert_eq!(
-        reader.sub_accounts(&fixture.root, &fixture.root, 1, 1),
-        Ok(vec![fixture.authority])
-    );
-    assert_eq!(
-        reader.sub_account(&fixture.root, &fixture.root, 1),
-        Ok(fixture.authority)
-    );
-    assert_eq!(
-        reader.sub_accounts(&fixture.root, &fixture.root, 0, 2),
-        Ok(vec![SOURCE, fixture.authority])
-    );
-    assert_eq!(
-        reader.sub_accounts(&fixture.root, &fixture.root, usize::MAX, usize::MAX),
-        Ok(vec![])
-    );
-    assert_eq!(
-        reader.sub_accounts(&fixture.root, &fixture.root, 0, 0),
-        Ok(vec![])
-    );
-    assert!(Reader::new()
-        .insert(root.key, &Pubkey::default(), &root.data)
-        .is_err());
-    assert!(Reader::new().insert(fixture.app, &ID, &root.data).is_err());
-    assert!(Reader::new()
-        .insert(root.key, &ID, &root.data[..root.data.len() - 1])
-        .is_err());
-    assert!(reader.insert(root.key, &ID, &root.data).is_err());
+fn runtime_reader_uses_namespace_when_metadata_looks_like_an_account() {
+    let (_, ledger, app, leaf, record) = fixture();
+    let parent = Record {
+        parent: ledger,
+        custodian: app,
+        kind: 0,
+        depth: 3,
+        debit: 50,
+        credit: 0,
+        child_index: 1,
+        ledger: None,
+        children: vec![key(4)],
+    };
+    let mut name = vec![0; 64];
+    name[58] = 2; // Accounting kind offset 64.
+    name[59] = 3; // Accounting depth offset 65.
+    let mut symbol = vec![0; 32];
+    symbol[24] = 1; // Accounting child_index offset 98.
+    let metadata = Metadata {
+        bump: to_address(&ID, &app, &key(4)).1,
+        decimals: 0,
+        name: String::from_utf8(name).unwrap(),
+        symbol: String::from_utf8(symbol).unwrap(),
+    };
+    let metadata_key = metadata_address(&app, &key(4)).0;
+    let mut metadata_bytes = storage::encode_metadata(&metadata).unwrap();
+    assert!(storage::decode(&metadata_bytes).is_ok());
+    let mut parent_bytes = parent.to_bytes().unwrap();
+    let mut leaf_bytes = record.to_bytes().unwrap();
+    let (mut parent_lamports, mut leaf_lamports, mut metadata_lamports) = (1, 1, 1);
+    let accounts = [
+        AccountInfo::new(
+            &metadata_key,
+            false,
+            false,
+            &mut metadata_lamports,
+            &mut metadata_bytes,
+            &ID,
+            false,
+        ),
+        AccountInfo::new(
+            &app,
+            false,
+            false,
+            &mut parent_lamports,
+            &mut parent_bytes,
+            &ID,
+            false,
+        ),
+        AccountInfo::new(
+            &leaf,
+            false,
+            false,
+            &mut leaf_lamports,
+            &mut leaf_bytes,
+            &ID,
+            false,
+        ),
+    ];
+    let reader = Reader::from_account_infos(&accounts).unwrap();
+    assert_eq!(reader.name(&leaf), Ok(metadata.name));
 }

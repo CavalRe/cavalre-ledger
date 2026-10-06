@@ -30,3 +30,14 @@
   operational material out of this public repository.
 - Do not publish crates, deploy programs, create signing keys or change upgrade
   authority without explicit authorization.
+
+## Agreed storage update (2026-10-06)
+
+The user's agreed Solana layout supersedes earlier registration/storage guidance
+above: all identities and links are accounting storage PDAs, children are an
+inline relative-address vector, and allocation atomically creates/indexes an
+account. No persisted registered/implicit_allowed state, stored relative or
+ledger pointer, account bump, or per-child index PDA. Metadata is separate and
+optional. Debit and credit balances remain u128. See docs/READS.md and
+PORTING.md at the repository root for details. Do not resume Float work while
+finishing Ledger.

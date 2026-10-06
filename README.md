@@ -3,8 +3,8 @@
 A reusable core based on the original Solidity Ledger, with a Solana adapter.
 Both share one implementation of the accounting rules.
 
-The program now supports ledger creation, account registration and removal,
-implicit leaves, transfers, and native SOL, classic SPL Token and compatible
+The program now supports ledger creation, account creation and removal,
+first-receipt allocation, transfers, and native SOL, classic SPL Token and compatible
 Token-2022 deposits and withdrawals.
 The reusable core implements the original depth-aligned debit/credit walk.
 This is a tested development implementation, not a deployed or audited release.
@@ -20,7 +20,7 @@ work is deferred until this implementation settles.
 | `crates/cavalre-ledger-core/src/ledger_lib.rs` | Original LedgerLib identity and posting rules |
 | `crates/cavalre-ledger-core/src/ledger.rs` | Shared service operations and authenticated host interface |
 | `crates/cavalre-ledger-core/src/ledger_view.rs` | Independent, non-mutating queries |
-| `crates/cavalre-ledger-solana/src/ledger_lib.rs` | Logical child hashing, group storage and calls into the core |
+| `crates/cavalre-ledger-solana/src/ledger_lib.rs` | PDA identities, packed records and calls into the core |
 | `crates/cavalre-ledger-solana/src/ledger.rs` | Solana implementation of the host interface |
 | `crates/cavalre-ledger-solana/src/ledger_view.rs` | Read helpers |
 | `crates/cavalre-ledger-solana/src/ledger_cpi.rs` | In-place custody instruction preparation |
@@ -29,6 +29,13 @@ work is deferred until this implementation settles.
 | `docs/PORTING.md` | Source baseline, module mapping and reusable work in Git history |
 | `reference/`, `tests/reference/`, `spec/fixtures/` | Original Solidity reference and fixture generation |
 | `scripts/` | Validation, pinned tool installation and reference tooling |
+
+Accounting records use their actual storage PDAs. Each ordinary record stores
+parent and custodian links, kind/depth, u128 debit and credit, child_index and
+an inline vector of relative children. Metadata is separate and optional.
+Existing-account transfers follow those links through a Pinocchio entrypoint;
+equal-polarity siblings write only their endpoints at any depth. See the
+[layout](docs/READS.md) and [measured transfer costs](docs/TRANSFER_COSTS.md).
 
 The previous controller-based implementation is removed from the working tree.
 Its code and tests remain available in Git history.
@@ -70,10 +77,8 @@ issuance, implicit receipts, parent admission, account lifecycle, token custody,
 application isolation, PDA authority, and transaction rollback. This is not the
 full original Solidity test suite or a security audit.
 
-The suite contains **136 test functions**: **39 core tests**, **26 Solana library
-tests**, and **71 sBPF runtime tests**. The read suites
-also run with mutation modules excluded; these repeat runs are not extra tests.
-Fixture steps run inside replay tests; they are not separate test functions.
+The read suites also run with mutation modules excluded. Fixture steps run
+inside replay tests; they are not separate test functions.
 See the [standalone specification](https://caval.re/blog/ledger-specifications)
 and [acceptance coverage](docs/ACCEPTANCE.md) for the implemented scope, exercised
 requirements and remaining validation work.

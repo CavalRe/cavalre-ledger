@@ -3,7 +3,7 @@ use super::*;
 
 fn set_amount(h: &mut Harness, vault: Address, amount: u64) {
     // Simulate a custody loss; ordinary users cannot edit token-owned accounts.
-    let mut account = h.account(&vault).unwrap();
+    let mut account = h.svm.get_account(&vault).unwrap();
     let mut token = TokenAccount::unpack(&account.data[..TokenAccount::LEN]).unwrap();
     token.amount = amount;
     TokenAccount::pack(token, &mut account.data[..TokenAccount::LEN]).unwrap();
@@ -115,7 +115,6 @@ fn token_shortfalls_freeze_all_mutations_direct_and_cpi_and_recover_without_admi
                             parent: ap(parent),
                             name,
                             credit: false,
-                            implicit_allowed: true,
                         }
                         .data()
                     } else {
@@ -149,7 +148,7 @@ fn token_shortfalls_freeze_all_mutations_direct_and_cpi_and_recover_without_admi
                 calls
             };
             let records = [e.root_storage, e.source, parent, child(parent, user)]
-                .map(|key| (key, h.account(&key).unwrap()));
+                .map(|key| (key, h.svm.get_account(&key).unwrap()));
             set_amount(&mut h, e.vault, 80);
             for shortfall in [20, 1] {
                 assert_eq!(h.token(e.vault), 100 - shortfall);
@@ -163,13 +162,10 @@ fn token_shortfalls_freeze_all_mutations_direct_and_cpi_and_recover_without_admi
                 }
                 // Reads consume only Ledger records; no vault or signer needed.
                 let mut reader = ledger::ledger_view::Reader::new();
-                let mut keys: Vec<_> = records.iter().map(|(key, _)| h.storage(*key)).collect();
-                keys.sort();
-                keys.dedup();
-                for key in keys {
-                    let account = h.account(&key).unwrap();
+                for (key, _) in &records {
+                    let account = h.svm.get_account(key).unwrap();
                     reader
-                        .insert(ap(key), &ap(account.owner), &account.data)
+                        .insert(ap(*key), &ap(account.owner), &account.data)
                         .unwrap();
                 }
                 assert_eq!(reader.total_supply(&ap(e.root)).unwrap(), 100);
@@ -191,7 +187,7 @@ fn token_shortfalls_freeze_all_mutations_direct_and_cpi_and_recover_without_admi
             h.internal();
             top_up(&mut h, &e, 1);
             for (key, old) in records {
-                assert_eq!(h.account(&key).unwrap(), old);
+                assert_eq!(h.svm.get_account(&key).unwrap(), old);
             }
             let transfer = call(
                 &h,
@@ -244,9 +240,7 @@ fn ordinary_mutations_require_an_authentic_canonical_vault_readonly() {
             .unwrap()
             .is_writable
     );
-    let mut missing_vault = mutation.clone();
-    missing_vault.accounts.retain(|m| m.pubkey != e.vault);
-    let failure = run_raw(&mut h, &[0], missing_vault).unwrap_err();
+    let failure = run_raw(&mut h, &[0], mutation.clone()).unwrap_err();
     assert_eq!(
         failure.err,
         TransactionError::InstructionError(
@@ -255,10 +249,9 @@ fn ordinary_mutations_require_an_authentic_canonical_vault_readonly() {
         )
     );
     let forged_key = Address::new_from_array([75; 32]);
-    let original = h.account(&e.vault).unwrap();
+    let original = h.svm.get_account(&e.vault).unwrap();
     h.svm.set_account(forged_key, original.clone()).unwrap();
     let mut substituted = mutation.clone();
-    substituted.accounts.retain(|m| m.pubkey != e.vault);
     substituted
         .accounts
         .push(AccountMeta::new_readonly(forged_key, false));
@@ -312,9 +305,15 @@ fn custody_binding_is_immutable_and_missing_bindings_fail_closed() {
             External::new(&mut h, 60, 0)
         };
         let parent = branch(&mut h, e.root, 0, true);
-        let root = h.account(&e.root_storage).unwrap();
-        assert!(root.data.len() >= ledger::ledger_storage::HEADER);
-        assert_eq!(&root.data[480..512], e.vault.as_ref());
+        let root = h.svm.get_account(&e.root_storage).unwrap();
+        assert_eq!(
+            root.data.len(),
+            ledger::ledger_storage::LEDGER_HEADER_LEN + 4 + 32 * 2
+        );
+        assert_eq!(
+            &root.data[ledger::ledger_storage::VAULT..ledger::ledger_storage::VAULT + 32],
+            e.vault.as_ref()
+        );
         let mutation = transfer(
             &h,
             e.root,
@@ -328,17 +327,14 @@ fn custody_binding_is_immutable_and_missing_bindings_fail_closed() {
             // Corruption fixture, not a user-writable setting. Registration may
             // not repair/replace this trusted identity from instruction input.
             let mut corrupted = root.clone();
-            corrupted.data[480..512].copy_from_slice(replacement.as_ref());
+            corrupted.data[ledger::ledger_storage::VAULT..ledger::ledger_storage::VAULT + 32]
+                .copy_from_slice(replacement.as_ref());
             h.svm.set_account(e.root_storage, corrupted).unwrap();
             rejects(
                 &mut h,
                 &[0],
                 mutation.clone(),
-                if replacement == SYSTEM {
-                    LedgerError::InvalidAccount.into()
-                } else {
-                    LedgerError::MissingAccount.into()
-                },
+                LedgerError::InvalidAccount.into(),
             );
             let registration = e.registration(&h);
             rejects(
@@ -350,9 +346,9 @@ fn custody_binding_is_immutable_and_missing_bindings_fail_closed() {
         }
         h.svm.set_account(e.root_storage, root).unwrap();
         let registration = e.registration(&h);
-        let before = h.account(&e.root_storage);
+        let before = h.svm.get_account(&e.root_storage);
         succeeds(&mut h, &[0], registration);
         succeeds(&mut h, &[0], mutation);
-        assert_eq!(h.account(&e.root_storage), before);
+        assert_eq!(h.svm.get_account(&e.root_storage), before);
     }
 }

@@ -2,7 +2,7 @@
 use anchor_lang::{prelude::*, solana_program::program_pack::Pack};
 use cavalre_ledger_core::ledger_lib::Error as CoreError;
 use cavalre_ledger_solana::{
-    ledger_lib::{root_storage_address, Record, NATIVE_SOL},
+    ledger_lib::{ledger_pda, Record, NATIVE_SOL},
     ledger_view::{
         metadata_address, native_decimals, native_symbol, Reader, METAPLEX_METADATA_PROGRAM,
     },
@@ -21,49 +21,67 @@ fn key(byte: u8) -> Pubkey {
     Pubkey::new_from_array([byte; 32])
 }
 fn root(scope: Pubkey, mint: Pubkey) -> (Pubkey, Vec<u8>) {
-    let (address, bump) = root_storage_address(&scope, &mint);
+    use cavalre_ledger_solana::ledger_lib::{LedgerConfig, GLOBAL_ROOT};
+    let address = ledger_pda(&scope, &mint).0;
     let record = Record {
-        root: cavalre_ledger_solana::ledger_lib::ledger_address(&scope, &mint),
-        parent: cavalre_ledger_solana::ledger_lib::global_root_address().0,
-        relative: mint,
-        custodian: Pubkey::default(),
+        parent: GLOBAL_ROOT,
+        custodian: GLOBAL_ROOT,
         kind: 0,
-        token_kind: if scope != Pubkey::default() {
-            3
-        } else if mint == NATIVE_SOL {
-            1
-        } else {
-            2
-        },
         depth: 2,
-        registered: true,
-        implicit_allowed: true,
-        children: 1,
+        children: vec![],
         debit: 0,
         credit: 0,
-        name: "Ledger name".into(),
-        scope,
-        identifier: mint,
-        bump,
-        sub_index: 1,
-        symbol: if mint == NATIVE_SOL {
-            "SOL".into()
-        } else {
-            "CACHED".into()
-        },
-        decimals: if mint == NATIVE_SOL { 9 } else { 3 },
+        child_index: 1,
+        ledger: Some(LedgerConfig {
+            token_kind: if scope != Pubkey::default() {
+                3
+            } else if mint == NATIVE_SOL {
+                1
+            } else {
+                2
+            },
+            authority: scope,
+            identifier: mint,
+            vault: Pubkey::default(),
+        }),
     };
-    let mut data = vec![0; cavalre_ledger_solana::ledger_storage::space(4)];
-    cavalre_ledger_solana::ledger_storage::initialize(&mut data);
-    data[..8].copy_from_slice(b"CVLEDG01");
-    record.serialize(&mut &mut data[8..]).unwrap();
-    (address, data)
+    (address, record.to_bytes().unwrap())
+}
+fn stored_metadata(scope: Pubkey, mint: Pubkey) -> (Pubkey, Vec<u8>) {
+    use cavalre_ledger_solana::ledger_lib::{
+        ledger_relative, metadata_address, Metadata, GLOBAL_ROOT,
+    };
+    let relative = ledger_relative(&scope, &mint);
+    (
+        metadata_address(&GLOBAL_ROOT, &relative).0,
+        cavalre_ledger_solana::ledger_storage::encode_metadata(&Metadata {
+            bump: ledger_pda(&scope, &mint).1,
+            name: "Ledger name".into(),
+            symbol: if mint == NATIVE_SOL { "SOL" } else { "CACHED" }.into(),
+            decimals: if mint == NATIVE_SOL { 9 } else { 3 },
+        })
+        .unwrap(),
+    )
+}
+fn labels(reader: &mut Reader, scope: Pubkey, mint: Pubkey) {
+    use cavalre_ledger_solana::ledger_lib::{ledger_relative, GLOBAL_ROOT};
+    let (key, bytes) = stored_metadata(scope, mint);
+    reader
+        .insert_metadata(
+            key,
+            &ID,
+            &bytes,
+            &GLOBAL_ROOT,
+            &ledger_relative(&scope, &mint),
+        )
+        .unwrap();
 }
 fn reader(mint: Pubkey) -> (Reader, Pubkey) {
     let (root, data) = root(Pubkey::default(), mint);
     let mut reader = Reader::new();
     reader.insert(root, &ID, &data).unwrap();
-    (reader, mint)
+    labels(&mut reader, Pubkey::default(), mint);
+    (reader, root)
 }
 fn plain_mint(decimals: u8) -> Vec<u8> {
     let mut data = vec![0; Mint::LEN];
@@ -136,6 +154,7 @@ fn native_internal_and_external_queries_read_stored_metadata() {
     let (internal, data) = root(key(1), key(2));
     let mut reader = Reader::new();
     reader.insert(internal, &ID, &data).unwrap();
+    labels(&mut reader, key(1), key(2));
     assert_eq!(reader.symbol(&internal), Ok(Some("CACHED".into())));
     assert_eq!(reader.decimals(&internal), Ok(Some(3)));
     assert_eq!(reader.name(&internal), Ok("Ledger name".into()));
@@ -330,8 +349,10 @@ fn malformed_issuer_metadata_cannot_change_stored_metadata_or_balances() {
 fn runtime_account_infos_read_metadata_with_no_signers_writes_or_mutation_module() {
     let mint = key(2);
     let (root, root_data) = root(Pubkey::default(), mint);
+    let (metadata_key, metadata_data) = stored_metadata(Pubkey::default(), mint);
     let mut entries = [
         (root, ID, root_data, 10_000_000),
+        (metadata_key, ID, metadata_data, 10_000_000),
         (
             mint,
             spl_token_2022_interface::ID,
@@ -347,8 +368,8 @@ fn runtime_account_infos_read_metadata_with_no_signers_writes_or_mutation_module
         })
         .collect();
     let reader = Reader::from_account_infos(&infos).unwrap();
-    assert_eq!(reader.symbol(&mint), Ok(Some("CACHED".into())));
-    assert_eq!(reader.decimals(&mint), Ok(Some(3)));
+    assert_eq!(reader.symbol(&root), Ok(Some("CACHED".into())));
+    assert_eq!(reader.decimals(&root), Ok(Some(3)));
     drop(infos);
     assert_eq!(entries, before);
 }
@@ -356,16 +377,17 @@ fn runtime_account_infos_read_metadata_with_no_signers_writes_or_mutation_module
 #[test]
 fn existing_mint_and_absent_ledger_are_distinct_inputs() {
     let mint = key(30);
+    let ledger = ledger_pda(&Pubkey::default(), &mint).0;
     let mut reader = Reader::new();
     reader
         .insert(mint, &spl_token_2022_interface::ID, &plain_mint(6))
         .unwrap();
-    assert_eq!(reader.total_supply(&mint), Err(CoreError::MissingAccount));
+    assert_eq!(reader.total_supply(&ledger), Err(CoreError::MissingAccount));
     reader
         .insert_missing_ledger(&Pubkey::default(), &mint)
         .unwrap();
-    assert_eq!(reader.total_supply(&mint), Ok(0));
-    assert_eq!(reader.symbol(&mint), Ok(Some(String::new())));
+    assert_eq!(reader.total_supply(&ledger), Ok(0));
+    assert_eq!(reader.symbol(&ledger), Ok(Some(String::new())));
     assert!(reader
         .insert_missing_ledger(&Pubkey::default(), &mint)
         .is_err());

@@ -2,30 +2,32 @@
 
 The shared service emits the original Ledger event families through `Host::emit`.
 The core decides which events occur and in what order; each host owns encoding
-and delivery. Solana uses Anchor `#[event]` types and `emit!` program logs.
+and delivery. Solana uses Anchor `#[event]` types and program-data logs. The lean transfer
+entrypoint emits the same 104-byte Credit/Debit payloads with `sol_log_data`.
 No event queue, second accounting store or additional account layout is introduced.
 
 ## Event contract
 
 | Event | Solana fields | Emission rule |
 | --- | --- | --- |
-| `LedgerAdded` | `ledger`, `scope`, `identifier`, `name`, `symbol`, `decimals` | Once after creating the root and its Source |
-| `SubAccountAdded` | `ledger`, `parent`, `relative`, `is_credit` | A leaf becomes registered, including Source creation |
-| `SubAccountGroupAdded` | `ledger`, `parent`, `relative`, `name`, `is_credit` | A group becomes registered |
-| `SubAccountRemoved` | `ledger`, `parent`, `relative` | A registered empty leaf is removed |
-| `SubAccountGroupRemoved` | `ledger`, `parent`, `relative` | A registered empty group is removed |
+| `LedgerAdded` | `ledger`, `scope`, `identifier`, `name`, `symbol`, `decimals` | Once after creating the ledger and its Source |
+| `SubAccountAdded` | `ledger`, `parent`, `relative`, `is_credit` | Explicit leaf creation, including Source |
+| `SubAccountGroupAdded` | `ledger`, `parent`, `relative`, `name`, `is_credit` | Explicit group creation |
+| `SubAccountRemoved` | `ledger`, `parent`, `relative` | An empty leaf is closed |
+| `SubAccountGroupRemoved` | `ledger`, `parent`, `relative` | An empty group is closed |
 | `Credit` | `ledger`, `account`, `amount`, `balance` | Each credit posting in the original ancestor walk |
 | `Debit` | `ledger`, `account`, `amount`, `balance` | Each debit posting in the original ancestor walk |
 
-`ledger`, `parent` and posting `account` are absolute addresses. Structural
+`ledger`, `parent` and posting `account` are accounting storage PDAs. Structural
 `relative` identifies a child under its absolute parent; derive the child's PDA
 using both. All monetary values are `u128` raw base units.
 
 Initialization emits `SubAccountAdded` for the protected credit Source before
 `LedgerAdded`, matching the original order. Repeated matching ledger, leaf or group
-registration emits nothing. Removal of an unregistered target emits nothing.
-Funding an implicit leaf emits posting events without claiming it was registered;
-later explicit registration emits the corresponding structural event.
+creation emits nothing. Removal of an absent target emits nothing.
+First funding creates and indexes a leaf atomically, but retains the original
+posting-only event sequence. Attaching its first metadata label later emits no
+account-creation event; the accounting account already exists.
 
 Posting events follow the original depth-aligned walk: the credit side precedes
 the debit side at a shared depth. Same-polarity paths stop below their shared
@@ -50,16 +52,17 @@ This is a Solana encoding of the original semantics, not the Solidity event ABI.
 Public keys replace EVM addresses and `u128` replaces `uint256`. Solana logs do
 not supply Solidity indexed topics. The event discriminator identifies the type.
 
-Event addresses are logical Ledger identities, not root storage locations.
-For external tokens, `ledger == identifier == mint`; for native SOL both equal
-`NATIVE_SOL`. Both use zero `scope`. Accounting-only roots retain their
-authority-scoped ledger identity and application-chosen `identifier`, with their
-owning authority in `scope`. All posting and structural events use these same
-logical identities, including parent links directly beneath a token ledger.
-`name`, `symbol` and `decimals` are the stored registration snapshot, preserving
-the original Solidity creation metadata. External-token values come from the
-validated issuer source; accounting-only values come from the authorized caller.
-Native SOL stores `SOL`, `SOL`, `9`. Matching repeat registration emits no event.
+Event addresses are actual accounting storage PDAs. For external tokens,
+`identifier` is the mint while `ledger` is the ledger PDA; native SOL uses the zero
+identifier and its own ledger PDA. Both have zero `scope`. Internal ledgers use
+an authority-scoped relative identity with their owner in `scope` and the
+application-chosen `identifier`. Parent and posting addresses use the same PDA
+identity model throughout.
+
+`name`, `symbol` and `decimals` describe the initialization snapshot. External
+values come from the authenticated issuer source; internal values come from the
+authorized caller. Native SOL uses `SOL`, `SOL`, `9`. Persisting that snapshot
+requires the optional metadata PDA; matching repetition emits no event.
 
 `SubAccountGroupAdded` also includes the relative identifier. It cannot be
 reconstructed from the name when an application supplies an independent identity.

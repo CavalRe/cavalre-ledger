@@ -126,8 +126,11 @@ production storage adapter.
 ## Accounting primitives
 
 The original posting arithmetic and ancestor walk live in `transfer`.
-`transfer_debits` enforces same-custodian debit transfers and checks funds before
-self-transfer no-ops. These low-level `ledger_lib` primitives assume their caller
+`transfer_debits` authorizes the source custodian and checks funds before
+self-transfer no-ops; the recipient custodian need not sign. `transfer_resolved`
+accepts already authenticated storage endpoints, so hosts can walk direct parent
+links without deriving endpoint addresses again. Equal-polarity siblings share
+`sibling_balances` at every depth. These low-level `ledger_lib` primitives assume their caller
 has authenticated state and authority. Use `ledger::execute` as the standalone
 service boundary. There is no separate kernel crate.
 

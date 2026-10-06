@@ -4,14 +4,14 @@ use anchor_lang::{
     Discriminator,
 };
 
-/// Set only the root meta of an encoded wrap/unwrap instruction from its amount.
+/// Set only the ledger meta of an encoded wrap/unwrap instruction from its amount.
 ///
 /// Supports classic SPL, Token-2022 and native SOL. Checks the instruction kind
 /// and fixed layout without decoding/re-encoding arguments or allocating memory.
 /// Data, signer flags and all other account metas are preserved. Call before
 /// signing a transaction or using `invoke_signed` with the caller's account infos
 /// and signer seeds. The outer transaction must supply every required privilege.
-pub fn set_custody_root_writable(instruction: &mut Instruction) -> Result<(), ProgramError> {
+pub fn set_custody_ledger_writable(instruction: &mut Instruction) -> Result<(), ProgramError> {
     use crate::instruction::{Unwrap, UnwrapSol, Wrap, WrapSol};
 
     // All four layouts encode discriminator, parent, relative, amount (u64 LE).
@@ -32,8 +32,8 @@ pub fn set_custody_root_writable(instruction: &mut Instruction) -> Result<(), Pr
     if instruction.accounts.len() < account_count {
         return Err(ProgramError::NotEnoughAccountKeys);
     }
-    // Root follows payer, authority and funder in both custody account layouts.
-    // Touch only this role, including when another role shares the root's key.
+    // Ledger follows payer, authority and funder in both custody account layouts.
+    // Touch only this role, including when another role shares the ledger's key.
     instruction.accounts[3].is_writable = data[72..80] != [0; 8];
     Ok(())
 }
@@ -91,7 +91,7 @@ mod tests {
                     program_id: crate::ID,
                     data,
                     // Include remaining records and duplicate identities with distinct
-                    // role permissions, so only the root meta may change.
+                    // role permissions, so only the ledger meta may change.
                     accounts: (0..fixed + 2)
                         .map(|i| AccountMeta {
                             pubkey: parent,
@@ -114,7 +114,7 @@ mod tests {
                 expected.accounts[3].is_writable = amount != 0;
                 let pointers = (instruction.data.as_ptr(), instruction.accounts.as_ptr());
                 for _ in 0..2 {
-                    set_custody_root_writable(&mut instruction).unwrap();
+                    set_custody_ledger_writable(&mut instruction).unwrap();
                     assert_eq!(instruction, expected);
                     assert_eq!(
                         (instruction.data.as_ptr(), instruction.accounts.as_ptr()),
@@ -143,7 +143,7 @@ mod tests {
                 (short_accounts, ProgramError::NotEnoughAccountKeys),
             ] {
                 let before = invalid.clone();
-                assert_eq!(set_custody_root_writable(&mut invalid), Err(error));
+                assert_eq!(set_custody_ledger_writable(&mut invalid), Err(error));
                 assert_eq!(invalid, before);
             }
         }

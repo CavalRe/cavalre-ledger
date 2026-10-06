@@ -34,7 +34,3 @@ solana-compute-budget-interface = "=3.0.0"
 [[test]]
 name = "ledger"
 path = "ledger.rs"
-
-[[test]]
-name = "mapping"
-path = "mapping.rs"

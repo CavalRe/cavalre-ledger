@@ -1,11 +1,19 @@
 //! Standalone Ledger program. The checked-in identity is for local simulation.
 use anchor_lang::prelude::*;
+#[cfg(all(
+    feature = "mutations",
+    feature = "p-token-entrypoint",
+    target_os = "solana"
+))]
+mod entrypoint;
 #[cfg(feature = "mutations")]
 pub mod ledger;
 #[cfg(feature = "cpi")]
 pub mod ledger_cpi;
 pub mod ledger_lib;
 pub mod ledger_storage;
+#[cfg(feature = "mutations")]
+pub mod ledger_transfer;
 pub mod ledger_view;
 #[cfg(feature = "mutations")]
 use ledger::*;
@@ -37,7 +45,7 @@ pub mod cavalre_ledger_solana {
         name: String,
         credit: bool,
     ) -> Result<()> {
-        ledger::add_account(&ctx, parent, relative, name, credit, false, true)
+        ledger::add_account(&ctx, parent, relative, name, credit, false)
     }
     pub fn add_sub_account_group<'info>(
         ctx: Context<'info, LedgerAccounts<'info>>,
@@ -45,9 +53,8 @@ pub mod cavalre_ledger_solana {
         relative: Pubkey,
         name: String,
         credit: bool,
-        implicit_allowed: bool,
     ) -> Result<()> {
-        ledger::add_account(&ctx, parent, relative, name, credit, true, implicit_allowed)
+        ledger::add_account(&ctx, parent, relative, name, credit, true)
     }
     pub fn add_sub_account_by_name<'info>(
         ctx: Context<'info, LedgerAccounts<'info>>,
@@ -64,11 +71,10 @@ pub mod cavalre_ledger_solana {
         parent: Pubkey,
         name: String,
         credit: bool,
-        implicit_allowed: bool,
     ) -> Result<()> {
         let relative = ledger_lib::name_to_address(&name)
             .map_err(|_| error!(ledger_lib::LedgerError::InvalidName))?;
-        add_sub_account_group(ctx, parent, relative, name, credit, implicit_allowed)
+        add_sub_account_group(ctx, parent, relative, name, credit)
     }
     pub fn remove_sub_account<'info>(
         ctx: Context<'info, LedgerAccounts<'info>>,

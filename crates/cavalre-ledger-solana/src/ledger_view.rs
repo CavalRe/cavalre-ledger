@@ -1,9 +1,8 @@
 //! Read helpers corresponding to LedgerView.sol. Public record data can be read
 //! directly by RPC clients; on-program readers validate ownership and identity.
 use crate::ledger_lib::{
-    decode, decode_data, global_root_address, root_storage_address, to_address, LedgerError, Record,
+    decode, decode_data, global_root_address, ledger_pda, to_address, LedgerError, Record,
 };
-use crate::ledger_storage as mapping;
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::program_pack::Pack;
 use cavalre_ledger_core::{ledger_lib as core, ledger_view as view};
@@ -15,7 +14,6 @@ use spl_token_2022_interface::{
     state::Mint,
 };
 use spl_token_metadata_interface::state::TokenMetadata;
-use std::cell::RefCell;
 use std::collections::BTreeMap;
 
 pub const METAPLEX_METADATA_PROGRAM: Pubkey =
@@ -203,14 +201,11 @@ pub fn credit_balance_of(info: &AccountInfo) -> Result<u128> {
 /// runtime readers can supply an empty System-owned account for an absent PDA.
 #[derive(Default)]
 pub struct Reader {
-    // Physical inputs and logical records occupy different address spaces. A
-    // token mint and its Ledger record may both be present in the same snapshot.
-    // Deduplicate only this supplied input list; queries use the indexes below.
+    // Asset mints and accounting PDAs can both occur in one snapshot.
+    // Deduplicate supplied addresses; queries use the typed indexes below.
     inputs: Vec<Pubkey>,
     records: BTreeMap<Pubkey, Option<Record>>,
-    children: BTreeMap<(Pubkey, u32), Pubkey>,
-    locations: BTreeMap<Pubkey, Pubkey>,
-    derived: RefCell<BTreeMap<Pubkey, Pubkey>>,
+    account_metadata: BTreeMap<Pubkey, crate::ledger_lib::Metadata>,
     mints: BTreeMap<Pubkey, MintMetadata>,
     metadata: BTreeMap<Pubkey, Labels>,
 }
@@ -220,10 +215,52 @@ impl Reader {
     }
 
     pub fn from_account_infos(accounts: &[AccountInfo]) -> Result<Self> {
+        // Resolve metadata namespaces before classifying bytes. A valid UTF-8
+        // label can contain NULs and happen to resemble an accounting header.
+        let candidates: BTreeMap<_, _> = accounts
+            .iter()
+            .filter(|info| *info.owner == crate::ID)
+            .filter_map(|info| {
+                let bytes = info.try_borrow_data().ok()?;
+                decode_data(info.key, info.owner, &bytes)
+                    .ok()
+                    .map(|record| (*info.key, record))
+            })
+            .collect();
+        let mut contexts = BTreeMap::new();
+        for record in candidates.values().filter(|r| r.depth > 1) {
+            let relative = if let Some(config) = &record.ledger {
+                crate::ledger_lib::ledger_relative(&config.authority, &config.identifier)
+            } else {
+                let Some(parent) = candidates.get(&record.parent) else {
+                    continue;
+                };
+                let Some(relative) = record
+                    .child_index
+                    .checked_sub(1)
+                    .and_then(|i| parent.children.get(i as usize))
+                else {
+                    continue;
+                };
+                *relative
+            };
+            contexts.insert(
+                crate::ledger_lib::metadata_address(&record.parent, &relative).0,
+                (record.parent, relative),
+            );
+        }
         let mut reader = Self::new();
         for info in accounts {
             if *info.owner == anchor_lang::system_program::ID && info.data_is_empty() {
                 reader.insert_missing(*info.key)?;
+            } else if let Some((parent, relative)) = contexts.get(info.key) {
+                reader.insert_metadata(
+                    *info.key,
+                    info.owner,
+                    &info.try_borrow_data()?,
+                    parent,
+                    relative,
+                )?;
             } else {
                 reader.insert(*info.key, info.owner, &info.try_borrow_data()?)?;
             }
@@ -239,43 +276,11 @@ impl Reader {
         require!(!self.contains(&address), LedgerError::InvalidAccount);
         if *owner == crate::ID {
             let record = decode_data(&address, owner, data)?;
-            if !record.registered && record.depth > 2 {
-                self.inputs.push(address);
-                return Ok(());
-            }
-            let logical = record.address();
             require!(
-                !self.records.contains_key(&logical),
+                !self.records.contains_key(&address),
                 LedgerError::InvalidAccount
             );
-            self.locations.insert(logical, address);
-            for index in 0..record.children {
-                let relative = mapping::child(data, index)?.ok_or(LedgerError::InvalidAccount)?;
-                self.children.insert((logical, index), relative);
-            }
-            for index in 0..mapping::len(data) {
-                let (key, value) = mapping::entry_with_parent(data, index, &record, &logical)?;
-                match value {
-                    mapping::Value::Leaf(leaf) => {
-                        require!(
-                            leaf.parent == logical
-                                && leaf.root == record.root
-                                && leaf.address() == key,
-                            LedgerError::InvalidAccount
-                        );
-                        require!(
-                            !self.records.contains_key(&key),
-                            LedgerError::InvalidAccount
-                        );
-                        self.records.insert(key, Some(leaf));
-                        self.locations.insert(key, address);
-                    }
-                    mapping::Value::Group(storage) => {
-                        self.locations.insert(key, storage);
-                    }
-                }
-            }
-            self.records.insert(logical, Some(record));
+            self.records.insert(address, Some(record));
         } else if *owner == METAPLEX_METADATA_PROGRAM {
             let labels = metaplex_labels(&address, data)?;
             self.metadata.insert(address, labels);
@@ -302,12 +307,8 @@ impl Reader {
     /// Mark a ledger absent only after its physical root storage was confirmed
     /// absent. The mint itself may exist and may be present in this reader.
     pub fn insert_missing_ledger(&mut self, scope: &Pubkey, identifier: &Pubkey) -> Result<()> {
-        let storage = root_storage_address(scope, identifier).0;
-        let address = if *scope == Pubkey::default() {
-            *identifier
-        } else {
-            storage
-        };
+        let storage = ledger_pda(scope, identifier).0;
+        let address = storage;
         require!(!self.contains(&storage), LedgerError::InvalidAccount);
         require!(
             !self.records.contains_key(&address),
@@ -363,30 +364,44 @@ impl Reader {
         amount: u128,
     ) -> std::result::Result<Vec<Pubkey>, core::Error> {
         let mut addresses = view::transfer_writable_accounts(self, ledger, from, to, amount)?;
-        for address in &mut addresses {
-            if let Some(storage) = self.locations.get(address) {
-                *address = *storage;
-            } else if let Some(parent) = self.derived.borrow().get(address) {
-                *address = *self
-                    .locations
-                    .get(parent)
-                    .ok_or(core::Error::MissingAccount)?;
-            } else {
-                return Err(core::Error::MissingAccount);
+        if amount != 0 {
+            for child in [from, to] {
+                let key = to_address(&crate::ID, &child.parent, &child.relative).0;
+                if self.records.get(&key).is_some_and(Option::is_none)
+                    && !addresses.contains(&child.parent)
+                {
+                    addresses.push(child.parent);
+                }
             }
         }
-        addresses.sort_unstable();
-        addresses.dedup();
         Ok(addresses)
+    }
+    pub fn insert_metadata(
+        &mut self,
+        address: Pubkey,
+        owner: &Pubkey,
+        data: &[u8],
+        parent: &Pubkey,
+        relative: &Pubkey,
+    ) -> Result<()> {
+        require!(!self.contains(&address), LedgerError::InvalidAccount);
+        let metadata =
+            crate::ledger_lib::decode_metadata_data(&address, owner, data, parent, relative)?;
+        let account = to_address(&crate::ID, parent, relative).0;
+        self.account_metadata.insert(account, metadata);
+        self.inputs.push(address);
+        Ok(())
     }
     pub fn name(&self, absolute: &Pubkey) -> std::result::Result<String, core::Error> {
         view::name(self, absolute)
     }
     pub fn symbol(&self, absolute: &Pubkey) -> std::result::Result<Option<String>, core::Error> {
-        view::symbol(self, absolute)
+        let ledger = view::ledger(self, absolute)?.unwrap_or(*absolute);
+        view::symbol(self, &ledger)
     }
     pub fn decimals(&self, absolute: &Pubkey) -> std::result::Result<Option<u8>, core::Error> {
-        view::decimals(self, absolute)
+        let ledger = view::ledger(self, absolute)?.unwrap_or(*absolute);
+        view::decimals(self, &ledger)
     }
 
     fn contains(&self, address: &Pubkey) -> bool {
@@ -488,9 +503,7 @@ impl Reader {
 }
 impl core::AddressDerivation<Pubkey> for Reader {
     fn to_address(&self, parent: &Pubkey, relative: &Pubkey) -> Pubkey {
-        let key = to_address(parent, relative);
-        self.derived.borrow_mut().insert(key, *parent);
-        key
+        to_address(&crate::ID, parent, relative).0
     }
 }
 impl core::ReadStore<Pubkey> for Reader {
@@ -498,51 +511,64 @@ impl core::ReadStore<Pubkey> for Reader {
         &self,
         address: &Pubkey,
     ) -> std::result::Result<Option<core::Account<Pubkey, &str>>, core::Error> {
-        let record = match self.records.get(address) {
-            Some(record) => record,
-            None => {
-                // A supplied container proves absence of an entry. A group
-                // reference whose container was omitted does not prove absence.
-                if !self.locations.contains_key(address) {
-                    if let Some(parent) = self.derived.borrow().get(address) {
-                        if self
-                            .records
-                            .get(parent)
-                            .is_some_and(|r| r.as_ref().is_some_and(|r| r.kind < 2))
-                        {
-                            return Ok(None);
-                        }
-                    }
-                }
-                return Err(core::Error::MissingAccount);
-            }
-        };
+        let record = self
+            .records
+            .get(address)
+            .ok_or(core::Error::MissingAccount)?;
         let Some(record) = record else {
             return Ok(None);
         };
+        let relative = if record.depth == 1 {
+            global_root_address().0
+        } else if let Some(config) = &record.ledger {
+            config.identifier
+        } else {
+            let parent = self
+                .records
+                .get(&record.parent)
+                .and_then(|r| r.as_ref())
+                .ok_or(core::Error::MissingAccount)?;
+            let relative = *record
+                .child_index
+                .checked_sub(1)
+                .and_then(|i| parent.children.get(i as usize))
+                .ok_or(core::Error::InvalidIndex)?;
+            if to_address(&crate::ID, &record.parent, &relative).0 != *address
+                || parent.depth.checked_add(1) != Some(record.depth)
+                || parent.kind >= 2
+                || record.custodian
+                    != if record.depth == 3 {
+                        *address
+                    } else {
+                        parent.custodian
+                    }
+            {
+                return Err(core::Error::InvalidAccount);
+            }
+            relative
+        };
+        let mut account = record.borrowed(relative, self.account_metadata.get(address));
         if record.depth == 1 {
-            // decode_data authenticated Root's fixed identity and fields.
-            return Ok(Some(record.borrowed()));
+            account.name = crate::ledger_lib::ROOT_NAME;
         }
-        let root = self
-            .records
-            .get(&record.root)
-            .and_then(|r| r.as_ref())
-            .ok_or(core::Error::MissingAccount)?;
-        if root.depth != 2 || root.kind != 0 || !root.registered || root.root != record.root {
-            return Err(core::Error::InvalidAccount);
-        }
-        if record.depth == 2 && record.root != *address {
-            return Err(core::Error::InvalidAccount);
-        }
-        Ok(Some(record.borrowed()))
+        Ok(Some(account))
     }
 }
 impl view::ChildIndex<Pubkey> for Reader {
     fn child_at(&self, parent: &Pubkey, index: u32) -> std::result::Result<Pubkey, core::Error> {
-        self.children
-            .get(&(*parent, index))
-            .copied()
-            .ok_or(core::Error::IncompleteIndex)
+        let record = self
+            .records
+            .get(parent)
+            .and_then(|r| r.as_ref())
+            .ok_or(core::Error::MissingAccount)?;
+        let relative = *record
+            .children
+            .get(index as usize)
+            .ok_or(core::Error::InvalidIndex)?;
+        Ok(if record.depth == 1 {
+            to_address(&crate::ID, parent, &relative).0
+        } else {
+            relative
+        })
     }
 }

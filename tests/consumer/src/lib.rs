@@ -56,7 +56,7 @@ pub fn process(id: &Pubkey, accounts: &[AccountInfo], data: &[u8]) -> ProgramRes
             .collect(),
     };
     if custody.is_some() {
-        cavalre_ledger_solana::ledger_cpi::set_custody_root_writable(&mut instruction)?;
+        cavalre_ledger_solana::ledger_cpi::set_custody_ledger_writable(&mut instruction)?;
     }
     invoke_signed(&instruction, rest, &[&[b"app", user.key.as_ref(), &[bump]]])
 }

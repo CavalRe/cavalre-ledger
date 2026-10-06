@@ -19,7 +19,6 @@ fn named(
                 parent: ap(parent),
                 name: name.into(),
                 credit: kind.is_credit(),
-                implicit_allowed: true,
             },
             &rest,
         )
@@ -46,16 +45,26 @@ fn named_source_resolves_the_initialized_protected_credit_account() {
         (internal, internal_source),
         (external.root, external.source),
     ] {
-        assert_eq!(sa(to_address_by_name(&ap(root), "Source").unwrap()), source);
+        assert_eq!(
+            sa(to_address_by_name(&ledger::ID, &ap(root), "Source")
+                .unwrap()
+                .0),
+            source
+        );
         assert_eq!(child(root, relative), source);
         let record = h.record(source);
-        assert!(record.registered);
+        assert!(record.child_index > 0);
         assert_eq!(
-            (record.relative, record.kind, record.name.as_str()),
+            (
+                h.record(root).children[(record.child_index - 1) as usize],
+                record.kind,
+                h.labels(source).name.as_str()
+            ),
             (ap(relative), 3, "Source")
         );
         assert!(h
-            .account(&child(root, Address::new_from_array([83; 32])))
+            .svm
+            .get_account(&child(root, Address::new_from_array([83; 32])))
             .is_none());
         // A named creation request cannot bypass the reserved Source check,
         // even when its metadata matches or the root owner is the signer.
@@ -108,7 +117,10 @@ fn named_and_explicit_creation_share_records_events_and_idempotence() {
         let name = "é".repeat(32); // Maximum length is bytes, not characters.
         let relative = sa(name_to_address(&name).unwrap());
         let absolute = child(root, relative);
-        assert_eq!(absolute, sa(to_address_by_name(&ap(root), &name).unwrap()));
+        assert_eq!(
+            absolute,
+            sa(to_address_by_name(&ledger::ID, &ap(root), &name).unwrap().0)
+        );
         let by_name = named(&a, root, a.key(0), root, &name, kind);
         let explicit = if kind.is_group() {
             ix(
@@ -118,7 +130,6 @@ fn named_and_explicit_creation_share_records_events_and_idempotence() {
                     relative: ap(relative),
                     name: name.clone(),
                     credit: kind.is_credit(),
-                    implicit_allowed: true,
                 },
                 &[absolute],
             )
@@ -131,27 +142,30 @@ fn named_and_explicit_creation_share_records_events_and_idempotence() {
             events::event_bytes(&result_a.logs),
             events::event_bytes(&result_b.logs)
         );
-        let slot = root; // Child vector lives in the parent container.
+        let slot = root;
         for key in [root, absolute, slot] {
-            assert_eq!(a.account(&key), b.account(&key));
+            assert_eq!(a.svm.get_account(&key), b.svm.get_account(&key));
         }
-        assert_eq!(a.account(&a.key(0)), b.account(&b.key(0)));
+        assert_eq!(a.svm.get_account(&a.key(0)), b.svm.get_account(&b.key(0)));
         // Either form can repeat the other's registration with no Ledger writes,
         // events or rent. No slot input is required for matching registration.
-        let before = [root, absolute, slot].map(|k| a.account(&k));
+        let before = [root, absolute, slot].map(|k| a.svm.get_account(&k));
         for repeat in [by_name.clone(), explicit] {
             let mut repeat = a.indexed(repeat);
             for meta in repeat.accounts.iter_mut().skip(2) {
                 meta.is_writable = false;
             }
-            let lamports = a.account(&a.key(0)).unwrap().lamports;
+            let lamports = a.svm.get_account(&a.key(0)).unwrap().lamports;
             let result = run_raw(&mut a, &[0], repeat).unwrap();
             assert!(events::event_bytes(&result.logs).is_empty());
             assert_eq!(
-                a.account(&a.key(0)).unwrap().lamports + result.fee,
+                a.svm.get_account(&a.key(0)).unwrap().lamports + result.fee,
                 lamports
             );
-            assert_eq!([root, absolute, slot].map(|k| a.account(&k)), before);
+            assert_eq!(
+                [root, absolute, slot].map(|k| a.svm.get_account(&k)),
+                before
+            );
         }
         let opposite = if kind.is_group() {
             if kind.is_credit() {
@@ -197,7 +211,7 @@ fn named_leaves_preserve_implicit_balances_and_parent_scoping() {
         &[],
     );
     succeeds(&mut h, &[0], fund);
-    assert!(!h.record(absolute).registered);
+    assert!(h.record(absolute).child_index > 0);
     let register = named(
         &h,
         root,
@@ -207,7 +221,7 @@ fn named_leaves_preserve_implicit_balances_and_parent_scoping() {
         AccountKind::DebitLedger,
     );
     succeeds(&mut h, &[0], register);
-    assert!(h.record(absolute).registered);
+    assert!(h.record(absolute).child_index > 0);
     assert_eq!(h.record(absolute).debit, 17);
     let register_elsewhere = named(
         &h,

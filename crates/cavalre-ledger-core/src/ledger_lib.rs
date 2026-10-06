@@ -319,12 +319,42 @@ pub fn transfer<A: Copy + Eq>(
     to: Endpoint<A>,
     amount: u128,
 ) -> Result<alloc::vec::Vec<BalanceChange<A>>, Error> {
+    transfer_resolved(
+        store,
+        ledger_address,
+        ResolvedEndpoint {
+            address: addresses.to_address(&from.flags.parent, &from.relative),
+            flags: from.flags,
+        },
+        ResolvedEndpoint {
+            address: addresses.to_address(&to.flags.parent, &to.relative),
+            flags: to.flags,
+        },
+        amount,
+    )
+}
+
+/// Endpoints whose storage identity and authority were already authenticated.
+#[derive(Clone, Copy, Debug)]
+pub struct ResolvedEndpoint<A> {
+    pub address: A,
+    pub flags: Flags<A>,
+}
+
+/// The same posting walk, without deriving an already authenticated endpoint.
+pub fn transfer_resolved<A: Copy + Eq>(
+    store: &impl AccountingStore<A>,
+    ledger_address: &A,
+    from: ResolvedEndpoint<A>,
+    to: ResolvedEndpoint<A>,
+    amount: u128,
+) -> Result<alloc::vec::Vec<BalanceChange<A>>, Error> {
     let mut changes = alloc::vec::Vec::new();
     if from.flags.account_kind.is_group() || to.flags.account_kind.is_group() {
         return Err(Error::InvalidLedgerAccount);
     }
-    let mut from_address = addresses.to_address(&from.flags.parent, &from.relative);
-    let mut to_address = addresses.to_address(&to.flags.parent, &to.relative);
+    let mut from_address = from.address;
+    let mut to_address = to.address;
     if from_address == to_address {
         return Ok(changes);
     }
@@ -332,10 +362,40 @@ pub fn transfer<A: Copy + Eq>(
     let to_credit = to.flags.account_kind.is_credit();
     let mut from_flags = from.flags;
     let mut to_flags = to.flags;
-    let mut depth = from_flags.depth.max(to_flags.depth);
-    if from_flags.depth < 3 || to_flags.depth < 3 {
+    if from.flags.depth < 3 || to.flags.depth < 3 {
         return Err(Error::InvalidLedgerAccount);
     }
+    if from_flags.parent == to_flags.parent
+        && from_flags.depth == to_flags.depth
+        && from_credit == to_credit
+    {
+        let from_before = store.balances(&from.address)?;
+        let to_before = store.balances(&to.address)?;
+        let (from_after, to_after) = sibling_balances(from_before, to_before, from_credit, amount)?;
+        let side = if from_credit {
+            BalanceSide::Credit
+        } else {
+            BalanceSide::Debit
+        };
+        changes.extend_from_slice(&[
+            BalanceChange {
+                absolute: from.address,
+                before: from_before,
+                after: from_after,
+                credit: Some(side),
+                debit: None,
+            },
+            BalanceChange {
+                absolute: to.address,
+                before: to_before,
+                after: to_after,
+                credit: None,
+                debit: Some(side),
+            },
+        ]);
+        return Ok(changes);
+    }
+    let mut depth = from_flags.depth.max(to_flags.depth);
     // At most both paths up to the root, with the common root counted once.
     // Reserve once: a bump allocator cannot recycle Vec growth allocations.
     changes.reserve_exact(usize::from(from.flags.depth) + usize::from(to.flags.depth) - 3);
@@ -370,6 +430,44 @@ pub fn transfer<A: Copy + Eq>(
             return Ok(changes);
         }
         depth -= 1;
+    }
+}
+
+/// Checked postings when equal-polarity siblings share their parent. The common
+/// ancestor cancels, independent of account depth or custody role.
+#[inline(always)]
+pub fn sibling_balances(
+    mut from: Balances,
+    mut to: Balances,
+    credit: bool,
+    amount: u128,
+) -> Result<(Balances, Balances), Error> {
+    if credit {
+        (from.credit, to.credit) = sibling_amounts(from.credit, to.credit, true, amount)?;
+    } else {
+        (from.debit, to.debit) = sibling_amounts(from.debit, to.debit, false, amount)?;
+    }
+    Ok((from, to))
+}
+
+/// Post only the affected column; packed stores need not load the other one.
+#[inline(always)]
+pub fn sibling_amounts(
+    from: u128,
+    to: u128,
+    credit: bool,
+    amount: u128,
+) -> Result<(u128, u128), Error> {
+    if credit {
+        Ok((
+            from.checked_add(amount).ok_or(Error::Overflow)?,
+            to.checked_sub(amount).ok_or(Error::InsufficientBalance)?,
+        ))
+    } else {
+        Ok((
+            from.checked_sub(amount).ok_or(Error::InsufficientBalance)?,
+            to.checked_add(amount).ok_or(Error::Overflow)?,
+        ))
     }
 }
 
@@ -452,7 +550,7 @@ pub fn enforce_is_custodian<A: Copy + Eq>(
     Ok(())
 }
 
-/// Public same-custodian debit transfer, including checks before self no-ops.
+/// Public debit transfer authorized by the source custodian, including checks before self no-ops.
 pub fn transfer_debits<A: Copy + Eq>(
     store: &impl AccountingStore<A>,
     addresses: &impl AddressDerivation<A>,
@@ -468,7 +566,6 @@ pub fn transfer_debits<A: Copy + Eq>(
         return Err(Error::InvalidLedgerAccount);
     }
     enforce_is_custodian(store, ledger_address, from, authority)?;
-    enforce_is_custodian(store, ledger_address, to, authority)?;
     let absolute = addresses.to_address(&from.flags.parent, &from.relative);
     if store.balances(&absolute)?.debit < amount {
         return Err(Error::InsufficientBalance);

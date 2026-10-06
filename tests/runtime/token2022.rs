@@ -13,7 +13,7 @@ use spl_token_2022_interface::{
 };
 
 fn data(h: &mut Harness, address: Address, bytes: Vec<u8>) {
-    let mut account = h.account(&address).unwrap();
+    let mut account = h.svm.get_account(&address).unwrap();
     account.lamports = h.svm.minimum_balance_for_rent_exemption(bytes.len()) + 10_000_000;
     account.data = bytes;
     h.svm.set_account(address, account).unwrap();
@@ -63,7 +63,7 @@ pub(super) fn initialized(h: &mut Harness, metadata: bool) -> External {
                 "https://example.invalid/token".into(),
             ),
         );
-        let account = h.account(&e.mint).unwrap();
+        let account = h.svm.get_account(&e.mint).unwrap();
         let state = StateWithExtensions::<Mint2022>::unpack(&account.data).unwrap();
         assert!(state
             .get_extension_types()
@@ -100,7 +100,7 @@ fn plain_and_metadata_tokens_settle_directly_and_through_cpi() {
             let e = initialized(&mut h, metadata);
             let i = e.registration(&h);
             succeeds(&mut h, &[0], i);
-            assert_eq!(h.account(&e.vault).unwrap().owner, TOKEN_2022);
+            assert_eq!(h.svm.get_account(&e.vault).unwrap().owner, TOKEN_2022);
             let app = Address::new_from_array([62; 32]);
             let authority = if cpi {
                 h.svm
@@ -145,7 +145,7 @@ fn plain_and_metadata_tokens_settle_directly_and_through_cpi() {
                 .iter()
                 .any(|line| line.contains(&format!("Program {TOKEN_2022} invoke"))));
             assert_eq!((h.token(e.wallet), h.token(e.vault)), (900, 100));
-            assert!(!h.record(child(parent, a)).registered);
+            assert!(h.record(child(parent, a)).child_index > 0);
             let i = call(
                 &h,
                 transfer(&h, e.root, authority, (parent, a), (parent, b), 40, &[]),
@@ -196,7 +196,10 @@ fn metadata_views_execute_in_a_consumer_without_calling_ledger() {
         .unwrap();
     let read = Instruction {
         program_id: consumer,
-        accounts: vec![AccountMeta::new_readonly(e.root_storage, false)],
+        accounts: vec![
+            AccountMeta::new_readonly(e.root_storage, false),
+            AccountMeta::new_readonly(h.metadata_key(e.root), false),
+        ],
         data: [b"metadata".as_slice(), e.root.as_ref()].concat(),
     };
     for symbol in ["META", "UPDATED"] {
@@ -211,23 +214,23 @@ fn metadata_views_execute_in_a_consumer_without_calling_ledger() {
             succeeds(&mut h, &[0], ix);
         }
         let before = (
-            h.account(&e.root_storage).unwrap(),
-            h.account(&e.mint).unwrap(),
+            h.svm.get_account(&e.root_storage).unwrap(),
+            h.svm.get_account(&e.mint).unwrap(),
         );
         let result = run(&mut h, &[0], read.clone()).unwrap();
         assert_eq!(result.return_data.program_id, consumer);
         let fields =
             <(Option<String>, Option<u8>)>::deserialize(&mut &result.return_data.data[..]).unwrap();
         assert_eq!(fields, (Some("META".into()), Some(6)));
-        assert_eq!(h.record(e.root).name, "Metadata token");
+        assert_eq!(h.labels(e.root).name, "Metadata token");
         assert!(!result
             .logs
             .iter()
             .any(|line| line.contains(&format!("Program {} invoke", cavalre_ledger_solana::ID))));
         assert_eq!(
             (
-                h.account(&e.root_storage).unwrap(),
-                h.account(&e.mint).unwrap()
+                h.svm.get_account(&e.root_storage).unwrap(),
+                h.svm.get_account(&e.mint).unwrap()
             ),
             before
         );
@@ -235,41 +238,50 @@ fn metadata_views_execute_in_a_consumer_without_calling_ledger() {
     // Stored metadata is readable at a non-root account and defaults at a
     // confirmed absent account, without invoking Ledger or allocating a record.
     let absent = child(e.root, h.key(2));
-    assert!(h.account(&absent).is_none());
+    assert!(h.svm.get_account(&absent).is_none());
+    let ledger_metadata = h.metadata_key(e.root);
     for target in [e.source, absent] {
-        let before = [target, e.root_storage].map(|key| h.account(&key));
+        let before = [target, e.root_storage].map(|key| h.svm.get_account(&key));
         let result = run(
             &mut h,
             &[0],
             Instruction {
                 program_id: consumer,
-                accounts: if target == e.source {
-                    vec![AccountMeta::new_readonly(e.root_storage, false)]
-                } else {
-                    vec![
-                        AccountMeta::new_readonly(target, false),
-                        AccountMeta::new_readonly(e.root_storage, false),
-                    ]
-                },
+                accounts: vec![
+                    AccountMeta::new_readonly(target, false),
+                    AccountMeta::new_readonly(e.root_storage, false),
+                    AccountMeta::new_readonly(ledger_metadata, false),
+                ],
                 data: [b"metadata".as_slice(), target.as_ref()].concat(),
             },
         )
         .unwrap();
         let fields =
             <(Option<String>, Option<u8>)>::deserialize(&mut &result.return_data.data[..]).unwrap();
-        assert_eq!(fields, (Some(String::new()), Some(0)));
+        assert_eq!(
+            fields,
+            if target == absent {
+                (Some(String::new()), Some(0))
+            } else {
+                (Some("META".into()), Some(6))
+            }
+        );
         assert_eq!(result.return_data.program_id, consumer);
         assert!(!result
             .logs
             .iter()
             .any(|line| line.contains(&format!("Program {} invoke", cavalre_ledger_solana::ID))));
-        assert_eq!([target, e.root_storage].map(|key| h.account(&key)), before);
+        assert_eq!(
+            [target, e.root_storage].map(|key| h.svm.get_account(&key)),
+            before
+        );
     }
 }
 
 // Deliberately constructed extension states exercise admission, not mint permissions.
 fn mint_extension(h: &mut Harness, e: &External, extension: ExtensionType) {
-    let base = Mint2022::unpack(&h.account(&e.mint).unwrap().data[..Mint2022::LEN]).unwrap();
+    let base =
+        Mint2022::unpack(&h.svm.get_account(&e.mint).unwrap().data[..Mint2022::LEN]).unwrap();
     let mut bytes =
         vec![0; ExtensionType::try_calculate_account_len::<Mint2022>(&[extension]).unwrap()];
     let mut state = StateWithExtensionsMut::<Mint2022>::unpack_uninitialized(&mut bytes).unwrap();
@@ -319,7 +331,7 @@ fn incompatible_mints_reject_registration_without_allocating_ledger_state() {
         let i = e.registration(&h);
         rejects(&mut h, &[0], i, LedgerError::UnsupportedToken.into());
         for address in [e.root_storage, e.source, e.vault] {
-            assert!(h.account(&address).is_none());
+            assert!(h.svm.get_account(&address).is_none());
         }
     }
 }
@@ -362,7 +374,7 @@ fn mint_and_account_extensions_are_rechecked_on_each_settlement() {
     let user = h.key(2);
     let i = e.movement(&h, (h.key(0), 1), (parent, user), 100, true, &[]);
     succeeds(&mut h, &[0, 1], i);
-    let original = h.account(&e.mint).unwrap();
+    let original = h.svm.get_account(&e.mint).unwrap();
     mint_extension(&mut h, &e, ExtensionType::PermanentDelegate);
     for deposit in [false, true] {
         let i = e.movement(&h, (h.key(0), 1), (parent, user), 1, deposit, &[]);
@@ -370,7 +382,7 @@ fn mint_and_account_extensions_are_rechecked_on_each_settlement() {
     }
     h.svm.set_account(e.mint, original).unwrap();
     for address in [e.wallet, e.vault] {
-        let original = h.account(&address).unwrap();
+        let original = h.svm.get_account(&address).unwrap();
         let base = Account2022::unpack(&original.data[..Account2022::LEN]).unwrap();
         let mut bytes = vec![
             0;
@@ -430,7 +442,7 @@ fn token_program_must_match_mint_vault_and_wallet() {
         ErrorCode::ConstraintMintTokenProgram.into(),
     );
     for address in [e.wallet, e.vault] {
-        let original = h.account(&address).unwrap();
+        let original = h.svm.get_account(&address).unwrap();
         let mut substituted = original.clone();
         substituted.owner = TOKEN;
         h.svm.set_account(address, substituted).unwrap();
@@ -479,7 +491,7 @@ fn failed_token2022_settlement_and_late_commit_roll_back() {
     succeeds(&mut h, &[0], thaw);
     let mut readonly = valid.clone();
     for account in &mut readonly.accounts {
-        if account.pubkey == h.storage(parent) {
+        if account.pubkey == parent {
             account.is_writable = false;
         }
     }
@@ -489,7 +501,7 @@ fn failed_token2022_settlement_and_late_commit_roll_back() {
         readonly,
         LedgerError::InvalidAccount.into(),
     );
-    assert!(h.maybe_record(child(parent, user)).is_none());
+    assert!(h.svm.get_account(&child(parent, user)).is_none());
     assert_eq!((h.token(e.wallet), h.token(e.vault)), (1000, 0));
     succeeds(&mut h, &[0, 1], valid);
 }

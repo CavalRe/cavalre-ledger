@@ -9,37 +9,6 @@ const COMPUTE_UNITS: u32 = 300_000;
 // Sampling range for these transaction shapes, not a Ledger policy.
 const PROFILE_DEPTHS: std::ops::RangeInclusive<u8> = 4..=13;
 
-#[test]
-fn existing_leaf_transfer_keeps_address_validation_below_20k_cu() {
-    let mut h = Harness::new();
-    let e = External::new(&mut h, 110, 0);
-    let parent = branch(&mut h, e.root, 0, true);
-    let alice = h.key(0);
-    let bob = h.key(1);
-    for (relative, amount) in [(alice, 100), (bob, 1)] {
-        let deposit = e.movement(&h, (alice, 0), (parent, relative), amount, true, &[]);
-        succeeds(&mut h, &[0], deposit);
-    }
-    let unchanged = [e.root_storage, e.vault].map(|key| (key, h.account(&key).unwrap()));
-    let mut call = transfer(&h, e.root, alice, (parent, alice), (parent, bob), 10, &[]);
-    for meta in &mut call.accounts {
-        if meta.pubkey == e.root_storage {
-            meta.is_writable = false;
-        }
-    }
-    let result = run(&mut h, &[0], call).unwrap();
-    eprintln!(
-        "existing mapped SPL leaves: {} CU",
-        result.compute_units_consumed
-    );
-    assert!(result.compute_units_consumed < 20_000, "{result:?}");
-    assert_eq!(h.record(child(parent, alice)).debit, 90);
-    assert_eq!(h.record(child(parent, bob)).debit, 11);
-    for (key, before) in unchanged {
-        assert_eq!(h.account(&key).unwrap(), before);
-    }
-}
-
 struct Profile {
     h: Harness,
     rows: Vec<serde_json::Value>,
@@ -135,7 +104,7 @@ impl Profile {
                 // Exercise the real lookup-table program, including warm-up. Setup
                 // costs are separate from the measured Ledger operation, not hidden.
                 let payer = self.h.key(0);
-                let payer_before = self.h.account(&payer).unwrap().lamports;
+                let payer_before = self.h.svm.get_account(&payer).unwrap().lamports;
                 let slot = self.h.svm.get_sysvar::<anchor_lang::prelude::Clock>().slot;
                 let mut setup = Vec::new();
                 let mut table = self.lookup.take().unwrap_or_else(|| {
@@ -169,7 +138,8 @@ impl Profile {
                     setup_fee += result.fee;
                     setup_compute += result.compute_units_consumed;
                 }
-                setup_rent = payer_before - self.h.account(&payer).unwrap().lamports - setup_fee;
+                setup_rent =
+                    payer_before - self.h.svm.get_account(&payer).unwrap().lamports - setup_fee;
                 self.h.svm.warp_to_slot(slot + 1);
                 let message = v0::Message::try_compile(
                     &payer,
@@ -191,7 +161,7 @@ impl Profile {
         let bytes = wincode::serialize(&tx).unwrap().len();
         let before: Vec<_> = account_keys
             .iter()
-            .map(|key| (*key, self.h.account(key)))
+            .map(|key| (*key, self.h.svm.get_account(key)))
             .collect();
         let mut row = serde_json::json!({"mode":self.mode,"depth":self.depth,"seed":self.seed,
             "operation":operation,"bytes":bytes,"legacy_bytes":legacy_bytes,
@@ -223,19 +193,26 @@ impl Profile {
             .as_ref()
             .unwrap()
             .lamports;
-        let rent = old_payer - self.h.account(&self.h.key(0)).unwrap().lamports - meta.fee;
-        row["rent_lamports"] = rent.into();
-        let mut allocated_rent = 0;
+        let rent = i128::from(old_payer)
+            - i128::from(self.h.svm.get_account(&self.h.key(0)).unwrap().lamports)
+            - i128::from(meta.fee);
+        row["rent_lamports"] = i64::try_from(rent).unwrap().into();
+        let mut allocated_rent = 0i128;
         for (key, old) in before {
-            let mut new = self.h.account(&key);
+            let mut new = self.h.svm.get_account(&key);
             if result.is_err() {
                 if key == self.h.key(0) {
                     new.as_mut().unwrap().lamports += meta.fee;
                 }
                 assert_eq!(new, old, "failed profile changed {key}");
-            } else if let Some(new) = new.filter(|a| a.owner == sa(ledger::ID)) {
-                assert!(new.data.len() >= ledger::ledger_storage::HEADER);
-                allocated_rent += new.lamports.saturating_sub(old.map_or(0, |a| a.lamports));
+            } else if key != self.h.key(0) {
+                let previous = old.as_ref().map_or(0, |a| a.lamports);
+                let current = new.as_ref().map_or(0, |a| a.lamports);
+                if new.as_ref().is_some_and(|a| a.owner == sa(ledger::ID))
+                    || old.as_ref().is_some_and(|a| a.owner == sa(ledger::ID))
+                {
+                    allocated_rent += i128::from(current) - i128::from(previous);
+                }
             }
         }
         if result.is_ok() {
@@ -263,7 +240,6 @@ impl Profile {
                     relative: ap(relative),
                     name: "G".repeat(64),
                     credit: false,
-                    implicit_allowed: true,
                 },
                 &remaining(root, &rest),
             ),
@@ -390,7 +366,7 @@ impl Profile {
             if !self.run(label, i, external.is_some()) {
                 return;
             }
-            assert!(!self.h.record(child(parents[0], a)).registered);
+            assert!(self.h.record(child(parents[0], a)).child_index > 0);
         }
         let mut all = paths[0].clone();
         all.extend(&paths[1]);
@@ -501,7 +477,6 @@ impl Profile {
                         relative: ap(relative),
                         name: "C".repeat(64),
                         credit: true,
-                        implicit_allowed: true,
                     },
                     &remaining(root, &rest),
                 );
@@ -639,7 +614,7 @@ fn deeper_trees_allow_creation_conversion_and_posting() {
         assert!(p.run("remove_leaf", i, false));
         assert!(p.group(root, parent, relative, &path));
         assert_eq!(p.h.record(child(parent, relative)).kind, 0);
-        assert_eq!(p.h.record(parent).children, 1);
+        assert_eq!(p.h.record(parent).children.len(), 1);
 
         let a = Address::new_from_array([91; 32]);
         let b = Address::new_from_array([92; 32]);
@@ -664,7 +639,7 @@ fn deeper_trees_allow_creation_conversion_and_posting() {
         let from = p.h.record(child(parent, a));
         let to = p.h.record(child(parent, b));
         assert_eq!((from.depth, to.depth), (14, 14));
-        assert!(!from.registered && !to.registered);
+        assert!(from.child_index > 0 && to.child_index > 0);
         assert_eq!((from.debit, to.debit), (80, 20));
         assert_eq!(p.h.record(source).credit, 100);
         assert_eq!(

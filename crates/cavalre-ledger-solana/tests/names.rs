@@ -3,7 +3,7 @@ use cavalre_ledger_core::ledger_lib as core;
 use cavalre_ledger_solana::{ledger_lib::*, ID};
 
 #[test]
-fn name_identity_matches_keccak_and_explicit_logical_derivation() {
+fn name_identity_matches_keccak_and_explicit_pda_derivation() {
     // Published Keccak-256("abc") vector, not SHA3-256 or an EVM truncation.
     let hex = "4e03657aea45a94fc7d47ba826c8d667c0d1e6e33a64a036ec44f58fa12d6c45";
     let expected = Pubkey::new_from_array(std::array::from_fn(|i| {
@@ -11,20 +11,26 @@ fn name_identity_matches_keccak_and_explicit_logical_derivation() {
     }));
     assert_eq!(name_to_address("abc"), Ok(expected));
     let parent = Pubkey::new_from_array([7; 32]);
-    let named = to_address_by_name(&parent, "abc").unwrap();
-    assert_eq!(named, to_address(&parent, &expected));
+    let named = to_address_by_name(&ID, &parent, "abc").unwrap();
+    assert_eq!(named, to_address(&ID, &parent, &expected));
     assert_eq!(
-        core::to_address_by_name(&Addresses, &parent, "abc"),
-        Ok(named)
+        core::to_address_by_name(&PdaAddresses(&ID), &parent, "abc"),
+        Ok(named.0)
     );
     assert_ne!(
-        named,
-        to_address_by_name(&Pubkey::new_from_array([8; 32]), "abc").unwrap()
+        named.0,
+        to_address_by_name(&ID, &Pubkey::new_from_array([8; 32]), "abc")
+            .unwrap()
+            .0
+    );
+    assert_ne!(
+        named.0,
+        to_address_by_name(&parent, &parent, "abc").unwrap().0
     );
     assert_eq!(name_to_address("Source").unwrap(), SOURCE);
     assert_eq!(
-        to_address_by_name(&parent, "Source").unwrap(),
-        to_address(&parent, &SOURCE)
+        to_address_by_name(&ID, &parent, "Source").unwrap(),
+        to_address(&ID, &parent, &SOURCE)
     );
     // Original Solidity SOURCE_ADDRESS is the low 20 bytes of this same hash.
     assert_eq!(
@@ -40,7 +46,7 @@ fn name_identity_matches_keccak_and_explicit_logical_derivation() {
 fn named_identities_validate_exact_utf8_bytes_without_normalization() {
     for name in ["".to_owned(), "x".repeat(65), "é".repeat(33)] {
         assert_eq!(name_to_address(&name), Err(Error::InvalidName));
-        assert_eq!(to_address_by_name(&ID, &name), Err(Error::InvalidName));
+        assert_eq!(to_address_by_name(&ID, &ID, &name), Err(Error::InvalidName));
     }
     for name in ["x".repeat(64), "é".repeat(32), " ".into()] {
         assert!(name_to_address(&name).is_ok());

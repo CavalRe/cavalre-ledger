@@ -7,12 +7,12 @@ fn assert_noop(h: &mut Harness, instruction: Instruction) {
     let before: Vec<_> = instruction
         .accounts
         .iter()
-        .map(|m| (m.pubkey, h.account(&m.pubkey)))
+        .map(|m| (m.pubkey, h.svm.get_account(&m.pubkey)))
         .collect();
     let result = run_raw(h, &[0], instruction).unwrap();
     assert!(events::event_bytes(&result.logs).is_empty());
     for (key, old) in before {
-        let mut current = h.account(&key);
+        let mut current = h.svm.get_account(&key);
         if key == h.key(0) {
             current.as_mut().unwrap().lamports += result.fee;
         }
@@ -33,7 +33,7 @@ fn external_registration_snapshots_issuer_metadata_and_repeats_are_noops() {
             "no caller-supplied metadata arguments"
         );
         succeeds(&mut h, &[0], registration.clone());
-        let record = h.record(e.root);
+        let record = h.labels(e.root);
         assert_eq!(
             (
                 record.name.as_str(),
@@ -56,11 +56,12 @@ fn external_registration_snapshots_issuer_metadata_and_repeats_are_noops() {
             (10, 10, 10)
         );
         h.metadata(e.mint, "New issuer name", "NEW");
-        let stored = h.account(&e.root_storage).unwrap();
+        let stored = h.svm.get_account(&e.root_storage).unwrap();
         let mut reader = Reader::new();
         reader
             .insert(ap(e.root_storage), &ap(stored.owner), &stored.data)
             .unwrap();
+        h.insert_labels(&mut reader, e.root);
         assert_eq!(reader.name(&ap(e.root)).unwrap(), "USD Coin");
         assert_eq!(reader.symbol(&ap(e.root)).unwrap(), Some("USDC".into()));
         assert_eq!(reader.decimals(&ap(e.root)).unwrap(), Some(6));
@@ -70,7 +71,7 @@ fn external_registration_snapshots_issuer_metadata_and_repeats_are_noops() {
             registration,
             LedgerError::MetadataConflict.into(),
         );
-        assert_eq!(h.account(&e.root_storage).unwrap(), stored);
+        assert_eq!(h.svm.get_account(&e.root_storage).unwrap(), stored);
     }
 }
 
@@ -109,7 +110,7 @@ fn registration_rejects_missing_empty_forged_or_malformed_issuer_metadata_atomic
                     LedgerError::InvalidAccount
                 }
                 _ => {
-                    let mut record = h.account(&key).unwrap();
+                    let mut record = h.svm.get_account(&key).unwrap();
                     match case {
                         "owner" => record.owner = SYSTEM,
                         "mint" => record.data[33..65].copy_from_slice(h.key(2).as_ref()),
@@ -129,7 +130,7 @@ fn registration_rejects_missing_empty_forged_or_malformed_issuer_metadata_atomic
                 sa(ledger::ledger_lib::global_root_address().0),
             ] {
                 assert!(
-                    h.account(&key).is_none(),
+                    h.svm.get_account(&key).is_none(),
                     "failed {case} left allocated state"
                 );
             }
@@ -188,7 +189,7 @@ fn token2022_inline_names_are_issuer_authenticated_and_obey_original_string_limi
             .retain(|m| m.pubkey != sa(metadata_address(&ap(e.mint))));
         if valid {
             succeeds(&mut h, &[0], registration.clone());
-            let record = h.record(e.root);
+            let record = h.labels(e.root);
             assert_eq!(
                 if name_field {
                     record.name
@@ -200,8 +201,8 @@ fn token2022_inline_names_are_issuer_authenticated_and_obey_original_string_limi
             assert_noop(&mut h, registration);
         } else {
             rejects(&mut h, &[0], registration, LedgerError::InvalidName.into());
-            assert!(h.account(&e.root_storage).is_none());
-            assert!(h.account(&e.vault).is_none());
+            assert!(h.svm.get_account(&e.root_storage).is_none());
+            assert!(h.svm.get_account(&e.vault).is_none());
         }
     }
 }
@@ -235,7 +236,7 @@ fn registration_obeys_metadata_pointer_instead_of_stale_inline_labels() {
         }
         if matches!(selection, "inline" | "metaplex") {
             succeeds(&mut h, &[0], registration.clone());
-            let record = h.record(e.root);
+            let record = h.labels(e.root);
             let expected = if selection == "inline" {
                 ("Metadata token", "META")
             } else {
@@ -250,8 +251,8 @@ fn registration_obeys_metadata_pointer_instead_of_stale_inline_labels() {
                 LedgerError::InvalidAccount
             };
             rejects(&mut h, &[0], registration, error.into());
-            assert!(h.account(&e.root_storage).is_none());
-            assert!(h.account(&e.vault).is_none());
+            assert!(h.svm.get_account(&e.root_storage).is_none());
+            assert!(h.svm.get_account(&e.vault).is_none());
         }
     }
 }
@@ -259,7 +260,7 @@ fn registration_obeys_metadata_pointer_instead_of_stale_inline_labels() {
 #[test]
 fn accounting_ledger_metadata_is_explicit_and_matching_creation_is_idempotent() {
     let mut h = Harness::new();
-    let root = sa(ledger::ledger_lib::root_storage_address(&ap(h.key(0)), &ap(h.key(2))).0);
+    let root = sa(ledger::ledger_lib::ledger_pda(&ap(h.key(0)), &ap(h.key(2))).0);
     let build = |h: &Harness, name: &str, symbol: &str, decimals| {
         ix(
             h.registration(0, root),
@@ -275,7 +276,7 @@ fn accounting_ledger_metadata_is_explicit_and_matching_creation_is_idempotent() 
     let i = build(&h, "Epoch receipts", "EPOCH", 0);
     succeeds(&mut h, &[0], i.clone());
     assert_noop(&mut h, i);
-    let record = h.record(root);
+    let record = h.labels(root);
     assert_eq!(
         (
             record.name.as_str(),

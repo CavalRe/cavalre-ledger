@@ -104,6 +104,12 @@ pub trait Host<A: Copy + Eq>: crate::ledger_view::ChildIndex<A> + Sized {
     /// Never substitute a caller-supplied balance or an earlier transaction's cache.
     fn backing(&self) -> Result<Backing<A>, Self::Error>;
     fn put(&mut self, address: A, account: Account<A>) -> Result<(), Self::Error>;
+    /// Optional metadata attachment for hosts that keep labels outside accounts.
+    /// Existing labels remain immutable. The original mapping host rejects this.
+    fn attach_name(&mut self, _address: A, _name: String) -> Result<(), Self::Error> {
+        Err(Error::MetadataConflict.into())
+    }
+
     /// Update existing fields without reading/copying unrelated metadata.
     fn set_balances(&mut self, address: A, balances: Balances) -> Result<(), Self::Error>;
     fn set_children(&mut self, address: A, children: u32) -> Result<(), Self::Error>;
@@ -470,10 +476,12 @@ fn add_account<A: Copy + Eq, H: Host<A>>(
     let mut account = get(host, &key)?;
     if account.registered {
         if account.flags.account_kind != kind
-            || account.name != name
             || (kind.is_group() && account.implicit_allowed != implicit_allowed)
         {
             return Err(Error::MetadataConflict.into());
+        }
+        if account.name != name {
+            return host.attach_name(key, name);
         }
         return Ok(());
     }

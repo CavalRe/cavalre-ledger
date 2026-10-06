@@ -1,105 +1,63 @@
-# Porting the original Ledger to Solana
+# Porting Ledger to Solana
 
-The behavioral baseline is `cavalre-contracts/modules/ledger/LedgerLib.sol` at
-[`34d159f`](https://github.com/CavalRe/cavalre-contracts/tree/34d159ff4e88fdfdee16738d9a1228f0bf407212/modules/ledger).
-Use that implementation to determine accounting behavior. The separately pinned
-reference fixture generator remains unchanged and is comparison material, not
-proof of complete parity with this baseline.
+The accounting baseline remains `cavalre-contracts/modules/ledger/LedgerLib.sol`
+at commit `34d159ff4e88fdfdee16738d9a1228f0bf407212`. The immutable hierarchy and
+custody fixtures remain comparison material. The shared `no_std` core owns
+posting, checked arithmetic, permissions, exact settlement and semantic events.
+The Solana adapter owns storage, PDA identity, signer verification, allocation,
+token CPI and transaction rollback.
 
-The Rust tests replay the immutable 162-step hierarchy fixture and 138-step
-custody fixture. Custody is checked in the reusable core and through actual
-Solana sBPF with both classic SPL and Token-2022. The latter adapts ERC20 token
-movement to native token accounts while preserving every saved success/failure,
-wallet, vault and claim-balance observation. The reference files and generators
-are unchanged; this is coverage of those fixtures, not the entire Solidity suite.
+## Agreed Solana storage
 
-| Solidity module | Rust module | Status |
-| --- | --- | --- |
-| `LedgerLib.sol` | `cavalre-ledger-core/src/ledger_lib.rs` | Identity, effective flags, custody lookup and posting walk implemented |
-| `Ledger.sol` | Core `ledger.rs`, plus the Solana host adapter | Shared account management, permissions, transfers and settlement policy implemented |
-| `LedgerView.sol` | Core and Solana `ledger_view.rs` | Independent account, balance, custody, registered-child queries, including ledger discovery through Root; stored metadata snapshots and issuer-source rules documented in READS.md |
-| `ILedger` / `LedgerLib` events | Core `ledger::Event`, host `emit`, Solana Anchor events | Original structural and posting event families; payload adaptations and transaction-status requirements in EVENTS.md |
+See [READS.md](READS.md) for the exact packed layout. The accounting namespace is
+`cavalre.ledger.account`; metadata uses `cavalre.ledger.metadata`. All tree links
+are storage PDAs. Ordinary accounts store parent, custodian, kind, depth, two
+u128 balances, child_index and the inline vector of relative child identities.
+Only ledger records additionally store token configuration. Metadata, including
+decimals and the accounting bump, is independent and optional.
 
-The reusable core holds shared rules and the `Host` interface without platform dependencies.
-`cavalre-ledger-solana/src/ledger_lib.rs` supplies logical hashing and physical storage derivation and forwards to
-the core. Address types are host-defined; the core does not impose Solana keys.
-The pure accounting portion remains in the core rather than a separate
-kernel crate for now. Core `ledger::execute` requires host authentication and
-transactional storage/settlement, and enforces lifecycle and custodian policy.
-The Solana `ledger.rs` implements those capabilities. Global Root is a canonical
-PDA with the ordinary group header and mapping layout. Its children are ledger
-groups; discovery uses its maintained child vector. Insertion order, one-based
-reverse indexes and swap-and-pop removal follow the original Solidity
-`subs`/`subIndex` behavior. Creation updates Root atomically; ordinary posting
-still stops at the selected depth-2 ledger. See READS.md for storage and locking
-tradeoffs.
+These choices supersede the prior draft's logical-ID/storage-ID translation,
+512-byte records, stored relative/ledger/bump/registration fields, and per-slot
+child accounts. This is an undeployed draft with new PDA namespaces, not an
+in-place migration of deployed accounts.
 
-External-token ledger identity is the token mint itself, matching Solidity's
-`addLedger(token, ...)`. The root's Solana storage PDA is separate: the adapter
-maps between logical identifiers and physical accounts without changing core
-accounting or custody rules. Native SOL likewise uses its reserved asset
-identifier. Root discovery, parent links, views and events return logical
-identities. Solana account ownership validates backing storage; it does not
-impose an ownership or signer requirement on a Ledger identifier. The earlier
-draft conflated the root PDA with this identity. The correction changes
-external/native descendants' addresses and requires fresh draft state.
+Solana allocation establishes the account and its index. The core's original
+logical lifecycle remains available to other hosts; the Solana adapter indexes
+newly materialized leaves at commit and closes empty removed accounts. There is
+no Solana `implicit_allowed` instruction parameter. Metadata attachment is an
+optional host capability; the default core host retains its previous behavior.
 
-The `mutations` feature controls each crate's mutating `ledger` module. Queries
-and shared account types remain available with that feature disabled. Record
-encoding/decoding is shared in the Solana `ledger_lib.rs`; readers do not depend
-on or invoke the mutation program. This preserves the original ability to
-remove mutation dispatch while retaining access to stored state.
+Public debit transfers authorize the source custodian. A recipient custodian
+does not need to sign. Destination leaf kind, ledger membership, funds, backing,
+and atomicity checks still apply. The internal-ledger authority controls its
+accounting operations. Equal-polarity siblings update only their endpoints at
+any depth. Opposite-polarity or different-parent transfers use the shared
+ancestor walk and direct parent PDA links.
 
-Keep corresponding functions in recognizable order and use Rust naming
-conventions. Introduce platform-specific files only for actual Solana needs.
-There are no placeholder program modules implying unfinished features work.
+## Entry points
 
-## Recover useful work without restoring the old model
+Structural operations and custody settlement use the existing Anchor service.
+It may create missing leaves and update parent child vectors. The program also
+exports the lean existing-account transfer instruction through
+`ledger_transfer::instruction`. It uses Pinocchio account parsing, fixed-offset
+reads/writes, two namespace hashes with client-supplied bumps, and the same core
+posting arithmetic. It never searches for bumps or derives ancestor addresses.
 
-The superseded implementation is preserved at
-[`37e46c5`](https://github.com/CavalRe/cavalre-ledger/tree/37e46c5b9465cdf9a501d99eea5b661c0914834a).
-The paths below refer to that commit, not the current working tree.
+The helper's account order is signer, ledger, source, destination, followed by
+required custodian/ancestor records and the external vault. Pass writable metas
+for ancestors that will change; the helper merges duplicate privileges. Only
+changed balances need write permission. Metadata is omitted. A self transfer
+still authenticates and checks available public debit funds. Zero transfers
+emit the original posting events without writing balances.
 
-| When needed | Prior source | What to adapt |
-| --- | --- | --- |
-| Token custody | `crates/cavalre-ledgers-solana/src/tokens.rs`, `src/lib.rs` | Mint/program/authority checks, exact settlement and full backing checks |
-| Account loading | `crates/cavalre-ledgers-solana/src/hierarchy.rs` | Ownership, PDA, discriminator and ancestry validation |
-| Token runtime tests | `tests/integration/omnibus_tokens.rs`, `custody_shared.rs` | Real token execution, failed-transfer rollback and custody invariants |
-| Authorization tests | `tests/integration/omnibus_authority.rs`, `tests/solana-consumer/` | CPI signer plumbing and rejection tests, rewritten for custodian permissions |
-| Posting runtime tests | `tests/integration/hierarchy.rs` | Malformed account paths, ancestor balances and atomic rollback |
+Ownership and namespace checks are mandatory: a supplied relative identity is
+not authority. The no-curve-check hash is used only against records owned by this
+program, which only creates canonical accounting PDAs. Initial creation still
+uses canonical PDA derivation and allocation signer seeds.
 
-Review the token-extension policy before carrying it over; the old policy is
-not automatically the new product policy. Validate all recovered checks against
-the new account layout and permissions. Do not preserve test expectations for
-per-leaf controllers, mandatory position registration, separate namespace token
-trees or an implicit Source.
+## Verification
 
-The original `transfer` ancestor walk is the source for the new accounting
-implementation. The old Rust arithmetic can help compare results, but does not
-define the new structure or permissions.
-
-Registered group names require 1–64 UTF-8 bytes. Explicit-address leaf labels
-allow 0–64 bytes. Allowing an empty leaf label follows the original overload;
-retaining a maximum length for leaves is an intentional product policy. The
-original explicit-address leaf overload did not impose that length limit.
-
-Name-derived overloads are available as `name_to_address`, `to_address_by_name`,
-and named creation functions. Solana retains the full 32-byte Keccak-256 name
-hash as the relative identity, then hashes the packed 32-byte parent and relative
-identity. Logical children have no PDA bump or curve requirement.
-Solidity retained the low 20 bytes of that hash. Exact UTF-8 bytes determine the
-identity; names require 1–64 bytes even for the named leaf overload. Explicit
-leaf labels may still be empty. No normalization or display-name index is added.
-The core's optional `NameDerivation` interface and `Command::add_by_name` keep
-hashing host-specific and resolve into the existing authenticated `Add` command.
-Core hosts, instruction arguments and event families retain their meaning.
-The mapping container layout and client account lists replace the draft format.
-Reserved `SOURCE` is derived at compile time as `keccak256("Source")`, matching
-named lookup. Its low 20 bytes equal the original Solidity Source identifier.
-This replaces the draft's arbitrary `[83; 32]` key. Source is a mapped credit
-leaf under each ledger. There is no existing deployment to
-migrate. Source permissions and accounting rules are unchanged.
-
-Rust and Agave pins, the sBPF build/stack checks, and the original Solidity
-reference tooling remain in the working tree. Old deployment scripts and
-program identities were removed because they target the superseded program.
+Run `bash scripts/check.sh` with the pinned Agave toolchain on PATH. It checks
+formatting, Clippy, read-only builds, fresh sBPF builds of Ledger and the consumer,
+and the full workspace tests. No deployment or crate publication is part of
+this work. Float representation changes remain deferred in work/notes.

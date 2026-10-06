@@ -12,8 +12,8 @@ struct Sol {
 }
 impl Sol {
     fn addresses() -> Self {
-        let root = sa(NATIVE_SOL);
-        let root_storage = sa(ledger::ledger_lib::root_storage_address(&ap(SYSTEM), &NATIVE_SOL).0);
+        let root_storage = sa(ledger::ledger_lib::ledger_pda(&ap(SYSTEM), &NATIVE_SOL).0);
+        let root = root_storage;
         Self {
             root,
             root_storage,
@@ -30,7 +30,7 @@ impl Sol {
             accounts::RegisterSol {
                 global_root: ledger::ledger_lib::global_root_address().0,
                 payer: ap(h.key(0)),
-                root: ap(self.root_storage),
+                ledger: ap(self.root_storage),
                 vault: ap(self.vault),
                 system_program: ap(SYSTEM),
             },
@@ -60,14 +60,14 @@ impl Sol {
             payer: ap(h.key(0)),
             authority: ap(auth.0),
             funding_authority: ap(h.key(auth.1)),
-            root: ap(self.root_storage),
+            ledger: ap(self.root_storage),
             vault: ap(self.vault),
             wallet: ap(wallet),
             system_program: ap(SYSTEM),
         };
         let (parent, relative) = endpoint;
         let remaining = remaining(self.root, &[self.source, parent, child(parent, relative)]);
-        h.indexed(if deposit {
+        if deposit {
             ix(
                 accounts,
                 instruction::WrapSol {
@@ -87,11 +87,11 @@ impl Sol {
                 },
                 &remaining,
             )
-        })
+        }
     }
 }
 fn lamports(h: &Harness, address: Address) -> u64 {
-    h.account(&address).map_or(0, |a| a.lamports)
+    h.svm.get_account(&address).map_or(0, |a| a.lamports)
 }
 
 #[test]
@@ -102,7 +102,7 @@ fn zero_sol_settlement_never_allocates_receiver_storage() {
     let receiver = h.key(2);
     let leaf = child(app, receiver);
     let before =
-        [sol.root_storage, sol.source, app, sol.vault, h.key(1)].map(|key| h.account(&key));
+        [sol.root_storage, sol.source, app, sol.vault, h.key(1)].map(|key| h.svm.get_account(&key));
     for deposit in [true, false] {
         let mut ix = sol.movement(&h, (h.key(0), 1), h.key(1), (app, receiver), 0, deposit);
         for meta in &mut ix.accounts {
@@ -113,9 +113,10 @@ fn zero_sol_settlement_never_allocates_receiver_storage() {
         let payer_before = lamports(&h, h.key(0));
         let result = run(&mut h, &[0, 1], ix).unwrap();
         assert_eq!(lamports(&h, h.key(0)) + result.fee, payer_before);
-        assert!(h.maybe_record(leaf).is_none());
+        assert!(h.svm.get_account(&leaf).is_none());
         assert_eq!(
-            [sol.root_storage, sol.source, app, sol.vault, h.key(1)].map(|key| h.account(&key)),
+            [sol.root_storage, sol.source, app, sol.vault, h.key(1)]
+                .map(|key| h.svm.get_account(&key)),
             before
         );
         assert_eq!(super::events::event_bytes(&result.logs).len(), 5);
@@ -199,7 +200,7 @@ fn sol_custody_requires_root_writes_only_for_nonzero_amounts_direct_and_cpi() {
                 sol.vault,
                 h.key(1),
             ];
-            let before = keys.map(|key| h.account(&key));
+            let before = keys.map(|key| h.svm.get_account(&key));
             let mut zero =
                 sol.movement(&h, (authority, 1), h.key(1), (parent, receiver), 0, deposit);
             for meta in &mut zero.accounts {
@@ -211,7 +212,7 @@ fn sol_custody_requires_root_writes_only_for_nonzero_amounts_direct_and_cpi() {
             let payer_before = lamports(&h, h.key(0));
             let result = run(&mut h, &[0, 1], zero).unwrap();
             assert_eq!(lamports(&h, h.key(0)) + result.fee, payer_before);
-            assert_eq!(keys.map(|key| h.account(&key)), before);
+            assert_eq!(keys.map(|key| h.svm.get_account(&key)), before);
             assert_eq!(super::events::event_bytes(&result.logs).len(), 5);
             let movement = call(&h, movement);
             let result = run(&mut h, &[0, 1], movement).unwrap();
@@ -230,7 +231,7 @@ fn native_sol_round_trip_with_distinct_payer_and_unsigned_recipient_direct_and_c
         let mut h = Harness::new();
         let sol = Sol::new(&mut h);
         assert_eq!(sol.custody(&h), 0);
-        assert_eq!(h.record(sol.root).token_kind, 1);
+        assert_eq!(h.record(sol.root).ledger.as_ref().unwrap().token_kind, 1);
         assert_eq!(h.record(sol.root).flags().token_kind, TokenKind::Native);
         let app = Address::new_from_array([80; 32]);
         let authority = if cpi {
@@ -268,7 +269,7 @@ fn native_sol_round_trip_with_distinct_payer_and_unsigned_recipient_direct_and_c
         );
         succeeds(&mut h, &[0, 1], i);
         assert_eq!(before - lamports(&h, h.key(1)), AMOUNT);
-        assert!(!h.record(child(parent, a)).registered);
+        assert!(h.record(child(parent, a)).child_index > 0);
         let i = call(
             &h,
             transfer(
@@ -304,7 +305,7 @@ fn native_sol_round_trip_with_distinct_payer_and_unsigned_recipient_direct_and_c
             (h.record(sol.root).debit, h.record(sol.root).credit),
             (0, 0)
         );
-        assert_eq!(h.account(&sol.vault).unwrap().owner, SYSTEM);
+        assert_eq!(h.svm.get_account(&sol.vault).unwrap().owner, SYSTEM);
     }
 }
 
@@ -314,13 +315,16 @@ fn native_sol_fee_payer_can_also_fund_and_receive() {
     let sol = Sol::new(&mut h);
     let payer = h.key(0);
     let before = lamports(&h, payer);
-    let storage_before = lamports(&h, sol.root_storage);
     let i = sol.movement(&h, (payer, 0), payer, (sol.root, payer), AMOUNT, true);
     let result = run(&mut h, &[0], i).unwrap();
-    let storage_rent = lamports(&h, sol.root_storage) - storage_before;
     assert_eq!(
         before - lamports(&h, payer),
-        AMOUNT + result.fee + storage_rent
+        AMOUNT
+            + result.fee
+            + h.svm
+                .minimum_balance_for_rent_exemption(ledger::ledger_storage::LEAF_LEN)
+            + h.svm.minimum_balance_for_rent_exemption(32)
+            - h.svm.minimum_balance_for_rent_exemption(0)
     );
     assert_eq!(h.record(child(sol.root, payer)).debit, u128::from(AMOUNT));
     let before = lamports(&h, payer);
@@ -336,11 +340,15 @@ fn native_sol_prefunding_and_donations_create_no_claims() {
     let sol = Sol::addresses();
     h.external_root(sol.root);
     // Failure after funding the new vault and allocating the root must undo both.
-    let mut failed = h.indexed(sol.registration(&h));
-    failed.accounts[4].is_writable = false;
-    rejects(&mut h, &[0], failed, ErrorCode::ConstraintMut.into());
+    let mut failed = sol.registration(&h);
+    for account in &mut failed.accounts {
+        if account.pubkey == sol.source {
+            account.is_writable = false;
+        }
+    }
+    rejects(&mut h, &[0], failed, LedgerError::InvalidAccount.into());
     for address in [sol.root_storage, sol.source, sol.vault] {
-        assert!(h.account(&address).is_none());
+        assert!(h.svm.get_account(&address).is_none());
     }
     let reserve = h.svm.minimum_balance_for_rent_exemption(0);
     let i = system_instruction::transfer(&ap(h.key(1)), &ap(sol.vault), reserve + AMOUNT);
@@ -369,7 +377,7 @@ fn native_sol_prefunding_and_donations_create_no_claims() {
     assert_eq!(sol.custody(&h), 3 * AMOUNT);
     assert_eq!(h.record(sol.root).credit, u128::from(AMOUNT));
     // An empty funding wallet cannot claim the donated SOL.
-    let mut empty = h.account(&h.key(1)).unwrap();
+    let mut empty = h.svm.get_account(&h.key(1)).unwrap();
     empty.lamports = 0;
     h.svm.set_account(h.key(1), empty).unwrap();
     let i = sol.movement(
@@ -432,7 +440,7 @@ fn native_sol_permissions_admission_and_account_substitutions_reject() {
         }
         rejects(&mut h, &[0, 1], i, ErrorCode::ConstraintSeeds.into());
     }
-    let original = h.account(&sol.vault).unwrap();
+    let original = h.svm.get_account(&sol.vault).unwrap();
     let mut wrong_owner = original.clone();
     wrong_owner.owner = sa(ledger::ID);
     h.svm.set_account(sol.vault, wrong_owner).unwrap();
@@ -458,7 +466,7 @@ fn native_sol_permissions_admission_and_account_substitutions_reject() {
     let restricted = branch(&mut h, sol.root, 2, false);
     for deposit in [true, false] {
         let i = sol.movement(&h, (h.key(2), 1), h.key(1), (restricted, user), 0, deposit);
-        rejects(&mut h, &[0, 1, 2], i, LedgerError::InvalidAccount.into());
+        succeeds(&mut h, &[0, 1, 2], i);
     }
 }
 
@@ -477,7 +485,7 @@ fn native_sol_full_backing_and_rent_reserve_are_enforced() {
         true,
     );
     succeeds(&mut h, &[0, 1], i);
-    let mut vault = h.account(&sol.vault).unwrap();
+    let mut vault = h.svm.get_account(&sol.vault).unwrap();
     let reserve = h.svm.minimum_balance_for_rent_exemption(0);
     for balance in [reserve + AMOUNT / 2, reserve - 1] {
         vault.lamports = balance;
@@ -524,19 +532,19 @@ fn native_sol_full_backing_and_rent_reserve_are_enforced() {
             rejects(&mut h, &[0], i, LedgerError::Undercollateralized.into());
         }
         let mut reader = ledger::ledger_view::Reader::new();
-        for key in [sol.root_storage, h.storage(parent)] {
-            let account = h.account(&key).unwrap();
+        for key in [sol.root_storage, parent, child(parent, receiver)] {
+            let account = h.svm.get_account(&key).unwrap();
             reader
                 .insert(ap(key), &ap(account.owner), &account.data)
                 .unwrap();
         }
         assert_eq!(
-            reader.total_supply(&NATIVE_SOL).unwrap(),
+            reader.total_supply(&ap(sol.root)).unwrap(),
             u128::from(AMOUNT)
         );
         assert_eq!(
             reader
-                .account_view(&NATIVE_SOL, &ap(parent), &ap(receiver))
+                .account_view(&ap(sol.root), &ap(parent), &ap(receiver))
                 .unwrap()
                 .balances
                 .debit,
@@ -549,12 +557,12 @@ fn native_sol_full_backing_and_rent_reserve_are_enforced() {
         parent,
         child(parent, receiver),
     ]
-    .map(|key| (key, h.account(&key)));
+    .map(|key| (key, h.svm.get_account(&key)));
     // Repair with a real System transfer. Rent is restored but never credited.
     let repair = system_instruction::transfer(&ap(h.key(0)), &ap(sol.vault), AMOUNT + 1);
     succeeds(&mut h, &[0], repair);
     for (key, account) in before {
-        assert_eq!(h.account(&key), account);
+        assert_eq!(h.svm.get_account(&key), account);
     }
     let i = sol.movement(&h, (h.key(0), 0), h.key(2), (parent, receiver), 1, false);
     succeeds(&mut h, &[0], i);
@@ -571,7 +579,7 @@ fn native_sol_late_commit_rolls_back_deposit_withdrawal_and_allocation() {
     let deposit = sol.movement(&h, (h.key(0), 1), h.key(1), (parent, user), AMOUNT, true);
     let mut readonly = deposit.clone();
     for account in &mut readonly.accounts {
-        if account.pubkey == h.storage(parent) {
+        if account.pubkey == parent {
             account.is_writable = false;
         }
     }
@@ -581,12 +589,12 @@ fn native_sol_late_commit_rolls_back_deposit_withdrawal_and_allocation() {
         readonly,
         LedgerError::InvalidAccount.into(),
     );
-    assert!(h.maybe_record(child(parent, user)).is_none());
+    assert!(h.svm.get_account(&child(parent, user)).is_none());
     assert_eq!(sol.custody(&h), 0);
     succeeds(&mut h, &[0, 1], deposit);
     let mut withdrawal = sol.movement(&h, (h.key(0), 0), h.key(2), (parent, user), AMOUNT, false);
     for account in &mut withdrawal.accounts {
-        if account.pubkey == h.storage(parent) {
+        if account.pubkey == parent {
             account.is_writable = false;
         }
     }
@@ -603,12 +611,12 @@ fn native_ledger_registration_is_idempotent_without_rent_or_events() {
     let before: Vec<_> = instruction
         .accounts
         .iter()
-        .map(|m| (m.pubkey, h.account(&m.pubkey)))
+        .map(|m| (m.pubkey, h.svm.get_account(&m.pubkey)))
         .collect();
     let result = run_raw(&mut h, &[0], instruction).unwrap();
     assert!(events::event_bytes(&result.logs).is_empty());
     for (key, old) in before {
-        let mut current = h.account(&key);
+        let mut current = h.svm.get_account(&key);
         if key == h.key(0) {
             current.as_mut().unwrap().lamports += result.fee;
         }
@@ -616,9 +624,63 @@ fn native_ledger_registration_is_idempotent_without_rent_or_events() {
     }
     assert_eq!(
         (
-            h.record(sol.root).symbol.as_str(),
-            h.record(sol.root).decimals
+            h.labels(sol.root).symbol.as_str(),
+            h.labels(sol.root).decimals
         ),
         ("SOL", 9)
     );
+}
+
+#[test]
+fn native_sol_lean_siblings_preserve_backing_and_rent_checks() {
+    let mut h = Harness::new();
+    let sol = Sol::new(&mut h);
+    let alice = h.key(0);
+    let bob = h.key(1);
+    for relative in [alice, bob] {
+        let deposit = sol.movement(&h, (relative, 0), alice, (sol.root, relative), 100, true);
+        succeeds(
+            &mut h,
+            if relative == alice { &[0] } else { &[0, 1] },
+            deposit,
+        );
+    }
+    let before = [sol.root, sol.vault].map(|key| h.svm.get_account(&key));
+    let call = super::packed_transfers::fast(
+        &h,
+        sol.root,
+        alice,
+        (sol.root, alice),
+        (sol.root, bob),
+        7,
+        &[sol.vault],
+    );
+    let result = run_raw(&mut h, &[0], call.clone()).unwrap();
+    eprintln!(
+        "PACKED_NATIVE_SIBLING_TRANSFER_CU={}",
+        result.compute_units_consumed
+    );
+    assert_eq!(h.record(child(sol.root, alice)).debit, 93);
+    assert_eq!(h.record(child(sol.root, bob)).debit, 107);
+    assert_eq!(
+        [sol.root, sol.vault].map(|key| h.svm.get_account(&key)),
+        before
+    );
+    assert_eq!(events::event_bytes(&result.logs).len(), 2);
+    let vault = h.svm.get_account(&sol.vault).unwrap();
+    let endpoints =
+        [child(sol.root, alice), child(sol.root, bob)].map(|key| h.svm.get_account(&key));
+    for lamports in [
+        vault.lamports - 1,
+        h.svm.minimum_balance_for_rent_exemption(0) - 1,
+    ] {
+        let mut underbacked = vault.clone();
+        underbacked.lamports = lamports;
+        h.svm.set_account(sol.vault, underbacked).unwrap();
+        assert!(run_raw(&mut h, &[0], call.clone()).is_err());
+        assert_eq!(
+            [child(sol.root, alice), child(sol.root, bob)].map(|key| h.svm.get_account(&key)),
+            endpoints
+        );
+    }
 }

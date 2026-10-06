@@ -9,7 +9,9 @@ description = "Fresh Solana Ledger draft based on the original Solidity LedgerLi
 
 [dependencies]
 cavalre-ledger-core = { path = "../cavalre-ledger-core", version = "0.1.0", default-features = false }
+pinocchio = "=0.9.3"
 anchor-lang = { version = "=1.2.0", features = ["init-if-needed"] }
+solana-sha256-hasher = "=3.1.0"
 solana-keccak-hasher = { version = "=3.1.0", features = ["sha3"] }
 keccak-const = "=0.2.0"
 spl-token-2022-interface = "=3.1.2"
@@ -24,6 +26,8 @@ crate-type = ["cdylib", "lib"]
 default = ["mutations"]
 mutations = ["cavalre-ledger-core/mutations", "dep:anchor-spl", "dep:spl-transfer-hook-interface"]
 no-entrypoint = []
+# The build script selects the direct transfer entrypoint and disables Anchor's raw entrypoint.
+p-token-entrypoint = ["no-entrypoint"]
 cpi = ["no-entrypoint", "mutations"]
 no-idl = []
 no-log-ix-name = []
