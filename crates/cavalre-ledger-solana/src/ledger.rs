@@ -10,10 +10,10 @@ use anchor_spl::token_interface::{
     self as token, Mint, TokenAccount, TokenInterface, TransferChecked,
 };
 use cavalre_ledger_core::{ledger as service, ledger_lib as core};
-use std::cell::RefCell;
-use token::spl_token_2022::extension::{
+use spl_token_2022_interface::extension::{
     BaseStateWithExtensions, ExtensionType, StateWithExtensions,
 };
+use std::cell::RefCell;
 
 #[derive(Accounts)]
 pub struct LedgerAccounts<'info> {
@@ -51,9 +51,11 @@ pub struct RegisterToken<'info> {
     pub root: UncheckedAccount<'info>,
     #[account(mint::token_program=token_program)]
     pub mint: InterfaceAccount<'info, Mint>,
+    /// CHECK: the current token interface initializes and authenticates the
+    /// mint/authority below; the pinned Anchor allocator predates PermissionedBurn.
     #[account(init_if_needed, payer=payer, seeds=[b"vault", root.key().as_ref()], bump,
-        token::mint=mint, token::authority=root, token::token_program=token_program)]
-    pub vault: InterfaceAccount<'info, TokenAccount>,
+        space=custody_space(&mint.to_account_info(), &token_program.key())?, owner=token_program.key())]
+    pub vault: UncheckedAccount<'info>,
     pub token_program: Interface<'info, TokenInterface>,
     pub system_program: Program<'info, System>,
     /// CHECK: canonical Root account, decoded or initialized with its first child.
@@ -121,15 +123,36 @@ pub struct MoveSol<'info> {
 
 // Compatibility is determined by token behavior, not by a mint allowlist.
 // Inspect extensions on every custody operation, including already-admitted mints.
-fn validate_mint(mint: &AccountInfo) -> Result<()> {
+fn custody_space(mint: &AccountInfo, token_program: &Pubkey) -> Result<usize> {
+    use anchor_lang::solana_program::program_pack::Pack;
+    if mint.owner != token_program {
+        return Err(
+            anchor_lang::solana_program::program_error::ProgramError::IncorrectProgramId.into(),
+        );
+    }
+    if mint.owner != &token::ID {
+        return Ok(spl_token_2022_interface::state::Account::LEN);
+    }
+    Ok(
+        spl_token_2022_interface::extension::account_len::try_calculate_account_len_from_mint_data(
+            &mint.try_borrow_data()?,
+            &[],
+        )?,
+    )
+}
+
+fn validate_mint(mint: &AccountInfo) -> Result<Option<Pubkey>> {
+    let mut hook = None;
     if mint.owner == &token::ID {
         let data = mint.try_borrow_data()?;
-        let state = StateWithExtensions::<token::spl_token_2022::state::Mint>::unpack(&data)?;
+        let state = StateWithExtensions::<spl_token_2022_interface::state::Mint>::unpack(&data)?;
         for extension in state.get_extension_types()? {
             require!(
                 matches!(
                     extension,
                     ExtensionType::MintCloseAuthority
+                        | ExtensionType::TransferHook
+                        | ExtensionType::PermissionedBurn
                         | ExtensionType::MetadataPointer
                         | ExtensionType::TokenMetadata
                         | ExtensionType::GroupPointer
@@ -141,22 +164,110 @@ fn validate_mint(mint: &AccountInfo) -> Result<()> {
                 ),
                 LedgerError::UnsupportedToken
             );
+            if extension == ExtensionType::TransferHook {
+                use spl_token_2022_interface::extension::transfer_hook::TransferHook;
+                hook = Option::<Pubkey>::from(state.get_extension::<TransferHook>()?.program_id);
+            } else if extension == ExtensionType::PermissionedBurn {
+                use spl_token_2022_interface::extension::permissioned_burn::PermissionedBurnConfig;
+                state.get_extension::<PermissionedBurnConfig>()?;
+            }
         }
     }
-    Ok(())
+    Ok(hook)
 }
 
 fn validate_token_account(account: &AccountInfo) -> Result<()> {
     if account.owner == &token::ID {
         let data = account.try_borrow_data()?;
-        let state = StateWithExtensions::<token::spl_token_2022::state::Account>::unpack(&data)?;
+        let state = StateWithExtensions::<spl_token_2022_interface::state::Account>::unpack(&data)?;
         for extension in state.get_extension_types()? {
             require!(
-                extension == ExtensionType::ImmutableOwner,
+                matches!(
+                    extension,
+                    ExtensionType::ImmutableOwner | ExtensionType::TransferHookAccount
+                ),
                 LedgerError::UnsupportedToken
             );
         }
     }
+    Ok(())
+}
+
+fn initialize_custody(accounts: &RegisterToken) -> Result<u64> {
+    use spl_token_2022_interface::extension::StateWithExtensionsMut;
+    use spl_token_2022_interface::state::{Account, AccountState};
+    let uninitialized = {
+        let mut data = accounts.vault.try_borrow_mut_data()?;
+        StateWithExtensionsMut::<Account>::unpack_uninitialized(&mut data).is_ok()
+    };
+    if uninitialized {
+        token::initialize_account3(CpiContext::new(
+            accounts.token_program.key(),
+            token::InitializeAccount3 {
+                account: accounts.vault.to_account_info(),
+                mint: accounts.mint.to_account_info(),
+                authority: accounts.root.to_account_info(),
+            },
+        ))?;
+    }
+    let data = accounts.vault.try_borrow_data()?;
+    let state = StateWithExtensions::<Account>::unpack(&data)?;
+    require!(
+        state.base.state != AccountState::Uninitialized,
+        LedgerError::InvalidAccount
+    );
+    require_keys_eq!(
+        state.base.mint,
+        accounts.mint.key(),
+        LedgerError::InvalidAccount
+    );
+    require_keys_eq!(
+        state.base.owner,
+        accounts.root.key(),
+        LedgerError::InvalidAccount
+    );
+    Ok(state.base.amount)
+}
+
+// Only hook-enabled transfers take this path. Resolve the hook's declared extra
+// records, rather than forwarding arbitrary Ledger accounts or signer privileges.
+fn transfer_with_hook<'info>(
+    token_program: Pubkey,
+    accounts: TransferChecked<'info>,
+    remaining: &[AccountInfo<'info>],
+    hook: Pubkey,
+    amount: u64,
+    decimals: u8,
+    signer: &[&[&[u8]]],
+) -> Result<()> {
+    let mut instruction = token::spl_token_2022::instruction::transfer_checked(
+        &token_program,
+        accounts.from.key,
+        accounts.mint.key,
+        accounts.to.key,
+        accounts.authority.key,
+        &[],
+        amount,
+        decimals,
+    )?;
+    let mut infos = vec![
+        accounts.from.clone(),
+        accounts.mint.clone(),
+        accounts.to.clone(),
+        accounts.authority.clone(),
+    ];
+    spl_transfer_hook_interface::onchain::add_extra_accounts_for_execute_cpi(
+        &mut instruction,
+        &mut infos,
+        &hook,
+        accounts.from,
+        accounts.mint,
+        accounts.to,
+        accounts.authority,
+        amount,
+        remaining,
+    )?;
+    anchor_lang::solana_program::program::invoke_signed(&instruction, &infos, signer)?;
     Ok(())
 }
 
@@ -380,7 +491,10 @@ struct SolanaHost<'a, 'info> {
     derived: RefCell<Vec<DerivedAddress>>,
 }
 enum Settlement<'a, 'info> {
-    Tokens(&'a mut MoveTokens<'info>),
+    Tokens {
+        accounts: &'a mut MoveTokens<'info>,
+        hook: Option<Pubkey>,
+    },
     Sol {
         accounts: &'a MoveSol<'info>,
         vault_bump: u8,
@@ -530,7 +644,7 @@ impl<'a, 'info> SolanaHost<'a, 'info> {
                 );
                 let data = vault.try_borrow_data()?;
                 let state =
-                    StateWithExtensions::<token::spl_token_2022::state::Account>::unpack(&data)?;
+                    StateWithExtensions::<spl_token_2022_interface::state::Account>::unpack(&data)?;
                 require_keys_eq!(
                     state.base.mint,
                     host.root.identifier,
@@ -543,7 +657,10 @@ impl<'a, 'info> SolanaHost<'a, 'info> {
                 );
                 for extension in state.get_extension_types()? {
                     require!(
-                        extension == ExtensionType::ImmutableOwner,
+                        matches!(
+                            extension,
+                            ExtensionType::ImmutableOwner | ExtensionType::TransferHookAccount
+                        ),
                         LedgerError::UnsupportedToken
                     );
                 }
@@ -647,7 +764,9 @@ impl service::Host<Pubkey> for SolanaHost<'_, '_> {
         let account = match role {
             service::Role::Authority => self.authority.clone(),
             service::Role::TokenPayer => match self.settlement.as_ref() {
-                Some(Settlement::Tokens(accounts)) => accounts.funding_authority.to_account_info(),
+                Some(Settlement::Tokens { accounts, .. }) => {
+                    accounts.funding_authority.to_account_info()
+                }
                 Some(Settlement::Sol { accounts, .. }) => {
                     accounts.funding_authority.to_account_info()
                 }
@@ -814,7 +933,9 @@ impl service::Host<Pubkey> for SolanaHost<'_, '_> {
             .as_mut()
             .ok_or(core::Error::UnsupportedToken)?
         {
-            Settlement::Tokens(native) => Ok(service::TokenBalances {
+            Settlement::Tokens {
+                accounts: native, ..
+            } => Ok(service::TokenBalances {
                 asset: native.mint.key(),
                 owner: native.wallet.owner,
                 vault: u128::from(native.vault.amount),
@@ -843,8 +964,8 @@ impl service::Host<Pubkey> for SolanaHost<'_, '_> {
             .settlement
             .as_mut()
             .ok_or(core::Error::UnsupportedToken)?;
-        let native = match settlement {
-            Settlement::Tokens(accounts) => accounts,
+        let (native, hook) = match settlement {
+            Settlement::Tokens { accounts, hook } => (accounts, *hook),
             Settlement::Sol {
                 accounts,
                 vault_bump,
@@ -899,16 +1020,28 @@ impl service::Host<Pubkey> for SolanaHost<'_, '_> {
                 self.root_info.clone()
             },
         };
-        let cpi = CpiContext::new(native.token_program.key(), accounts);
-        token::transfer_checked(
-            if deposit {
-                cpi
-            } else {
-                cpi.with_signer(signer)
-            },
-            u64::try_from(amount).map_err(|_| core::Error::Overflow)?,
-            native.mint.decimals,
-        )?;
+        if let Some(hook) = hook {
+            transfer_with_hook(
+                native.token_program.key(),
+                accounts,
+                self.rest,
+                hook,
+                u64::try_from(amount).map_err(|_| core::Error::Overflow)?,
+                native.mint.decimals,
+                if deposit { &[] } else { signer },
+            )?;
+        } else {
+            let cpi = CpiContext::new(native.token_program.key(), accounts);
+            token::transfer_checked(
+                if deposit {
+                    cpi
+                } else {
+                    cpi.with_signer(signer)
+                },
+                u64::try_from(amount).map_err(|_| core::Error::Overflow)?,
+                native.mint.decimals,
+            )?;
+        }
         // Anchor decoded the initial balances. Refresh only after the CPI so
         // the core still observes actual token-program settlement on both sides.
         native.vault.reload()?;
@@ -1101,6 +1234,7 @@ pub fn add_ledger<'info>(
 }
 pub fn add_external_token<'info>(ctx: Context<'info, RegisterToken<'info>>) -> Result<()> {
     validate_mint(&ctx.accounts.mint.to_account_info())?;
+    let balance = initialize_custody(ctx.accounts)?;
     validate_token_account(&ctx.accounts.vault.to_account_info())?;
     let (name, symbol, decimals) = crate::ledger_view::registration_metadata(
         &ctx.accounts.mint.to_account_info(),
@@ -1114,10 +1248,7 @@ pub fn add_external_token<'info>(ctx: Context<'info, RegisterToken<'info>>) -> R
         ctx.accounts.system_program.to_account_info(),
         Some((Pubkey::default(), ctx.accounts.mint.key())),
     )?
-    .with_backing(
-        ctx.accounts.mint.key(),
-        u128::from(ctx.accounts.vault.amount),
-    )
+    .with_backing(ctx.accounts.mint.key(), u128::from(balance))
     .with_global_root(ctx.accounts.global_root.to_account_info())?;
     host.bind_vault(ctx.accounts.vault.key())?;
     host.run(service::Command::Initialize {
@@ -1233,7 +1364,7 @@ pub fn move_tokens<'info>(
     amount: u64,
     deposit: bool,
 ) -> Result<()> {
-    validate_mint(&ctx.accounts.mint.to_account_info())?;
+    let hook = validate_mint(&ctx.accounts.mint.to_account_info())?;
     validate_token_account(&ctx.accounts.vault.to_account_info())?;
     validate_token_account(&ctx.accounts.wallet.to_account_info())?;
     let mut host = SolanaHost::new(
@@ -1248,7 +1379,10 @@ pub fn move_tokens<'info>(
         asset: ctx.accounts.mint.key(),
         amount: u128::from(ctx.accounts.vault.amount),
     });
-    host.settlement = Some(Settlement::Tokens(ctx.accounts));
+    host.settlement = Some(Settlement::Tokens {
+        accounts: ctx.accounts,
+        hook,
+    });
     host.run(service::Command::MoveTokens {
         child: service::Child { parent, relative },
         amount: u128::from(amount),

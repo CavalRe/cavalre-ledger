@@ -70,8 +70,8 @@ issuance, implicit receipts, parent admission, account lifecycle, token custody,
 application isolation, PDA authority, and transaction rollback. This is not the
 full original Solidity test suite or a security audit.
 
-The suite contains **122 test functions**: **37 core tests**, **24 Solana library
-tests**, and **61 sBPF runtime tests**. The read suites
+The suite contains **136 test functions**: **39 core tests**, **26 Solana library
+tests**, and **71 sBPF runtime tests**. The read suites
 also run with mutation modules excluded; these repeat runs are not extra tests.
 Fixture steps run inside replay tests; they are not separate test functions.
 See the [standalone specification](https://caval.re/blog/ledger-specifications)

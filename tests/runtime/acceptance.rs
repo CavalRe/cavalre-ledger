@@ -27,6 +27,8 @@ mod native_sol;
 mod root;
 #[path = "token2022.rs"]
 mod token2022;
+#[path = "token_hooks.rs"]
+mod token_hooks;
 #[path = "writable_accounts.rs"]
 mod writable_accounts;
 

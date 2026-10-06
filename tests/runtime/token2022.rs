@@ -310,7 +310,6 @@ fn mint_extension(h: &mut Harness, e: &External, extension: ExtensionType) {
 fn incompatible_mints_reject_registration_without_allocating_ledger_state() {
     for extension in [
         ExtensionType::TransferFeeConfig,
-        ExtensionType::TransferHook,
         ExtensionType::PermanentDelegate,
         ExtensionType::ConfidentialTransferMint,
     ] {

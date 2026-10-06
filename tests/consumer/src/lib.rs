@@ -9,7 +9,11 @@ use anchor_lang::solana_program::{
 };
 #[cfg(not(feature = "no-entrypoint"))]
 anchor_lang::solana_program::entrypoint!(process);
+mod hook;
 pub fn process(id: &Pubkey, accounts: &[AccountInfo], data: &[u8]) -> ProgramResult {
+    if let Some(result) = hook::process(id, accounts, data) {
+        return result;
+    }
     if let Some(address) = data.strip_prefix(b"metadata") {
         use anchor_lang::AnchorSerialize;
         use cavalre_ledger_solana::ledger_view::Reader;

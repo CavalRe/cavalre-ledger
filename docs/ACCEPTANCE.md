@@ -5,8 +5,8 @@ artifacts before running tests. Runtime tests load those artifacts into LiteSVM;
 they do not substitute native Rust handlers. This is local runtime validation,
 not a deployed-cluster test or a security audit.
 
-There are 131 test functions: 39 core tests, 26 Solana library tests and
-66 runtime tests. View suites also run with mutations excluded;
+There are 136 test functions: 39 core tests, 26 Solana library tests and
+71 runtime tests. View suites also run with mutations excluded;
 those repeat executions are not additional test functions.
 One core test replays all 162 saved Solidity posting
 cases, including expected rejections and every node's resulting gross balances.
@@ -42,6 +42,7 @@ independent-host replay in [host.rs](../crates/cavalre-ledger-core/tests/host.rs
 | Account authentication | Wrong addresses, owners, headers, lengths, stored bumps, duplicate records and omitted parents reject without partial state changes. |
 | Native SOL | Direct and application-CPI round trips enforce separate custodian/payer authority and allow unsigned recipients. Fee payer/wallet aliasing works. Prefunding and donations create no claims; rent is excluded from backing and retained after full withdrawal. Invalid authority, admission, vault identity/owner/data and insufficient total backing reject. Late initialization, deposit and withdrawal failures roll back lamports, records and rent allocation. |
 | Token-2022 | Plain and metadata mints settle through direct calls and application CPI. Immutable-owner wallets work; UI-scaled tokens settle in raw units. Unsupported mint/account extensions reject, including on subsequent settlement. Mixed token programs and frozen accounts reject; late commit failure rolls back settlement and allocation. |
+| Transfer hooks and permissioned burns | Active/disabled hooks, PermissionedBurn alone, and both extensions with inline metadata settle directly and through application CPI. Hooks receive reduced base-record privileges; missing/substituted extra records, hook errors, indirect reentry and late accounting failure roll back all state. Issuer hook updates take effect on the next custody call. Burns require both holder consent and burn authority; application PDA minting and atomic withdrawal/burn succeed, while a failed burn rolls back withdrawal. Underbacking still freezes all mutations and direct repairs restore activity. |
 | Native token identity | Wrong mints, wallets, vault PDAs, vault authorities, substituted token programs and wallet/vault aliasing reject. |
 | Settlement atomicity | Frozen token accounts reject. A late commit failure after token movement and new-leaf allocation rolls back token balances, ledger writes and rent allocation. |
 | Custody root access | Zero-amount classic SPL, Token-2022 and native SOL wrap/unwrap run with all Ledger records read-only, directly and through raw CPI with and without in-place preparation, for absent and funded endpoints. Nonzero unprepared calls with a read-only root reject at commit and roll back settlement/allocation; prepared calls reject missing outer write privileges before entering Ledger. The same calls succeed when root writes are supplied. Application PDA signing and remaining records are preserved; a signed but incorrect token funder still rejects. Preparation tests check all four encoded layouts, high-bit amounts, idempotence, unchanged data/other metas and malformed-input rejection without modifications. |
@@ -256,3 +257,56 @@ Compared with `597e108`, the Ledger and test-consumer sBPF artifacts are
 byte-identical (401,160 and 130,064 bytes respectively), and the complete
 2,205-transaction execution profile is unchanged. No runtime resource increase
 or new fixture mismatch was observed. Release work listed above remains separate.
+
+## TransferHook and PermissionedBurn compatibility
+
+The adapter now accepts these two mint extensions. The accounting core, Ledger
+record layout, instruction data, account order and custody addresses are unchanged.
+The [token policy](../crates/cavalre-ledger-solana/README.md#token-compatibility)
+documents extra-record forwarding, hook authority and the Rust registration-field
+type change. It also explains that internal postings do not invoke token hooks.
+
+The five [hook/burn runtime tests](../tests/runtime/token_hooks.rs) execute the
+actual Token-2022 program and a built sBPF hook/application fixture. They cover
+all combinations of these extensions, disabled and updated hooks, inline metadata,
+zero amounts, repeated registration, direct/CPI settlement, exact failure codes,
+rollback, program-controlled mint/burn, atomic withdrawal/burn and backing repair.
+
+Measured against `cf115da` with the same pinned tools:
+
+| Existing path | Compute change |
+| --- | --- |
+| Classic SPL direct custody | +40 CU per wrap/unwrap |
+| Classic SPL application CPI custody | +59 CU, including 19 CU in the expanded test-consumer dispatch |
+| Classic SPL other direct mutations | -6 to -5 CU |
+| Accounting-only sampled operations | +1 to +2 CU |
+| Plain Token-2022 direct custody | -41 CU |
+| Inline-metadata Token-2022 direct custody | +439 CU |
+| Plain Token-2022 registration / matching repeat | -707 / -425 CU |
+| Inline-metadata Token-2022 registration / matching repeat | +477 / +1,128 CU |
+
+All 2,205 existing profile rows retain their transaction bytes, account counts,
+writable counts, fees and rent. The inline-metadata increase is under 1.1% for
+the sampled custody calls; matching repeat registration increases by 2.5%.
+The Ledger artifact grows from 378,784 to 414,776 bytes (+35,992; 9.5%) with the
+current extension decoder and SPL hook resolver. Anchor remains pinned to 1.2.0;
+its older internal token-interface dependency also remains in the build.
+
+New direct-call examples from `target/token-hook-costs.json`:
+
+| Token configuration | First wrap CU | Unwrap CU | Signed transaction bytes |
+| --- | ---: | ---: | ---: |
+| Plain Token-2022 | 51,652 | 42,935 | 645 |
+| PermissionedBurn | 52,845 | 44,128 | 645 |
+| Active test hook | 79,567 | 70,852 | 745 |
+| Active test hook + PermissionedBurn + inline metadata | 80,616 | 71,901 | 745 |
+
+The active test hook adds roughly 28k CU and 100 transaction bytes compared with
+the plain fixture. These totals include resolution, Token-2022's hook CPI and
+the test hook's own checks/state write; they are not the cost of an arbitrary
+application hook. A hook extension expands this custody token record from 165
+to 171 bytes. Hook metadata/state have separate funding requirements. No Ledger
+accounting record grows. PermissionedBurn by itself adds no custody-record bytes.
+Hooks can reject withdrawals and their required records can change with issuer
+configuration. Cluster deployment and application-specific hook measurements
+remain separate from these local compatibility tests.

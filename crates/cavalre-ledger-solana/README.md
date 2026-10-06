@@ -342,17 +342,49 @@ withdrawal. The current policy is:
 | `GroupPointer`, `TokenGroup`, `GroupMemberPointer`, `TokenGroupMember` | Supported; group metadata does not change settlement |
 | `MintCloseAuthority` | Supported; the token program enforces its supply checks |
 | `InterestBearingConfig`, `ScaledUiAmount` | Supported in raw base units; Ledger does not apply UI multipliers or accrue additional units |
-| Token-account `ImmutableOwner` | Supported, including Token-2022 associated accounts |
+| `TransferHook` | Supported, including a disabled hook; active hooks run during token custody transfers |
+| `PermissionedBurn` | Supported; minting and burning remain token-program operations outside Ledger |
+| Token-account `ImmutableOwner`, `TransferHookAccount` | Supported, including Token-2022 associated accounts and hook-enabled custody records |
 | All other mint or token-account extensions | Rejected with `UnsupportedToken`; malformed data also rejects |
 
-The rejected set includes transfer fees, transfer hooks, permanent delegates,
+The rejected set includes transfer fees, permanent delegates,
 confidential transfers, nontransferable/pausable tokens, default account states,
 CPI guards and memo requirements. This version has no settlement mechanism for
-those configurations. Fee and hook extensions are rejected even when their
-current fee is zero or their hook is disabled. Unknown extension data cannot
+those configurations. Fee extensions are rejected even when their
+current fee is zero. Unknown extension data cannot
 silently become supported. Registration also requires valid issuer name and
 symbol metadata, which is stored with mint decimals. `LedgerView` reads that
 snapshot without querying the issuer again; see [read interfaces](../../docs/READS.md).
+
+For an active hook, append its program, canonical extra-account-metadata record
+and declared records to the remaining accounts of `wrap`/`unwrap`. Include their
+required write/signing permissions in the outer transaction, including when
+calling through an application. The adapter uses the SPL resolver to pass only
+the hook's declared records to Token-2022. Its ordinary transfer path is retained
+when no hook is active. Hook configuration is read from the mint on every custody
+call, so an issuer's update can change the required records or reject withdrawals.
+Hook programs incur their own compute and account costs. Zero-amount custody
+calls still execute an active hook. Internal Ledger transfers never call the
+token program and therefore do not execute token hooks.
+
+Token-2022 strips write access and signer privileges from the hook's four base
+records (source, mint, destination and authority). Hook errors, failed exact
+settlement and failed Ledger commits roll back token balances, hook state and
+Ledger changes together. The full-backing guard still runs before mutation;
+direct token transfers can restore missing backing without creating Ledger claims.
+
+Permissioned burns require the configured burn authority as well as the token
+owner or delegate under Token-2022's rules. The burn authority alone cannot burn
+another holder's tokens. An application can withdraw tokens it controls and burn
+them in the same transaction; a failed burn also rolls back the withdrawal.
+Ledger neither burns tokens nor grants burn authority. Custody withdrawals first
+retire the corresponding Source credit and debit balance under the existing rules.
+
+Instruction data, account order, PDA seeds and Ledger record layouts are unchanged.
+The Rust `RegisterToken.vault` field is now `UncheckedAccount`; the adapter
+explicitly initializes and authenticates its token mint and authority using the
+current Token-2022 decoder. This replaces Anchor's older allocation helper, which
+cannot decode PermissionedBurn. Generated client account metas are unchanged.
 
 Both token programs retain their own mint/freeze authority behavior. Runtime
 settlement failures roll back token movement, accounting and new allocations.
@@ -361,7 +393,9 @@ select the appropriate token program. Registration and creation-event clients
 must use the metadata interfaces above.
 
 References: [Anchor token interface](https://www.anchor-lang.com/docs/tokens/basics/transfer-tokens)
-and [Token-2022 extensions](https://solana.com/docs/tokens/extensions).
+and [Token-2022 extensions](https://solana.com/docs/tokens/extensions), including
+[transfer hooks](https://solana.com/docs/tokens/extensions/transfer-hook) and
+[permissioned burns](https://solana.com/docs/tokens/extensions/permissioned-burn).
 
 ## Supported scope and release status
 
