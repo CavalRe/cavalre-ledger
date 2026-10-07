@@ -5,6 +5,7 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+cavalre-ledger-indexed = { path = "../../experiments/indexed-ledger" }
 cavalre-ledger-solana = { path = "../../crates/cavalre-ledger-solana", features = ["no-entrypoint"] }
 anchor-lang = "=1.2.0"
 litesvm = "=0.16.0"
@@ -34,3 +35,7 @@ solana-compute-budget-interface = "=3.0.0"
 [[test]]
 name = "ledger"
 path = "ledger.rs"
+
+[[test]]
+name = "indexed"
+path = "indexed.rs"

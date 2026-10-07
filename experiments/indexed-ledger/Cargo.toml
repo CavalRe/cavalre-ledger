@@ -1,0 +1,17 @@
+[package]
+name = "cavalre-ledger-indexed"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+cavalre-ledger-core = { path = "../../crates/cavalre-ledger-core", default-features = false }
+anchor-lang = "=1.2.0"
+keccak-const = "=0.2.0"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("solana"))', 'cfg(feature, values("custom-heap", "custom-panic"))'] }

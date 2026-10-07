@@ -8,4 +8,5 @@ cargo test -p cavalre-ledger-core --no-default-features --locked
 cargo test -p cavalre-ledger-solana --no-default-features --locked
 bash scripts/build-sbf.sh tests/consumer/Cargo.toml
 bash scripts/build-sbf.sh crates/cavalre-ledger-solana/Cargo.toml
+bash scripts/build-sbf.sh experiments/indexed-ledger/Cargo.toml
 cargo test --workspace --locked

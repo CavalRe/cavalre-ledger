@@ -1,5 +1,13 @@
 # Working on CavalRe Ledger
 
+## Indexed-storage branch agreement (2026-10-06)
+
+The user explicitly requested a new branch, `feat/indexed-ledger-storage`.
+For `experiments/indexed-ledger`, follow `docs/INDEXED_STORAGE.md`: fixed 110-byte
+records, cross-container AccountRefs, child counts without child lists,
+separate index and metadata PDAs. This supersedes conflicting storage guidance
+below for that experimental adapter only. Keep the existing adapter for comparison.
+
 - Work on `main` and push completed, verified changes when authorized.
 - Shared rules live in `crates/cavalre-ledger-core`; Solana-specific behavior
   lives in `crates/cavalre-ledger-solana`. Follow the original Solidity LedgerLib

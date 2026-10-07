@@ -833,11 +833,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "cavalre-ledger-indexed"
+version = "0.1.0"
+dependencies = [
+ "anchor-lang",
+ "cavalre-ledger-core",
+ "keccak-const",
+]
+
+[[package]]
 name = "cavalre-ledger-runtime-tests"
 version = "0.1.0"
 dependencies = [
  "anchor-lang",
  "base64 0.22.1",
+ "cavalre-ledger-indexed",
  "cavalre-ledger-solana",
  "litesvm",
  "serde_json",
