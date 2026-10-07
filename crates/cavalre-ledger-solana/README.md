@@ -52,18 +52,23 @@ Both endpoints must exist, including for zero and self-transfers.
 When a recipient may be absent, put
 `ledger_transfer::create_idempotent_instruction(payer, authority, ledger, child, remaining)`
 before the transfer in the **same transaction**. The helper encodes parent,
-relative identity and canonical bump. Its fixed accounts are payer signer,
-authority signer, ledger and System Program; it adds the writable parent and
-recipient PDA. Supply the parent's ancestry and canonical external/native vault
+relative identity and canonical bump. Its account order is payer signer,
+authority signer, ledger, System Program, then the writable recipient PDA in
+fixed position 4. The helper also adds the writable parent. Supply the parent's
+ancestry and canonical external/native vault
 in `remaining`. Creation allocates one default leaf and indexes it in the parent,
 without labels, balance changes or lifecycle events. If the transfer fails,
 creation and its storage funding roll back too; transaction fees still apply.
 
 Any authenticated sponsor can fund an external/native debit recipient. Its
 custodian is inherited from the parent (or itself for a direct ledger child),
-so sponsorship grants no spending rights. Internal creation requires the ledger
-authority. Groups and the reserved Source are rejected. An existing leaf is
-authenticated without loading the full hierarchy or writing any account.
+so sponsorship grants no spending rights. Allocating an internal leaf requires
+the ledger authority. If the recipient already has data, creation returns
+immediately, without hashes, account decoding or mutation checks. This no-op
+does not certify that the supplied account is valid. The allocation handler
+validates missing-account identity, authority and backing; transfer independently
+validates both endpoints, custody, authority, backing and arithmetic. Existing
+groups or Source may skip creation but retain their normal transfer restrictions.
 The helper still requests parent write access to allow creation; omit creation
 when the recipient is known to exist to avoid that structural write lock.
 

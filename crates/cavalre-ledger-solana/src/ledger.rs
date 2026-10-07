@@ -1484,10 +1484,13 @@ pub fn create_idempotent<'info>(
     relative: Pubkey,
     bump: u8,
 ) -> Result<()> {
-    require!(
-        to_address(&crate::ID, &parent, &relative).1 == bump,
-        LedgerError::InvalidAccount
-    );
+    let (address, canonical_bump) = to_address(&crate::ID, &parent, &relative);
+    require!(canonical_bump == bump, LedgerError::InvalidAccount);
+    let recipient = ctx
+        .remaining_accounts
+        .first()
+        .ok_or(LedgerError::MissingAccount)?;
+    require_keys_eq!(*recipient.key, address, LedgerError::InvalidAccount);
     SolanaHost::accounts(ctx)?.run(service::Command::CreateIdempotent {
         child: service::Child { parent, relative },
     })

@@ -52,8 +52,11 @@ removed. For a potentially absent recipient, compose
 a default leaf with inherited polarity and custody, then indexes it under its
 parent. External/native debit recipients can be sponsored without their
 custodian signing; internal ledgers still require their configured authority.
-It cannot create groups, choose custody, add labels or touch Source. Existing
-leaves use authenticated fixed-field reads and no writes. Allocation remains in
+It cannot create groups, choose custody, add labels or mutate Source. Recipient
+account 4 provides the existence test: nonempty data skips allocation immediately,
+without hashing, decoding or invoking the mutation service. The no-op does not
+certify account validity. Actual allocation and the following transfer still
+enforce their full identity, permission and backing rules. Allocation remains in
 the structural host, with canonical PDA derivation and checked parent updates.
 
 Unlike the original implicit transfer interface, the Solana transfer now requires

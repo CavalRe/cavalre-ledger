@@ -18,7 +18,8 @@ use pinocchio::{
 };
 
 pub const TRANSFER: &[u8; 8] = b"CVXFER01";
-/// Create a default recipient leaf, or validate an existing leaf without writes.
+/// Create a default recipient leaf only when the supplied recipient has no data.
+/// The no-op does not validate an existing account; transfer performs that check.
 /// Include this before `instruction` in the same transaction for first receipt.
 /// `remaining` supplies the parent's ancestry and the external vault when needed.
 /// The payer funds allocation; the existing custody rules determine spending rights.
@@ -37,14 +38,14 @@ pub fn create_idempotent_instruction(
         system_program: anchor_lang::system_program::ID,
     }
     .to_account_metas(None);
+    // Keep the recipient in a fixed role so the no-op needs only a data-length
+    // check. Allocation and transfer authenticate their own account identities.
+    accounts.push(AccountMeta::new(address, false));
     // Only creation writes the parent vector. Existing-recipient transfers omit
     // this instruction and never acquire the parent's structural write lock.
-    for meta in [
-        AccountMeta::new(child.parent, false),
-        AccountMeta::new(address, false),
-    ]
-    .iter()
-    .chain(remaining)
+    for meta in [AccountMeta::new(child.parent, false)]
+        .iter()
+        .chain(remaining)
     {
         if let Some(existing) = accounts.iter_mut().find(|a| a.pubkey == meta.pubkey) {
             existing.is_writable |= meta.is_writable;
@@ -384,71 +385,15 @@ pub fn process(accounts: &[AccountInfo], input: &[u8]) -> Result<(), ProgramErro
     walk(accounts, &ledger, resolved_from, resolved_to, amount)
 }
 
-/// Authenticate an existing recipient without loading or staging the full tree.
-/// Only an unallocated System account falls through to the allocation handler.
+/// Skip allocation whenever the supplied recipient already has data.
+/// This no-op does not certify a valid Ledger account. Transfer independently
+/// validates its endpoints; allocation validates identity, authority and backing.
+/// Account 4 is the recipient, immediately after the four LedgerAccounts roles.
 pub fn existing_recipient(accounts: &[AccountInfo], input: &[u8]) -> Result<bool, ProgramError> {
-    if input.len() != 73 || accounts.len() < 4 {
+    if input.len() != 73 || accounts.len() < 5 {
         return Err(ProgramError::InvalidInstructionData);
     }
-    if !accounts[0].is_signer() || !accounts[1].is_signer() {
-        return Err(error(LedgerError::Unauthorized));
-    }
-    if !accounts[0].is_writable()
-        || !pubkey_eq(accounts[3].key(), &[0; 32])
-        || !accounts[3].executable()
-    {
-        return Err(error(LedgerError::InvalidAccount));
-    }
-    let identity: &[u8; 64] = input[8..72].try_into().unwrap();
-    let expected = address(identity, input[72]);
-    let account = find(accounts, &Pubkey::new_from_array(expected))?;
-    if account.is_owned_by(&[0; 32]) && account.data_is_empty() {
-        return Ok(false);
-    }
-    let recipient = endpoint(account, identity, input[72])?;
-    let ledger = Pubkey::new_from_array(*accounts[2].key());
-    if pubkey_eq(storage::key(identity, 0), ledger.as_array())
-        && pubkey_eq(
-            storage::key(identity, 32),
-            crate::ledger_lib::SOURCE.as_array(),
-        )
-    {
-        return Err(error(LedgerError::Unauthorized));
-    }
-    custodian(
-        accounts,
-        storage::key(&recipient.data, storage::CUSTODIAN),
-        &recipient,
-        &recipient,
-        ledger.as_array(),
-    )?;
-    let root = Record::load(&accounts[2])?;
-    if root.data[storage::DEPTH] != 2 {
-        return Err(error(LedgerError::InvalidAccount));
-    }
-    let token_kind = root.data[storage::TOKEN_KIND];
-    if token_kind == 3 {
-        if !pubkey_eq(
-            accounts[1].key(),
-            storage::key(&root.data, storage::AUTHORITY),
-        ) {
-            return Err(error(LedgerError::Unauthorized));
-        }
-    } else {
-        if recipient.data[storage::KIND] != 2 {
-            return Err(error(LedgerError::InvalidKind));
-        }
-        let vault = find(
-            accounts,
-            &Pubkey::new_from_array(*storage::key(&root.data, storage::VAULT)),
-        )?;
-        if backing(vault, &root.data, &ledger, token_kind)?
-            < storage::balance(&root.data, storage::CREDIT)
-        {
-            return Err(error(LedgerError::Undercollateralized));
-        }
-    }
-    Ok(true)
+    Ok(!accounts[4].data_is_empty())
 }
 
 #[inline(never)]

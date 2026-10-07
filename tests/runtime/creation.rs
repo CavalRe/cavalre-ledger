@@ -123,7 +123,7 @@ fn create_idempotent_preserves_custody_and_measures_first_receipt() {
         let payer_before = h.svm.get_account(&alice).unwrap().lamports;
         let repeated = run_raw(&mut h, &[0], repeat).unwrap();
         assert!(
-            repeated.compute_units_consumed <= 1_300,
+            repeated.compute_units_consumed <= 200,
             "idempotent creation CU regression"
         );
         assert_eq!(keys.map(|key| h.svm.get_account(&key)), after);
@@ -132,31 +132,86 @@ fn create_idempotent_preserves_custody_and_measures_first_receipt() {
             payer_before
         );
         assert!(events::event_bytes(&repeated.logs).is_empty());
-        // The shortcut still authenticates identities, signers, the ledger and
-        // live backing. Bad inputs cannot turn an existing leaf into a no-op.
-        for fault in 0..6 {
+        // The no-op only checks for data at the supplied recipient. The transfer
+        // independently rejects a wrong destination identity or bump.
+        for fault in 0..2 {
             let mut bad = creation.clone();
-            match fault {
-                0 => bad.data[72] ^= 1,
-                1 => {
-                    bad.data.pop();
-                }
-                2 => {
-                    bad.accounts[1].pubkey = bob;
-                    bad.accounts[1].is_signer = false;
-                }
-                3 => bad.accounts[2].pubkey = e.source,
-                4 => bad.accounts[3].pubkey = bob,
-                _ => bad.accounts.retain(|m| m.pubkey != e.vault),
+            let mut bad_transfer = send.clone();
+            if fault == 0 {
+                bad.data[72] ^= 1;
+                bad_transfer.data[153] ^= 1;
+            } else {
+                bad.data[40] ^= 1;
+                bad_transfer.data[104] ^= 1;
             }
-            assert!(run_raw(&mut h, &[0], bad).is_err());
+            run_raw(&mut h, &[0], bad.clone()).unwrap();
+            let failure = run_instructions(&mut h, &[0], &[bad, bad_transfer]).unwrap_err();
+            assert_eq!(
+                failure.err,
+                TransactionError::InstructionError(
+                    1,
+                    InstructionError::Custom(LedgerError::InvalidAccount.into())
+                )
+            );
             assert_eq!(keys.map(|key| h.svm.get_account(&key)), after);
         }
+        let mut malformed = creation.clone();
+        malformed.data.pop();
+        assert!(run_raw(&mut h, &[0], malformed).is_err());
+        let mut no_mutation_inputs = creation.clone();
+        no_mutation_inputs.accounts.retain(|m| m.pubkey != e.vault);
+        no_mutation_inputs.accounts[1].pubkey = bob;
+        no_mutation_inputs.accounts[1].is_signer = false;
+        no_mutation_inputs.accounts[3].pubkey = bob;
+        run_raw(&mut h, &[0], no_mutation_inputs).unwrap();
+        assert_eq!(keys.map(|key| h.svm.get_account(&key)), after);
+
+        // Nonempty data skips creation, but never bypasses transfer validation.
+        let original = h.svm.get_account(&bob_account).unwrap();
+        for fault in 0..4 {
+            let mut invalid = original.clone();
+            match fault {
+                0 => invalid.owner = SYSTEM,
+                1 => {
+                    invalid.data.pop();
+                }
+                2 => invalid.data[ledger::ledger_storage::KIND] = 0,
+                _ => invalid.data[ledger::ledger_storage::PARENT] ^= 1,
+            }
+            h.svm.set_account(bob_account, invalid.clone()).unwrap();
+            run_raw(&mut h, &[0], creation.clone()).unwrap();
+            let failure =
+                run_instructions(&mut h, &[0], &[creation.clone(), send.clone()]).unwrap_err();
+            assert_eq!(
+                failure.err,
+                TransactionError::InstructionError(
+                    1,
+                    InstructionError::Custom(LedgerError::InvalidAccount.into())
+                )
+            );
+            assert_eq!(h.svm.get_account(&bob_account), Some(invalid));
+        }
+        h.svm.set_account(bob_account, original).unwrap();
         let original_vault = h.svm.get_account(&e.vault).unwrap();
         let mut short = original_vault.clone();
         short.data[64..72].copy_from_slice(&0u64.to_le_bytes());
         h.svm.set_account(e.vault, short).unwrap();
-        let failure = run_raw(&mut h, &[0], creation.clone()).unwrap_err();
+        // Existing creation does no accounting work. Backing admission remains
+        // mandatory at the actual transfer, even with a successful no-op first.
+        run_raw(&mut h, &[0], creation.clone()).unwrap();
+        let failure =
+            run_instructions(&mut h, &[0], &[creation.clone(), send.clone()]).unwrap_err();
+        assert_eq!(
+            failure.err,
+            TransactionError::InstructionError(
+                1,
+                InstructionError::Custom(LedgerError::Undercollateralized.into())
+            )
+        );
+        assert_eq!(h.svm.get_account(&bob_account), after[4]);
+        assert_eq!(h.svm.get_account(&alice_account), after[3]);
+        let fresh = create(&h, e.root, e.root, h.key(2), &[e.vault]);
+        let failure = run_raw(&mut h, &[0], fresh).unwrap_err();
         assert_eq!(
             failure.err,
             TransactionError::InstructionError(
@@ -164,10 +219,11 @@ fn create_idempotent_preserves_custody_and_measures_first_receipt() {
                 InstructionError::Custom(LedgerError::Undercollateralized.into())
             )
         );
+        assert!(h.svm.get_account(&child(e.root, h.key(2))).is_none());
         h.svm.set_account(e.vault, original_vault).unwrap();
         let existing_pair =
             run_instructions(&mut h, &[0], &[creation.clone(), send.clone()]).unwrap();
-        assert!(existing_pair.compute_units_consumed <= 3_500);
+        assert!(existing_pair.compute_units_consumed <= 2_300);
         let existing = run_raw(&mut h, &[0], send.clone()).unwrap();
         assert!(existing.compute_units_consumed <= 2_150);
 
@@ -181,7 +237,14 @@ fn create_idempotent_preserves_custody_and_measures_first_receipt() {
             1,
             &[e.vault],
         );
-        assert!(run_raw(&mut h, &[0], steal).is_err());
+        let failure = run_instructions(&mut h, &[0], &[creation.clone(), steal]).unwrap_err();
+        assert_eq!(
+            failure.err,
+            TransactionError::InstructionError(
+                1,
+                InstructionError::Custom(LedgerError::Unauthorized.into())
+            )
+        );
         let spend = packed_transfers::fast(
             &h,
             e.root,
@@ -205,7 +268,7 @@ fn create_idempotent_preserves_custody_and_measures_first_receipt() {
 }
 
 #[test]
-fn create_idempotent_rejects_wrong_identity_groups_and_internal_authority() {
+fn create_idempotent_validates_allocation_and_skips_populated_accounts() {
     let mut h = Harness::new();
     let e = External::new(&mut h, 133, 0);
     let app = branch(&mut h, e.root, 0, true);
@@ -221,6 +284,9 @@ fn create_idempotent_rejects_wrong_identity_groups_and_internal_authority() {
         .unwrap()
         .pubkey = h.key(2);
     assert!(run_raw(&mut h, &[0], wrong).is_err());
+    let mut wrong_bump = valid.clone();
+    wrong_bump.data[72] ^= 1;
+    assert!(run_raw(&mut h, &[0], wrong_bump).is_err());
     let mut readonly = valid.clone();
     readonly
         .accounts
@@ -233,10 +299,15 @@ fn create_idempotent_rejects_wrong_identity_groups_and_internal_authority() {
         [e.root, app, account].map(|key| h.svm.get_account(&key)),
         before
     );
-    let group = create(&h, e.root, e.root, h.key(0), &[e.vault]);
-    assert!(run_raw(&mut h, &[0], group).is_err());
-    let source = create(&h, e.root, e.root, sa(SOURCE), &[e.vault]);
-    assert!(run_raw(&mut h, &[0], source).is_err());
+    let populated = [e.root, app, e.source].map(|key| h.svm.get_account(&key));
+    for relative in [h.key(0), sa(SOURCE)] {
+        let existing = create(&h, e.root, e.root, relative, &[e.vault]);
+        run_raw(&mut h, &[0], existing).unwrap();
+    }
+    assert_eq!(
+        [e.root, app, e.source].map(|key| h.svm.get_account(&key)),
+        populated
+    );
     // A prefunded System-owned PDA is safely completed rather than stranded.
     h.svm.airdrop(&account, 1_000_000).unwrap();
     run_raw(&mut h, &[0], valid).unwrap();
@@ -250,7 +321,25 @@ fn create_idempotent_rejects_wrong_identity_groups_and_internal_authority() {
     assert!(run_raw(&mut h, &[0, 1], bad.clone()).is_err());
     assert!(h.svm.get_account(&child(root, relative)).is_none());
     run_raw(&mut h, &[0], valid.clone()).unwrap();
-    // Existing internal leaves retain the same authority requirement.
-    assert!(run_raw(&mut h, &[0, 1], bad).is_err());
+    // Any caller may skip allocation. Authority is still mandatory
+    // for creation (above) and posting (below), which actually change state.
+    run_raw(&mut h, &[0, 1], bad.clone()).unwrap();
+    let unauthorized = packed_transfers::fast(
+        &h,
+        root,
+        h.key(1),
+        (root, sa(SOURCE)),
+        (root, relative),
+        1,
+        &[],
+    );
+    let failure = run_instructions(&mut h, &[0, 1], &[bad, unauthorized]).unwrap_err();
+    assert_eq!(
+        failure.err,
+        TransactionError::InstructionError(
+            1,
+            InstructionError::Custom(LedgerError::Unauthorized.into())
+        )
+    );
     run_raw(&mut h, &[0], valid).unwrap();
 }

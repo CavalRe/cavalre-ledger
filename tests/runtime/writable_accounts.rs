@@ -144,7 +144,7 @@ fn zero_and_self_transfers_require_registered_endpoints_and_only_charge_fees() {
                 relative: ap(relative),
                 bump: ledger::ledger_lib::to_address(&ledger::ID, &ap(restricted), &ap(relative)).1,
             },
-            &[app, closed, restricted, child(restricted, relative)],
+            &[child(restricted, relative), app, closed, restricted],
         );
         succeeds(&mut h, &[0], create);
     }
