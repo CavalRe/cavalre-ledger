@@ -35,16 +35,16 @@ leaves use 64-byte names. Initial ledger setup is outside the measured operation
 
 | Leaf depth | Maximum CU | Maximum packet bytes | Maximum account keys | Maximum writable keys |
 | --- | ---: | ---: | ---: | ---: |
-| 13 | 268,401 | 1,232 | 29 | 24 |
-| 12 | 252,629 | 1,201 | 27 | 22 |
-| 11 | 232,754 | 1,229 | 25 | 20 |
-| 10 | 199,778 | 1,161 | 23 | 18 |
-| 9 | 183,702 | 1,093 | 21 | 16 |
-| 8 | 174,019 | 1,025 | 19 | 14 |
-| 7 | 124,237 | 957 | 18 | 12 |
-| 6 | 109,354 | 889 | 17 | 10 |
-| 5 | 97,106 | 826 | 16 | 8 |
-| 4 | 92,273 | 793 | 15 | 7 |
+| 13 | 181,978 | 1,232 | 29 | 24 |
+| 12 | 169,560 | 1,201 | 27 | 22 |
+| 11 | 160,507 | 1,229 | 25 | 20 |
+| 10 | 141,321 | 1,161 | 23 | 18 |
+| 9 | 131,503 | 1,093 | 21 | 16 |
+| 8 | 122,046 | 1,025 | 19 | 14 |
+| 7 | 111,232 | 957 | 18 | 12 |
+| 4 | 92,419 | 793 | 15 | 7 |
+| 5 | 89,893 | 826 | 16 | 8 |
+| 6 | 78,333 | 889 | 17 | 10 |
 
 Rows are ordered by decreasing maximum CU. Each column is an independent maximum across that depth's operations. These are
 local runtime measurements, not cluster throughput. PDA bump searches on the
@@ -56,6 +56,9 @@ to pending accounts, avoiding repeated full-record buffers under the bump alloca
 The optimized transfer borrows fixed fields and stages arithmetic before writing.
 Transfer and settlement use the original shared ancestor walk; transfer derives
 no ancestor PDAs. Creation still uses the structural host for missing records.
+That host reuses canonical recipient derivations and skips unused metadata
+address searches. The largest sampled workflow fell from 268,401 to 181,978 CU;
+all 2,205 transactions retain their accounting, authority and event checks.
 
 ## Storage and write locks
 

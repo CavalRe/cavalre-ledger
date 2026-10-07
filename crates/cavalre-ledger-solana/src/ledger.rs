@@ -392,9 +392,15 @@ fn load<'info>(root: &AccountInfo<'info>, rest: &[AccountInfo<'info>]) -> Result
         );
         records.push(loaded(key, record, relative));
     }
+    // Derive optional metadata addresses only when an unclassified program-owned
+    // account was actually supplied. Ordinary creation/custody calls omit them.
+    // Unknown accounts are still authenticated or rejected by the final pass.
+    let has_metadata = rest.iter().any(|account| {
+        account.owner == &crate::ID && !records.iter().any(|entry| entry.key == *account.key)
+    });
     // Metadata is decoded only at its explicitly derived namespace. A byte
     // pattern alone never turns metadata into an accounting record.
-    for entry in &mut records {
+    for entry in records.iter_mut().filter(|_| has_metadata) {
         let relative = if let Some(config) = &entry.record.ledger {
             ledger_relative(&config.authority, &config.identifier)
         } else {
@@ -1191,7 +1197,7 @@ impl service::Host<Pubkey> for SolanaHost<'_, '_> {
                 let bump = [if entry.record.depth == 1 {
                     global_root_address().1
                 } else {
-                    to_address(&crate::ID, &entry.record.parent, &relative).1
+                    self.child_address(&entry.record.parent, &relative).1
                 }];
                 let seeds: &[&[u8]] = if entry.record.depth == 1 {
                     &[ROOT_NAME.as_bytes(), &bump]
@@ -1216,14 +1222,16 @@ impl service::Host<Pubkey> for SolanaHost<'_, '_> {
             if entry.changed {
                 save(target, entry)?;
             }
-            if entry.metadata_changed && entry.record.depth > 1 {
+            if let Some(metadata) = entry
+                .metadata
+                .as_ref()
+                .filter(|_| entry.metadata_changed && entry.record.depth > 1)
+            {
                 let (metadata_key, metadata_bump) =
                     metadata_address(&entry.record.parent, &relative);
                 // Metadata is optional: create it only when the caller supplies
                 // its PDA. Ordinary transfers never require this account.
-                if let (Some(metadata), Ok(target)) =
-                    (&entry.metadata, self.account_info(&metadata_key))
-                {
+                if let Ok(target) = self.account_info(&metadata_key) {
                     let bytes = crate::ledger_storage::encode_metadata(metadata)?;
                     if target.data_is_empty() {
                         let bump = [metadata_bump];
@@ -1491,7 +1499,15 @@ pub fn create_idempotent<'info>(
         .first()
         .ok_or(LedgerError::MissingAccount)?;
     require_keys_eq!(*recipient.key, address, LedgerError::InvalidAccount);
-    SolanaHost::accounts(ctx)?.run(service::Command::CreateIdempotent {
+    let host = SolanaHost::accounts(ctx)?;
+    // Allocation, resolution and commit all reuse this canonical derivation.
+    host.derived.borrow_mut().push(DerivedAddress {
+        parent,
+        relative,
+        key: address,
+        bump,
+    });
+    host.run(service::Command::CreateIdempotent {
         child: service::Child { parent, relative },
     })
 }

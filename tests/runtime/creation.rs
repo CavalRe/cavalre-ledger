@@ -94,6 +94,11 @@ fn create_idempotent_preserves_custody_and_measures_first_receipt() {
 
         let payer_before = h.svm.get_account(&alice).unwrap().lamports;
         let first = run_instructions(&mut h, &[0], &[creation.clone(), send.clone()]).unwrap();
+        assert!(
+            first.compute_units_consumed <= 18_000,
+            "first-recipient CU regression: {}",
+            first.compute_units_consumed
+        );
         let rent = payer_before - h.svm.get_account(&alice).unwrap().lamports - first.fee;
         let bob_record = h.record(bob_account);
         assert_eq!(bob_record.parent, ap(e.root));
@@ -261,6 +266,10 @@ fn create_idempotent_preserves_custody_and_measures_first_receipt() {
             h.svm.set_account(key, account.unwrap_or_default()).unwrap();
         }
         let created = run_raw(&mut h, &[0], creation).unwrap();
+        assert!(
+            created.compute_units_consumed <= 16_000,
+            "creation CU regression"
+        );
         eprintln!("RECIPIENT_CU token={token_program} create_and_transfer={} create={} create_existing={} existing_pair={} transfer={} storage_lamports={rent}",
             first.compute_units_consumed, created.compute_units_consumed,
             repeated.compute_units_consumed, existing_pair.compute_units_consumed, existing.compute_units_consumed);
@@ -287,6 +296,29 @@ fn create_idempotent_validates_allocation_and_skips_populated_accounts() {
     let mut wrong_bump = valid.clone();
     wrong_bump.data[72] ^= 1;
     assert!(run_raw(&mut h, &[0], wrong_bump).is_err());
+    // Even a valid off-curve address with a matching noncanonical bump must
+    // reject before entering the derivation cache or allocating another leaf.
+    let (alternate, bump) = (0..valid.data[72])
+        .rev()
+        .find_map(|bump| {
+            anchor_lang::prelude::Pubkey::create_program_address(
+                &[
+                    ledger::ledger_lib::ACCOUNT_NAMESPACE,
+                    app.as_ref(),
+                    relative.as_ref(),
+                    &[bump],
+                ],
+                &ledger::ID,
+            )
+            .ok()
+            .map(|address| (sa(address), bump))
+        })
+        .unwrap();
+    let mut noncanonical = valid.clone();
+    noncanonical.accounts[4].pubkey = alternate;
+    noncanonical.data[72] = bump;
+    assert!(run_raw(&mut h, &[0], noncanonical).is_err());
+    assert!(h.svm.get_account(&alternate).is_none());
     let mut readonly = valid.clone();
     readonly
         .accounts

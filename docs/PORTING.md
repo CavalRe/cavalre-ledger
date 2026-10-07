@@ -58,6 +58,12 @@ without hashing, decoding or invoking the mutation service. The no-op does not
 certify account validity. Actual allocation and the following transfer still
 enforce their full identity, permission and backing rules. Allocation remains in
 the structural host, with canonical PDA derivation and checked parent updates.
+The host reuses each derived address at allocation instead of searching again;
+recipient creation seeds this cache only after verifying the canonical bump and
+recipient key. Metadata addresses are discovered only when unclassified
+program-owned accounts were supplied, and unlabeled new leaves skip metadata
+allocation work. Supplied metadata and unknown program-owned accounts retain
+their namespace checks and rejection rules.
 
 Unlike the original implicit transfer interface, the Solana transfer now requires
 both stored endpoints even for zero or self-transfers. Explicit creation may

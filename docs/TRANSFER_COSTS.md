@@ -14,8 +14,8 @@ backing checks and the original posting events; setup and funding are excluded.
 
 | Transaction | Classic token CU | Plain Token-2022 CU |
 | --- | ---: | ---: |
-| Create missing recipient + transfer | 32,031 | 32,046 |
-| Create missing recipient only | 30,097 | 30,095 |
+| Create missing recipient + transfer | 16,676 | 16,691 |
+| Create missing recipient only | 14,742 | 14,740 |
 | Create existing recipient + transfer | 2,036 | 2,053 |
 | Transfer only, recipient exists | 1,934 | 1,951 |
 | Create existing recipient only | 102 | 102 |
@@ -27,7 +27,18 @@ requirements from the target runtime.
 
 First creation still uses the structural allocation host and canonical PDA
 searches, so its cost depends on addresses, ancestry and supplied records. It is
-not as cheap as moving balances between existing leaves. Repeated creation
+not as cheap as moving balances between existing leaves. The recipient's
+canonical PDA is now derived once and reused during resolution and allocation.
+The host skips metadata-address discovery when no unclassified program-owned
+accounts were supplied, and skips metadata allocation work for unlabeled leaves.
+All supplied program-owned accounts must still be authenticated or rejected.
+
+For this same fixture, first receipt fell from **32,031 to 16,676 CU (47.9%)**;
+creation alone fell from **30,097 to 14,742 CU**. Canonical bump, ancestry,
+authority, backing and storage checks remain in place, as do all posting events.
+No additional transfer or creation handler was introduced.
+
+Repeated creation
 checks only whether the recipient at fixed account position 4 has data. If so,
 it returns immediately without hashes, decoding, writes or events. This no-op
 does not certify account validity. Actual allocation and the following transfer
@@ -88,12 +99,13 @@ slot and shrinks the vector. Untouched child bytes are not decoded/serialized.
 
 | Operation | 8 children | 256 children | 2,048 children | 4,096 children |
 | --- | ---: | ---: | ---: | ---: |
-| Remove with swap-and-pop | 33,585 | 33,585 | 33,585 | 33,585 |
-| Create missing recipient + transfer | 29,223 | 29,223 | 29,223 | 29,223 |
-| Add child | 22,382 | 22,414 | 22,643 | 22,906 |
+| Remove with swap-and-pop | 24,324 | 24,324 | 24,324 | 24,324 |
+| Create missing recipient + transfer | 19,752 | 19,752 | 19,752 | 19,752 |
+| Add child | 16,153 | 16,185 | 16,414 | 16,677 |
 
 The same first-receipt fixture previously cost **37,917 CU** through the removed
-handler. Explicit creation plus optimized transfer is **22.9% lower** here.
+handler. Explicit creation plus optimized transfer is **47.9% lower** here,
+and **32.4% lower** than the previous 29,223-CU creation-plus-transfer path.
 This fixture uses different ancestry and addresses from the direct-custodian
 creation table, so its creation cost differs.
 
@@ -123,7 +135,9 @@ substitution, Token-2022 options, native rent reserves, checked arithmetic,
 ancestor overflow and application CPI. Existing-recipient creation has a
 200-CU ceiling; the composed existing-recipient transaction has a 2,300-CU
 ceiling. Custodian transfers retain a 2,150-CU ceiling and depth-4 debit siblings
-retain a 2,250-CU ceiling.
+retain a 2,250-CU ceiling. The direct-custodian fixtures also enforce 16,000 CU
+for creation alone and 18,000 CU for first creation plus transfer. Allocation
+rejects even a valid off-curve address using a matching noncanonical bump.
 
 The full gate is `bash scripts/check.sh`. The wider composed-workflow profile is
 in [EXECUTION_LIMITS.md](EXECUTION_LIMITS.md); storage and account inputs are in
