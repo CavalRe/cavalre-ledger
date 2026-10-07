@@ -2,7 +2,7 @@
 
 `bash scripts/check.sh` checks formatting and Clippy, runs the mutation-disabled
 library suites, builds fresh Ledger and consumer sBPF, and tests the workspace.
-The latest gate passes 79 runtime tests, including the 2,205-transaction resource
+The latest gate passes 82 runtime tests, including the 2,205-transaction resource
 profile. Runtime tests use those binaries in the pinned LiteSVM runtime. This is local
 runtime validation, not a deployed-cluster test or security audit.
 
@@ -20,11 +20,11 @@ comparison material, not implementation dependencies.
 | Packed storage | Exact offsets, little-endian u128 limits, truncation, malformed vectors, owner checks, ledger identity and independent metadata namespace tests. Ordinary leaves are 106 bytes. |
 | Namespace authentication | Invalid endpoint bump/relative/PDA, malformed packed leaves and same-owner accounting-shaped data at a metadata PDA reject. A valid metadata string that resembles an accounting header is still classified by its namespace. |
 | Global Root | Internal, classic SPL, Token-2022 and native ledgers appear in the inline child vector. Initialization, repetition, failed append and malformed Root cases are atomic. |
-| Lifecycle | Funding creates and indexes absent leaves. Matching adds are idempotent; first labels may attach later. Empty removal closes storage, removes metadata and performs swap-pop, including the moved child's index. Missing metadata or swap-child inputs roll back. |
+| Lifecycle | `CreateIdempotent` creates/indexes default leaves and authenticates repeats without writes. Sponsored external recipients retain custody; internal creation requires authority. Prefunded PDAs work. Wrong identity/bump, unsigned authority, groups, Source and underbacking reject. Matching adds are idempotent; first labels may attach later. Empty removal performs swap-pop and closes accounting/metadata storage. |
 | Authority | Application CPI signers, distinct funding owners, branch isolation, external Source protection, rejected substitute authorities, and unsigned recipients. Public transfers authorize only the source custodian. |
 | Sibling transfers | Direct custodian-to-custodian and deeper siblings use only endpoint balance writes. Ledger/common-parent/vault snapshots remain unchanged. No custodian-specific accounting branch. Debit and credit sibling paths, duplicate metas, funded read-only self-transfers and read-only zero transfers are covered; sampled CU ceilings catch regressions. |
-| Ancestor walk | Lean and structural entrypoints produce identical full account states and exact event payloads for unequal depths, credit paths and opposite-polarity postings. Stored parent PDAs are followed directly. |
-| Atomic failure | Bad identity, readonly writes, arithmetic overflow at an ancestor, failed settlement and failed late commit preserve all supplied account states apart from transaction fees. |
+| Ancestor walk | Minimal and conservative account declarations produce identical full account states and exact event payloads through the sole transfer handler for unequal depths, credit paths and opposite-polarity postings. Stored parent PDAs are followed directly. |
+| Atomic failure | A failing transfer rolls back preceding recipient creation, index writes and storage funding. Bad identity, readonly writes, arithmetic overflow, failed settlement and failed late commit preserve all supplied account states apart from transaction fees. The removed Anchor transfer discriminator rejects; transfer cannot create missing endpoints, including zero/self cases. |
 | Native custody | Classic SPL, compatible Token-2022 and native SOL round trips, actual settlement checks, insufficient backing freezes and recovery by donations without minting claims. |
 | Token-2022 | Metadata pointers and inline metadata, hooks, permissioned burns, supported display extensions, rejected incompatible extensions, malformed option tags in base-only vaults, and changed mint/vault configuration. |
 | Metadata and reads | Optional separate labels, mint-authenticated snapshots, inherited unit metadata, missing versus omitted records, read-only consumers, owner/namespace checks and unchanged input bytes. |
@@ -40,7 +40,6 @@ indexing are adapted at commit. There is no Solana persisted registration policy
 separate child-slot account, stored relative/ledger field or leaf container map.
 Passing saved fixtures does not establish full original-suite or audited parity.
 
-The separate `bash scripts/reference.sh` fixture-regeneration check was attempted
-but could not run because pinned Foundry 1.8.3 (`forge`) is unavailable in this
-workspace. Saved fixture replays pass; the reference sources and fixtures were
-not modified.
+The separate `bash scripts/reference.sh` regeneration check passes with pinned
+Foundry 1.8.3: all 162 hierarchy cases and 138 custody steps match the saved
+fixtures. Reference sources and fixtures were not modified.

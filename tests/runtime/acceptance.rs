@@ -9,6 +9,8 @@ use solana_transaction_error::TransactionError;
 mod backing;
 #[path = "children.rs"]
 mod children;
+#[path = "creation.rs"]
+mod creation;
 #[path = "custody.rs"]
 mod custody;
 #[path = "events.rs"]
@@ -39,18 +41,26 @@ fn run(
     signers: &[usize],
     instruction: Instruction,
 ) -> Result<TransactionMetadata, Box<FailedTransactionMetadata>> {
-    run_raw(h, signers, h.indexed(instruction))
+    run_instructions(h, signers, &h.prepared(h.indexed(instruction)))
 }
 
-fn run_raw(
+pub(super) fn run_raw(
     h: &mut Harness,
     signers: &[usize],
     instruction: Instruction,
 ) -> Result<TransactionMetadata, Box<FailedTransactionMetadata>> {
+    run_instructions(h, signers, &[instruction])
+}
+
+fn run_instructions(
+    h: &mut Harness,
+    signers: &[usize],
+    instructions: &[Instruction],
+) -> Result<TransactionMetadata, Box<FailedTransactionMetadata>> {
     h.svm.expire_blockhash();
     let keys: Vec<_> = signers.iter().map(|i| &h.keys[*i]).collect();
     let tx = Transaction::new_signed_with_payer(
-        &[instruction],
+        instructions,
         Some(&h.key(0)),
         &keys,
         h.svm.latest_blockhash(),
@@ -83,10 +93,10 @@ fn rejects_with_error(
         .iter()
         .map(|m| (m.pubkey, h.svm.get_account(&m.pubkey)))
         .collect();
-    let failure = run_raw(h, signers, instruction).expect_err("expected rejection");
-    assert_eq!(
-        failure.err,
-        TransactionError::InstructionError(0, error),
+    let failure =
+        run_instructions(h, signers, &h.prepared(instruction)).expect_err("expected rejection");
+    assert!(
+        matches!(&failure.err, TransactionError::InstructionError(_, actual) if *actual == error),
         "wrong rejection: {failure:?}"
     );
     for (key, old) in before {
@@ -331,7 +341,7 @@ fn remove(
         )
     }
 }
-fn transfer(
+pub(super) fn transfer(
     h: &Harness,
     root: Address,
     authority: Address,
@@ -340,20 +350,17 @@ fn transfer(
     amount: u128,
     extra: &[Address],
 ) -> Instruction {
-    let mut rest = vec![from.0, child(from.0, from.1), to.0, child(to.0, to.1)];
+    let mut rest = vec![root, from.0, to.0];
     rest.extend(extra);
-    ix(
-        base(h, root, authority),
-        instruction::Transfer {
-            from_parent: ap(from.0),
-            from: ap(from.1),
-            to_parent: ap(to.0),
-            to: ap(to.1),
-            amount,
-        },
-        &remaining(root, &rest),
-    )
+    let mut call = packed_transfers::fast(h, root, authority, from, to, amount, &rest);
+    // General acceptance fixtures supply conservative ancestor writes. The
+    // planner and dedicated transfer benchmarks verify minimal declarations.
+    for meta in call.accounts.iter_mut().skip(1) {
+        meta.is_writable = true;
+    }
+    h.indexed(call)
 }
+
 fn branch(h: &mut Harness, root: Address, owner: usize, implicit: bool) -> Address {
     let authority = h.key(owner);
     let create = group(h, root, authority, root, authority, implicit, &[]);
@@ -526,12 +533,15 @@ fn transfers_require_source_custodian_leaf_kind_membership_and_self_transfer_fun
     let user = h.key(2);
     let i = e.movement(&h, (h.key(0), 0), (a, user), 100, true, &[]);
     succeeds(&mut h, &[0], i);
-    for destination in [(e.root, sa(SOURCE)), (e.root, h.key(0))] {
+    for (destination, error) in [
+        ((e.root, sa(SOURCE)), LedgerError::InvalidKind),
+        ((e.root, h.key(0)), LedgerError::InvalidAccount),
+    ] {
         let i = transfer(&h, e.root, h.key(0), (a, user), destination, 1, &[]);
-        rejects(&mut h, &[0], i, LedgerError::Accounting.into());
+        rejects(&mut h, &[0], i, error.into());
     }
     let i = transfer(&h, e.root, h.key(1), (a, user), (a, user), 1, &[]);
-    rejects(&mut h, &[0, 1], i, LedgerError::Accounting.into());
+    rejects(&mut h, &[0, 1], i, LedgerError::Unauthorized.into());
     let i = transfer(&h, e.root, h.key(0), (a, user), (a, user), 101, &[]);
     rejects(&mut h, &[0], i, LedgerError::Accounting.into());
     let before = h.svm.get_account(&child(a, user)).unwrap();
@@ -688,7 +698,7 @@ fn all_groups_allow_first_receipt_and_index_new_accounts() {
     }
     for (from, to) in [(user, implicit_user), (implicit_user, user)] {
         let i = transfer(&h, e.root, h.key(0), (a, from), (a, to), 0, &[]);
-        succeeds(&mut h, &[0], i);
+        assert!(run_raw(&mut h, &[0], i).is_err());
     }
     assert!(h.svm.get_account(&child(a, implicit_user)).is_none());
     // A registered subgroup controls its own immediate children.

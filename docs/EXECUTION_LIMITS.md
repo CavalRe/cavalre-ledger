@@ -1,4 +1,4 @@
-# Solana execution measurements — 2026-10-06
+# Solana execution measurements — 2026-10-07
 
 Ledger stores parent and custodian PDAs directly and uses the packed layout in
 [READS.md](READS.md). There is no resource-based depth cap in the program. Depth
@@ -23,9 +23,10 @@ production budget. Legacy packets are used when they fit 1,232 bytes; otherwise
 the test creates and warms an address lookup table and executes a v0 transaction.
 ALT setup compute, fees and rent are recorded separately.
 
-This is the **structural Anchor service** profile, including initial allocation,
-repeat transfers, names/metadata, settlement and removal. The lean existing-account
-entrypoint is measured separately in [TRANSFER_COSTS.md](TRANSFER_COSTS.md).
+This is a **complete workflow** profile, including explicit `CreateIdempotent`
+plus optimized transfer for missing endpoints, repeat transfers, names/metadata,
+settlement and removal. Transfer-only samples and existing-recipient creation
+are measured separately in [TRANSFER_COSTS.md](TRANSFER_COSTS.md).
 The profile includes emitted events and backing checks. Internal ledgers use
 64-byte names, external ledgers use 32-byte issuer names, and groups/explicit
 leaves use 64-byte names. Initial ledger setup is outside the measured operations.
@@ -34,16 +35,16 @@ leaves use 64-byte names. Initial ledger setup is outside the measured operation
 
 | Leaf depth | Maximum CU | Maximum packet bytes | Maximum account keys | Maximum writable keys |
 | --- | ---: | ---: | ---: | ---: |
-| 13 | 265,587 | 1,168 | 29 | 24 |
-| 12 | 250,225 | 1,198 | 27 | 22 |
-| 11 | 239,702 | 1,132 | 25 | 20 |
-| 10 | 202,516 | 1,066 | 23 | 18 |
-| 9 | 182,169 | 1,000 | 21 | 16 |
-| 8 | 165,162 | 934 | 19 | 14 |
-| 7 | 131,313 | 892 | 18 | 12 |
-| 6 | 103,656 | 859 | 17 | 10 |
-| 5 | 96,490 | 826 | 16 | 8 |
-| 4 | 91,739 | 793 | 15 | 7 |
+| 13 | 268,701 | 1,232 | 29 | 24 |
+| 12 | 252,929 | 1,201 | 27 | 22 |
+| 11 | 233,054 | 1,229 | 25 | 20 |
+| 10 | 200,078 | 1,161 | 23 | 18 |
+| 9 | 184,002 | 1,093 | 21 | 16 |
+| 8 | 174,319 | 1,025 | 19 | 14 |
+| 7 | 124,537 | 957 | 18 | 12 |
+| 6 | 109,654 | 889 | 17 | 10 |
+| 5 | 97,106 | 826 | 16 | 8 |
+| 4 | 92,273 | 793 | 15 | 7 |
 
 Rows are ordered by decreasing maximum CU. Each column is an independent maximum across that depth's operations. These are
 local runtime measurements, not cluster throughput. PDA bump searches on the
@@ -52,14 +53,15 @@ and posts at depth 14, showing why depth alone is not an execution limit.
 
 The structural host reserves its loaded-record buffer once and sorts references
 to pending accounts, avoiding repeated full-record buffers under the bump allocator.
-The lean transfer borrows fixed fields and stages arithmetic before writing. Both
-use the original shared ancestor walk; the lean path derives no ancestor PDAs.
+The optimized transfer borrows fixed fields and stages arithmetic before writing.
+Transfer and settlement use the original shared ancestor walk; transfer derives
+no ancestor PDAs. Creation still uses the structural host for missing records.
 
 ## Storage and write locks
 
 Ordinary accounting records are 106 bytes plus 32 bytes per child. Ledgers are
 203 bytes plus 32 bytes per child. Metadata is 10 bytes plus UTF-8 name and symbol.
-A first receipt creates a leaf and grows its parent's vector; later transfers
+Creation before first receipt creates a leaf and grows its parent's vector; later transfers
 between existing siblings write only the two endpoints. There are no per-slot
 accounts or shared containers for leaf balances.
 
@@ -71,7 +73,8 @@ and metadata lamports to payer. Parent-vector shrinkage currently retains surplu
 lamports in the parent account. Profile rent values are signed net changes and
 include refunds. Fees and ALT setup costs are separate from storage funding.
 
-Zero movements and funded self-transfers allocate nothing; first nonzero receipt
-requires a writable parent for indexing. Successful creation does not guarantee
+Transfer itself never allocates, including zero and self-transfers, and requires
+both endpoints to exist. Explicit recipient creation requires a writable parent
+for indexing even when the following transfer amount is zero. Successful creation does not guarantee
 that every later composed workflow will fit, so measure actual application
 transactions including CPI, all additional instructions and address-table setup.

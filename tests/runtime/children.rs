@@ -161,18 +161,16 @@ fn structural_writes_preserve_large_child_arrays_without_copying_siblings() {
         assert!(h.svm.get_account(&child(root, existing)).is_none());
 
         // First receipt exercises materialization in commit, rather than Add.
-        let receipt = h.indexed(ix(
-            h.base(0, root),
-            instruction::Transfer {
-                from_parent: ap(root),
-                from: SOURCE,
-                to_parent: ap(root),
-                to: ap(received),
-                amount: 7,
-            },
-            &[child(root, sa(SOURCE)), child(root, received)],
+        let receipt = h.indexed(acceptance::transfer(
+            &h,
+            root,
+            h.key(0),
+            (root, sa(SOURCE)),
+            (root, received),
+            7,
+            &[],
         ));
-        let receipt = run_raw(&mut h, &[0], receipt).unwrap();
+        let receipt = run(&mut h, &[0], receipt).unwrap();
         let after = h.svm.get_account(&root).unwrap();
         assert_eq!(&after.data[offset..parent.data.len()], expected);
         assert_eq!(h.record(child(root, received)).child_index, count + 1);

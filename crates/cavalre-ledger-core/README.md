@@ -55,6 +55,14 @@ When custody is below the root's credit total, mutations fail atomically with
 restore operation as soon as all claims are backed; no administrator or stored
 freeze flag is involved. Accounting-only ledgers do not need external custody.
 
+`Command::CreateIdempotent` materializes a default leaf without posting balances
+or changing metadata. External/native debit recipients may be sponsored by any
+authenticated actor; custody and polarity come from the existing hierarchy.
+Internal creation requires the ledger authority. Groups and Source reject, and
+an existing valid leaf needs no writes. Hosts may index allocation at commit,
+as Solana does; the core's original registration and transfer commands remain
+available for hosts retaining the original logical lifecycle.
+
 The `Host<A>` interface is defined by the core. A host supplies an address type
 (`Copy + Eq`) and the following capabilities:
 

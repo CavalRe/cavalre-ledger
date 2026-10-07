@@ -4,7 +4,7 @@ A reusable core based on the original Solidity Ledger, with a Solana adapter.
 Both share one implementation of the accounting rules.
 
 The program now supports ledger creation, account creation and removal,
-first-receipt allocation, transfers, and native SOL, classic SPL Token and compatible
+idempotent recipient creation, optimized transfers, and native SOL, classic SPL Token and compatible
 Token-2022 deposits and withdrawals.
 The reusable core implements the original depth-aligned debit/credit walk.
 This is a tested development implementation, not a deployed or audited release.
@@ -36,6 +36,9 @@ an inline vector of relative children. Metadata is separate and optional.
 Existing-account transfers follow those links through a Pinocchio entrypoint;
 equal-polarity siblings write only their endpoints at any depth. See the
 [layout](docs/READS.md) and [measured transfer costs](docs/TRANSFER_COSTS.md).
+For a potentially missing recipient, submit `CreateIdempotent` followed by the
+optimized transfer in the same transaction. The former general Anchor transfer
+is removed; creation and transfer roll back together if either instruction fails.
 
 The previous controller-based implementation is removed from the working tree.
 Its code and tests remain available in Git history.

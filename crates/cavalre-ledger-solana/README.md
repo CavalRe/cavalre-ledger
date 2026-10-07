@@ -45,15 +45,33 @@ storage PDA and a relative identity (or derive the identity from the name).
 omitted on creation. An authorized add can attach the first label later without
 changing accounting or the child index; existing labels are immutable.
 
-`Transfer` remains the structural service instruction: it may allocate an absent
-endpoint and index it under its parent. Supply both endpoint PDAs, their parents,
-custodians and needed ancestors. New records and changed parent vectors must be
-writable. Existing common ancestors whose balances cancel remain read-only.
-`Reader::transfer_writable_accounts` plans accounting write permissions from a
-consistent supplied snapshot, including explicitly recorded absent endpoints.
+There is one transfer instruction: `ledger_transfer::instruction`. The former
+Anchor `Transfer` instruction and its allocation/posting handler are removed.
+Both endpoints must exist, including for zero and self-transfers.
 
-For transfers between existing leaves, use `ledger_transfer::instruction`.
-This client helper supplies canonical endpoint bumps in instruction data.
+When a recipient may be absent, put
+`ledger_transfer::create_idempotent_instruction(payer, authority, ledger, child, remaining)`
+before the transfer in the **same transaction**. The helper encodes parent,
+relative identity and canonical bump. Its fixed accounts are payer signer,
+authority signer, ledger and System Program; it adds the writable parent and
+recipient PDA. Supply the parent's ancestry and canonical external/native vault
+in `remaining`. Creation allocates one default leaf and indexes it in the parent,
+without labels, balance changes or lifecycle events. If the transfer fails,
+creation and its storage funding roll back too; transaction fees still apply.
+
+Any authenticated sponsor can fund an external/native debit recipient. Its
+custodian is inherited from the parent (or itself for a direct ledger child),
+so sponsorship grants no spending rights. Internal creation requires the ledger
+authority. Groups and the reserved Source are rejected. An existing leaf is
+authenticated without loading the full hierarchy or writing any account.
+The helper still requests parent write access to allow creation; omit creation
+when the recipient is known to exist to avoid that structural write lock.
+
+`Reader::transfer_writable_accounts` plans accounting write permissions from a
+consistent supplied snapshot. Its absent-leaf write requirements apply to the
+composed creation and transfer; they do not let transfer allocate storage.
+
+The transfer client helper supplies canonical endpoint bumps in instruction data.
 The `p-token-entrypoint` build uses Pinocchio parsing and direct fixed-offset
 balance access. It authenticates endpoints with the accounting namespace and
 supplied bumps, then follows stored custodian and parent PDAs. It never searches
@@ -102,7 +120,7 @@ bytes or use `Reader` without calling Ledger. Metadata must be supplied separate
 when requested. Namespace identity must be checked separately from byte shape.
 
 Events retain the original Credit/Debit meaning and ordering, with actual storage
-PDAs in address fields. Both entrypoints emit the same event payloads. Index only
+PDAs in address fields. Transfer and settlement retain the original event payloads. Index only
 successful transactions; logs from a failed transaction are speculative.
 See [events](../../docs/EVENTS.md).
 

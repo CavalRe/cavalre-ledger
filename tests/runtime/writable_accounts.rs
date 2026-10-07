@@ -11,12 +11,17 @@ fn endpoint(parent: Address, relative: Address) -> Child {
 
 fn planned(h: &Harness, mut ix: Instruction) -> Instruction {
     let mut reader = Reader::new();
-    // LedgerAccounts has payer, authority, root, System, then remaining records.
-    for meta in ix.accounts.iter().skip(2).filter(|m| m.pubkey != SYSTEM) {
+    let mut seen = std::collections::BTreeSet::new();
+    // Transfer has authority, ledger, source, destination, then ancestry/vault.
+    for meta in ix.accounts.iter().skip(1).filter(|m| m.pubkey != SYSTEM) {
+        if !seen.insert(meta.pubkey) {
+            continue;
+        }
         match h.svm.get_account(&meta.pubkey) {
-            Some(account) => reader
+            Some(account) if account.owner == sa(ledger::ID) => reader
                 .insert(ap(meta.pubkey), &ap(account.owner), &account.data)
                 .unwrap(),
+            Some(_) => continue,
             None => reader.insert_missing(ap(meta.pubkey)).unwrap(),
         }
     }
@@ -24,13 +29,13 @@ fn planned(h: &Harness, mut ix: Instruction) -> Instruction {
     let key = |offset| Address::new_from_array(data[offset..offset + 32].try_into().unwrap());
     let writable = reader
         .transfer_writable_accounts(
-            &ap(ix.accounts[2].pubkey),
+            &ap(ix.accounts[1].pubkey),
             endpoint(key(8), key(40)),
             endpoint(key(72), key(104)),
             u128::from_le_bytes(data[136..152].try_into().unwrap()),
         )
         .unwrap();
-    for meta in ix.accounts.iter_mut().skip(2) {
+    for meta in ix.accounts.iter_mut().skip(1) {
         meta.is_writable = writable.contains(&ap(meta.pubkey));
     }
     ix
@@ -45,7 +50,7 @@ fn readonly(ix: &mut Instruction, key: Address) {
 }
 
 #[test]
-fn zero_and_self_transfers_leave_absent_accounts_unallocated_and_only_charge_fees() {
+fn zero_and_self_transfers_require_registered_endpoints_and_only_charge_fees() {
     use anchor_lang::Event;
     use ledger::ledger::{Credit, Debit};
     let mut h = Harness::new();
@@ -55,12 +60,20 @@ fn zero_and_self_transfers_leave_absent_accounts_unallocated_and_only_charge_fee
     let b = h.key(2);
     let from = child(app, a);
     let to = child(app, b);
+    let missing = transfer(&h, e.root, h.key(0), (app, a), (app, b), 0, &[]);
+    assert!(run_raw(&mut h, &[0], missing).is_err());
+    assert!(h.svm.get_account(&from).is_none());
+    assert!(h.svm.get_account(&to).is_none());
+    for relative in [a, b] {
+        let create = leaf(&h, e.root, h.key(0), app, relative, "", false);
+        succeeds(&mut h, &[0], create);
+    }
     let parent_before = [e.root_storage, app].map(|key| h.svm.get_account(&key));
     for receiver in [b, a] {
         // Construct the intended read-only transaction independently of the
         // planner, so a regression in both cannot hide unnecessary allocation.
         let mut ix = transfer(&h, e.root, h.key(0), (app, a), (app, receiver), 0, &[]);
-        for meta in ix.accounts.iter_mut().skip(2) {
+        for meta in ix.accounts.iter_mut().skip(1) {
             meta.is_writable = false;
         }
         let payer_before = h.svm.get_account(&h.key(0)).unwrap().lamports;
@@ -92,14 +105,14 @@ fn zero_and_self_transfers_leave_absent_accounts_unallocated_and_only_charge_fee
                 ]
             }
         );
-        assert!(h.svm.get_account(&from).is_none());
-        assert!(h.svm.get_account(&to).is_none());
+        assert_eq!(h.record(from).debit, 0);
+        assert_eq!(h.record(to).debit, 0);
         assert_eq!(
             [e.root_storage, app].map(|key| h.svm.get_account(&key)),
             parent_before
         );
     }
-    // The helper must agree even when both endpoints have no storage.
+    // The helper declares no writes for registered zero-balance endpoints.
     let ix = planned(
         &h,
         transfer(&h, e.root, h.key(0), (app, a), (app, b), 0, &[]),
@@ -116,13 +129,25 @@ fn zero_and_self_transfers_leave_absent_accounts_unallocated_and_only_charge_fee
         &h,
         transfer(&h, e.root, h.key(1), (app, a), (app, b), 0, &[]),
     );
-    rejects(&mut h, &[0, 1], ix, LedgerError::Accounting.into());
+    rejects(&mut h, &[0, 1], ix, LedgerError::Unauthorized.into());
     let closed = add_group(&mut h, e.root, app, 212, &[app]);
     // Create a separate registered-only group; the existing group's policy is immutable.
     let relative = Address::new_from_array([213; 32]);
     let create = group(&h, e.root, h.key(0), closed, relative, false, &[app]);
     succeeds(&mut h, &[0], create);
     let restricted = child(closed, relative);
+    for relative in [a, b] {
+        let create = crate::ix(
+            h.base(0, e.root),
+            instruction::CreateIdempotent {
+                parent: ap(restricted),
+                relative: ap(relative),
+                bump: ledger::ledger_lib::to_address(&ledger::ID, &ap(restricted), &ap(relative)).1,
+            },
+            &[app, closed, restricted, child(restricted, relative)],
+        );
+        succeeds(&mut h, &[0], create);
+    }
     let ix = planned(
         &h,
         transfer(
@@ -139,13 +164,23 @@ fn zero_and_self_transfers_leave_absent_accounts_unallocated_and_only_charge_fee
 }
 
 #[test]
-fn zero_mint_burn_preserve_events_without_allocating_or_writing_ledger_records() {
+fn zero_mint_burn_preserve_events_without_writing_registered_records() {
     use anchor_lang::Event;
     use ledger::ledger::{Credit, Debit};
     let mut h = Harness::new();
     let (root, source) = h.internal();
     let relative = h.key(1);
     let leaf = child(root, relative);
+    let create = ix(
+        h.base(0, root),
+        instruction::CreateIdempotent {
+            parent: ap(root),
+            relative: ap(relative),
+            bump: ledger::ledger_lib::to_address(&ledger::ID, &ap(root), &ap(relative)).1,
+        },
+        &[leaf],
+    );
+    succeeds(&mut h, &[0], create);
     for mint in [true, false] {
         let (from, to) = if mint {
             ((root, sa(SOURCE)), (root, relative))
@@ -153,7 +188,7 @@ fn zero_mint_burn_preserve_events_without_allocating_or_writing_ledger_records()
             ((root, relative), (root, sa(SOURCE)))
         };
         let ix = planned(&h, transfer(&h, root, h.key(0), from, to, 0, &[]));
-        assert!(ix.accounts.iter().skip(2).all(|meta| !meta.is_writable));
+        assert!(ix.accounts.iter().skip(1).all(|meta| !meta.is_writable));
         let before = [root, source].map(|key| h.svm.get_account(&key));
         let result = run(&mut h, &[0], ix).unwrap();
         let (from, to) = if mint { (source, leaf) } else { (leaf, source) };
@@ -190,7 +225,7 @@ fn zero_mint_burn_preserve_events_without_allocating_or_writing_ledger_records()
                 .data(),
             ]
         );
-        assert!(h.svm.get_account(&leaf).is_none());
+        assert_eq!(h.record(leaf).debit, 0);
         assert_eq!([root, source].map(|key| h.svm.get_account(&key)), before);
     }
 }
@@ -363,18 +398,19 @@ fn check_plan(h: &mut Harness, ix: Instruction, expected: &[Address]) {
     let mut actual: Vec<_> = ix
         .accounts
         .iter()
-        .skip(2)
+        .skip(1)
         .filter(|m| m.is_writable)
         .map(|m| m.pubkey)
         .collect();
     let mut expected = expected.to_vec();
     actual.sort();
+    actual.dedup();
     expected.sort();
     assert_eq!(actual, expected, "wrong write set");
     let unchanged: Vec<_> = ix
         .accounts
         .iter()
-        .skip(2)
+        .skip(1)
         .filter(|m| !m.is_writable)
         .map(|m| (m.pubkey, h.svm.get_account(&m.pubkey)))
         .collect();

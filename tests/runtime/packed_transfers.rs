@@ -172,8 +172,8 @@ fn sibling_transfers_at_depth_four_leave_parent_unchanged() {
     );
 }
 
-// Compare both entrypoints against the same pre-state, including every event
-// and ancestor balance. Only the ancestors identified below are writable.
+// Compare conservative and minimal account declarations against the same
+// pre-state, including every event and ancestor balance. There is one handler.
 fn parity(
     h: &mut Harness,
     ledger: Address,
@@ -222,13 +222,13 @@ fn parity(
         }
     }
     eprintln!(
-        "PACKED_WALK_CU={} SERVICE_CU={}",
+        "PACKED_WALK_CU={} CONSERVATIVE_CU={}",
         result.compute_units_consumed, expected.compute_units_consumed
     );
 }
 
 #[test]
-fn ancestor_walk_matches_service_for_unequal_depths_credit_and_opposite_polarity() {
+fn ancestor_walk_preserves_events_with_minimal_writes_for_unequal_depths_and_polarities() {
     let mut h = Harness::new();
     let (ledger, source) = h.internal();
     let authority = h.key(0);

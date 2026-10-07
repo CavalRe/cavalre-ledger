@@ -90,15 +90,13 @@ pub mod cavalre_ledger_solana {
     ) -> Result<()> {
         ledger::remove_account(&ctx, parent, relative, true)
     }
-    pub fn transfer<'info>(
+    pub fn create_idempotent<'info>(
         ctx: Context<'info, LedgerAccounts<'info>>,
-        from_parent: Pubkey,
-        from: Pubkey,
-        to_parent: Pubkey,
-        to: Pubkey,
-        amount: u128,
+        parent: Pubkey,
+        relative: Pubkey,
+        bump: u8,
     ) -> Result<()> {
-        ledger::transfer(&ctx, from_parent, from, to_parent, to, amount)
+        ledger::create_idempotent(&ctx, parent, relative, bump)
     }
     pub fn wrap<'info>(
         ctx: Context<'info, MoveTokens<'info>>,

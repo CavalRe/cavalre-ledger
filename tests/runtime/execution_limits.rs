@@ -69,11 +69,11 @@ impl Profile {
         if self.mode == "direct" {
             signers.push(&self.h.keys[2]);
         }
-        let instructions = [
+        let mut instructions = vec![
             ComputeBudgetInstruction::set_compute_unit_limit(COMPUTE_UNITS),
             ComputeBudgetInstruction::set_compute_unit_price(0),
-            instruction,
         ];
+        instructions.extend(self.h.prepared(instruction));
         let tx = Transaction::new_signed_with_payer(
             &instructions,
             Some(&self.h.key(0)),

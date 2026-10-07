@@ -110,6 +110,24 @@ impl Harness {
             2
         };
         let data = &instruction.data;
+        if data.starts_with(ledger::ledger_transfer::TRANSFER) {
+            let root = instruction.accounts[offset + 1].pubkey;
+            if let Some(record) = self
+                .svm
+                .get_account(&root)
+                .and_then(|a| decode_data(&ap(root), &ap(a.owner), &a.data).ok())
+            {
+                if let Some(config) = record.ledger.filter(|c| c.authority == ap(SYSTEM)) {
+                    let vault = sa(config.vault);
+                    if !instruction.accounts.iter().any(|a| a.pubkey == vault) {
+                        instruction
+                            .accounts
+                            .push(AccountMeta::new_readonly(vault, false));
+                    }
+                }
+            }
+            return instruction;
+        }
         let get = |key: Address| {
             self.svm
                 .get_account(&key)
@@ -178,6 +196,89 @@ impl Harness {
         }
         instruction
     }
+    // Client composition for acceptance workflows. Raw-instruction tests bypass
+    // this helper to prove Transfer never allocates and creation is idempotent.
+    fn prepared(&self, instruction: Instruction) -> Vec<Instruction> {
+        if !instruction
+            .data
+            .starts_with(ledger::ledger_transfer::TRANSFER)
+            || instruction.data.len() != 154
+        {
+            return vec![instruction];
+        }
+        let offset = usize::from(instruction.program_id != sa(ledger::ID)) * 2;
+        let root = instruction.accounts[offset + 1].pubkey;
+        let authority = instruction.accounts[offset].pubkey;
+        let mut result = Vec::new();
+        let mut created = Vec::new();
+        // Creation is deliberately explicit even for zero-valued transfers:
+        // the sole transfer instruction always requires valid stored endpoints.
+        for (role, at) in [(2, 8), (3, 72)] {
+            let key = instruction.accounts[offset + role].pubkey;
+            if created.contains(&key) || self.svm.get_account(&key).is_some() {
+                continue;
+            }
+            let parent = ap(Address::new_from_array(
+                instruction.data[at..at + 32].try_into().unwrap(),
+            ));
+            let relative = ap(Address::new_from_array(
+                instruction.data[at + 32..at + 64].try_into().unwrap(),
+            ));
+            let remaining: Vec<_> = instruction.accounts[offset + 4..]
+                .iter()
+                .map(|m| anchor_lang::solana_program::instruction::AccountMeta {
+                    pubkey: ap(m.pubkey),
+                    is_writable: m.is_writable,
+                    is_signer: m.is_signer,
+                })
+                .collect();
+            let call = ledger::ledger_transfer::create_idempotent_instruction(
+                ap(self.key(0)),
+                ap(authority),
+                ap(root),
+                ledger::ledger_lib::Child { parent, relative },
+                &remaining,
+            );
+            let mut call = Instruction {
+                program_id: sa(call.program_id),
+                data: call.data,
+                accounts: call
+                    .accounts
+                    .into_iter()
+                    .map(|m| AccountMeta {
+                        pubkey: sa(m.pubkey),
+                        is_writable: m.is_writable,
+                        is_signer: m.is_signer,
+                    })
+                    .collect(),
+            };
+            // Do not grant permissions missing from the requested composition.
+            for meta in &mut call.accounts {
+                if let Some(original) = instruction
+                    .accounts
+                    .iter()
+                    .find(|m| m.pubkey == meta.pubkey)
+                {
+                    meta.is_writable &= original.is_writable;
+                }
+            }
+            if offset != 0 {
+                for meta in &mut call.accounts {
+                    if meta.pubkey == authority {
+                        meta.is_signer = false;
+                    }
+                }
+                let mut accounts = instruction.accounts[..offset].to_vec();
+                accounts.extend(call.accounts);
+                call.accounts = accounts;
+                call.program_id = instruction.program_id;
+            }
+            result.push(call);
+            created.push(key);
+        }
+        result.push(instruction);
+        result
+    }
     fn run(&mut self, n: usize, mut ix: Instruction) -> bool {
         ix = self.indexed(ix);
         self.svm.expire_blockhash();
@@ -187,7 +288,7 @@ impl Harness {
             }
         }
         let tx = Transaction::new_signed_with_payer(
-            &[ix],
+            &self.prepared(ix),
             Some(&self.key(n)),
             &[&self.keys[n]],
             self.svm.latest_blockhash(),
@@ -347,16 +448,14 @@ fn internal_posting_implicit_receipt_and_atomic_rejection() {
     let mut h = Harness::new();
     let (root, source) = h.internal();
     let receiver = child(root, h.key(1));
-    let mut i = ix(
-        h.base(0, root),
-        instruction::Transfer {
-            from_parent: ap(root),
-            from: SOURCE,
-            to_parent: ap(root),
-            to: ap(h.key(1)),
-            amount: 100,
-        },
-        &[source, receiver],
+    let mut i = acceptance::transfer(
+        &h,
+        root,
+        h.key(0),
+        (root, sa(SOURCE)),
+        (root, h.key(1)),
+        100,
+        &[],
     );
     i.accounts[2].is_writable = true;
     assert!(h.run(0, i));
@@ -365,29 +464,25 @@ fn internal_posting_implicit_receipt_and_atomic_rejection() {
     assert!(h.record(receiver).child_index > 0);
     assert_eq!(h.record(root).debit, 100);
     let before = h.svm.get_account(&receiver).unwrap();
-    let i = ix(
-        h.base(1, root),
-        instruction::Transfer {
-            from_parent: ap(root),
-            from: ap(h.key(1)),
-            to_parent: ap(root),
-            to: SOURCE,
-            amount: 1,
-        },
-        &[receiver, source],
+    let i = acceptance::transfer(
+        &h,
+        root,
+        h.key(1),
+        (root, h.key(1)),
+        (root, sa(SOURCE)),
+        1,
+        &[],
     );
     assert!(!h.run(1, i));
     assert_eq!(h.svm.get_account(&receiver).unwrap(), before);
-    let mut i = ix(
-        h.base(0, root),
-        instruction::Transfer {
-            from_parent: ap(root),
-            from: ap(h.key(1)),
-            to_parent: ap(root),
-            to: SOURCE,
-            amount: 101,
-        },
-        &[receiver, source],
+    let mut i = acceptance::transfer(
+        &h,
+        root,
+        h.key(0),
+        (root, h.key(1)),
+        (root, sa(SOURCE)),
+        101,
+        &[],
     );
     i.accounts[2].is_writable = true;
     assert!(!h.run(0, i));
@@ -411,20 +506,17 @@ fn account_lifecycle_and_registered_only_parent() {
     i.accounts[2].is_writable = true;
     assert!(h.run(0, i));
     let leaf = child(group, h.key(1));
-    let source = child(root, sa(SOURCE));
-    let mut i = ix(
-        h.base(0, root),
-        instruction::Transfer {
-            from_parent: ap(root),
-            from: SOURCE,
-            to_parent: ap(group),
-            to: ap(h.key(1)),
-            amount: 0,
-        },
-        &[source, group, leaf],
+    let mut i = acceptance::transfer(
+        &h,
+        root,
+        h.key(0),
+        (root, sa(SOURCE)),
+        (group, h.key(1)),
+        0,
+        &[],
     );
     i.accounts[2].is_writable = true;
-    assert!(h.run(0, i));
+    assert!(acceptance::run_raw(&mut h, &[0], i).is_err());
     assert!(h.svm.get_account(&leaf).is_none());
     let i = ix(
         h.base(0, root),
@@ -554,30 +646,26 @@ fn external_token_deposit_transfer_withdraw_and_isolation() {
     assert_eq!(h.record(source).credit, 100);
     assert_eq!(h.record(a).debit, 100);
     assert!(h.record(a).child_index > 0);
-    let i = ix(
-        h.base(0, root),
-        instruction::Transfer {
-            from_parent: ap(group),
-            from: ap(h.key(1)),
-            to_parent: ap(group),
-            to: ap(h.key(2)),
-            amount: 40,
-        },
-        &[group, a, b],
+    let i = acceptance::transfer(
+        &h,
+        root,
+        h.key(0),
+        (group, h.key(1)),
+        (group, h.key(2)),
+        40,
+        &[],
     );
     assert!(h.run(0, i));
     assert_eq!(h.record(b).debit, 40);
     assert_eq!(h.record(group).debit, 100);
-    let i = ix(
-        h.base(1, root),
-        instruction::Transfer {
-            from_parent: ap(group),
-            from: ap(h.key(1)),
-            to_parent: ap(group),
-            to: ap(h.key(2)),
-            amount: 1,
-        },
-        &[group, a, b],
+    let i = acceptance::transfer(
+        &h,
+        root,
+        h.key(1),
+        (group, h.key(1)),
+        (group, h.key(2)),
+        1,
+        &[],
     );
     assert!(!h.run(1, i));
     assert!(!h.run(

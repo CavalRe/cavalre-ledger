@@ -83,17 +83,14 @@ fn all_ledger_kinds_are_discovered_as_root_children() {
         reader.sub_account(&ap(global), &ap(global), 0)
     );
     // Posting stays within one asset. Global Root isn't an instruction account.
-    let to = child(internal, h.key(1));
-    let i = ix(
-        h.base(0, internal),
-        instruction::Transfer {
-            from_parent: ap(internal),
-            from: SOURCE,
-            to_parent: ap(internal),
-            to: ap(h.key(1)),
-            amount: 20,
-        },
-        &[child(internal, sa(SOURCE)), to],
+    let i = acceptance::transfer(
+        &h,
+        internal,
+        h.key(0),
+        (internal, sa(SOURCE)),
+        (internal, h.key(1)),
+        20,
+        &[],
     );
     assert!(!i.accounts.iter().any(|a| a.pubkey == global));
     succeeds(&mut h, &[0], i);

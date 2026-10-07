@@ -1466,3 +1466,69 @@ fn ledger_metadata_and_idempotence_follow_the_solidity_creation_contract() {
     assert_eq!(host.children, children);
     assert_eq!(host.events, events);
 }
+
+#[test]
+fn sponsored_creation_preserves_custody_polarity_and_internal_authority() {
+    let mut host = MemoryHost::new(false);
+    let app = host.initialize(true);
+    host.actor = Some(PAYER);
+    for parent in [ROOT, app] {
+        let command = || Command::CreateIdempotent {
+            child: child(parent, USER),
+        };
+        execute(&mut host, command()).unwrap();
+        let key = address(parent, USER);
+        let before = host.accounts[&key].clone();
+        assert_eq!(before.custodian, if parent == ROOT { key } else { app });
+        assert_eq!(before.flags.account_kind, AccountKind::DebitLedger);
+        assert_eq!(before.balances, Balances::default());
+        let writes = host.record_writes;
+        execute(&mut host, command()).unwrap();
+        assert_eq!(host.accounts[&key], before);
+        assert_eq!(host.record_writes, writes);
+    }
+    assert_eq!(
+        execute(
+            &mut host,
+            Command::CreateIdempotent {
+                child: child(ROOT, SOURCE)
+            }
+        ),
+        Err(Error::Unauthorized.into())
+    );
+    assert_eq!(
+        execute(
+            &mut host,
+            Command::CreateIdempotent {
+                child: child(ROOT, APP)
+            }
+        ),
+        Err(Error::InvalidKind.into())
+    );
+
+    let mut internal = MemoryHost::new(true);
+    let app = internal.initialize(true);
+    internal.actor = Some(PAYER);
+    assert_eq!(
+        execute(
+            &mut internal,
+            Command::CreateIdempotent {
+                child: child(app, USER)
+            }
+        ),
+        Err(Error::Unauthorized.into())
+    );
+    assert!(!internal.accounts.contains_key(&address(app, USER)));
+    internal.actor = Some(APP);
+    internal.fail_commit = true;
+    assert_eq!(
+        execute(
+            &mut internal,
+            Command::CreateIdempotent {
+                child: child(app, USER)
+            }
+        ),
+        Err(Failure::Commit)
+    );
+    assert!(!internal.accounts.contains_key(&address(app, USER)));
+}

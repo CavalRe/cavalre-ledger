@@ -145,6 +145,11 @@ pub enum Command<A> {
         child: Child<A>,
         group: bool,
     },
+    /// Materialize a default leaf without changing its balances or authority.
+    /// Public custody recipients may be sponsored by another authenticated payer.
+    CreateIdempotent {
+        child: Child<A>,
+    },
     Transfer {
         from: Child<A>,
         to: Child<A>,
@@ -215,6 +220,7 @@ pub fn execute<A: Copy + Eq, H: Host<A>>(
                 implicit_allowed,
             } => add_account(host, authority, child, name, kind, implicit_allowed)?,
             Command::Remove { child, group } => remove_account(host, authority, child, group)?,
+            Command::CreateIdempotent { child } => create_idempotent(host, authority, child)?,
             Command::Transfer { from, to, amount } => transfer(host, authority, from, to, amount)?,
             Command::MoveTokens {
                 child,
@@ -311,6 +317,27 @@ fn implicit<A: Copy + Eq, H: Host<A>>(host: &mut H, child: Child<A>) -> Result<A
         host.put(key, account)?;
     }
     Ok(key)
+}
+fn create_idempotent<A: Copy + Eq, H: Host<A>>(
+    host: &mut H,
+    authority: A,
+    child: Child<A>,
+) -> Result<(), H::Error> {
+    let root = host.root();
+    // Internal ledgers retain application authority. Public recipients inherit
+    // their custodian and polarity; a sponsor cannot choose either or add labels.
+    if root.authority.is_some() {
+        authorize(host, authority, child)?;
+    }
+    ordinary(root, child)?;
+    let endpoint = resolve(host, child)?;
+    if endpoint.flags.account_kind.is_group()
+        || (root.authority.is_none() && endpoint.flags.account_kind.is_credit())
+    {
+        return Err(Error::InvalidKind.into());
+    }
+    implicit(host, child)?;
+    Ok(())
 }
 fn initialize<A: Copy + Eq, H: Host<A>>(
     host: &mut H,

@@ -222,7 +222,11 @@ fn ordinary_mutations_require_an_authentic_canonical_vault_readonly() {
     let mut h = Harness::new();
     let e = External::new(&mut h, 60, 0);
     let parent = branch(&mut h, e.root, 0, true);
-    let mutation = transfer(
+    for relative in [h.key(1), h.key(2)] {
+        let create = leaf(&h, e.root, h.key(0), parent, relative, "", false);
+        succeeds(&mut h, &[0], create);
+    }
+    let mut mutation = transfer(
         &h,
         e.root,
         h.key(0),
@@ -231,6 +235,7 @@ fn ordinary_mutations_require_an_authentic_canonical_vault_readonly() {
         0,
         &[],
     );
+    mutation.accounts.retain(|meta| meta.pubkey != e.vault);
     let complete = h.indexed(mutation.clone());
     assert!(
         !complete

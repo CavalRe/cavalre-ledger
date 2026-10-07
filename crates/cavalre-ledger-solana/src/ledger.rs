@@ -1478,24 +1478,18 @@ pub fn remove_account<'info>(
         group,
     })
 }
-pub fn transfer<'info>(
+pub fn create_idempotent<'info>(
     ctx: &Context<'info, LedgerAccounts<'info>>,
-    from_parent: Pubkey,
-    from: Pubkey,
-    to_parent: Pubkey,
-    to: Pubkey,
-    amount: u128,
+    parent: Pubkey,
+    relative: Pubkey,
+    bump: u8,
 ) -> Result<()> {
-    SolanaHost::accounts(ctx)?.run(service::Command::Transfer {
-        from: service::Child {
-            parent: from_parent,
-            relative: from,
-        },
-        to: service::Child {
-            parent: to_parent,
-            relative: to,
-        },
-        amount,
+    require!(
+        to_address(&crate::ID, &parent, &relative).1 == bump,
+        LedgerError::InvalidAccount
+    );
+    SolanaHost::accounts(ctx)?.run(service::Command::CreateIdempotent {
+        child: service::Child { parent, relative },
     })
 }
 pub fn move_tokens<'info>(
